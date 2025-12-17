@@ -14,7 +14,7 @@ from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
 from radial_lsfp import MCNUFFT
-from utils import prep_nufft, log_gradient_stats, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed
+from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed
 from eval import eval_grasp, eval_sample
 import csv
 import math
@@ -347,6 +347,9 @@ def main():
 
 
     # define model
+    kernel_size_L = config["model"].get("kernel_size_L", 3)
+    kernel_size_S = config["model"].get("kernel_size_S", 3)
+
     lsfp_backbone = LSFPNet(LayerNo=config["model"]["num_layers"], 
                             lambdas=initial_lambdas, 
                             channels=config['model']['channels'],
@@ -360,6 +363,8 @@ def main():
                             film_identity_init=config['model']['film_identity_init'],
                             svd_noise_std=config['model']['svd_noise_std'],
                             film_L=config['model']['film_L'],
+                            kernel_size_L=kernel_size_L,
+                            kernel_size_S=kernel_size_S,
                             )
 
     if config['model']['encode_acceleration'] and config['model']['encode_time_index']:
@@ -976,6 +981,13 @@ def main():
                             iteration=iteration_count,
                             output_dir=output_dir,
                             log_filename="gradient_stats.csv"
+                        )
+                        log_lsfpnet_component_grads(
+                            model=model,
+                            epoch=epoch,
+                            iteration=iteration_count,
+                            output_dir=output_dir,
+                            log_filename="lsfpnet_component_grads.csv"
                         )
 
 

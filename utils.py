@@ -82,6 +82,72 @@ def log_gradient_stats(model, epoch, iteration, output_dir, log_filename="gradie
             writer.writerow([epoch, iteration, total_norm, name, norm])
 
 
+def log_lsfpnet_component_grads(model, epoch, iteration, output_dir, log_filename="lsfpnet_component_grads.csv"):
+    """
+    Aggregate gradient norms for key LSFPNet components and log them.
+
+    Components:
+      - low_rank_component: params controlling low-rank proximal branch (lambdas, FiLM heads)
+      - sparse_dynamic_component: params for sparse branch lambdas/FiLM
+      - forward_cnn_L/backward_cnn_L: convs enforcing sparsity for L
+      - forward_cnn_S/backward_cnn_S: convs enforcing sparsity for S
+    """
+    if isinstance(model, DDP):
+        model = model.module
+
+    component_stats = {}
+
+    def _accumulate(component_name: str, grad_norm: float):
+        if component_name not in component_stats:
+            component_stats[component_name] = {"sum_sq": 0.0, "count": 0}
+        component_stats[component_name]["sum_sq"] += grad_norm ** 2
+        component_stats[component_name]["count"] += 1
+
+    def _component_from_name(name: str):
+        lname = name.lower()
+        if "forward_l" in lname:
+            return "forward_cnn_L"
+        if "backward_l" in lname:
+            return "backward_cnn_L"
+        if "forward_s" in lname:
+            return "forward_cnn_S"
+        if "backward_s" in lname:
+            return "backward_cnn_S"
+        if "lambda_l" in lname or "spatial_l" in lname or "style_injector_l" in lname:
+            return "low_rank_component"
+        if "lambda_s" in lname or "spatial_s" in lname or "style_injector_s" in lname:
+            return "sparse_dynamic_component"
+        return None
+
+    for name, param in model.named_parameters():
+        if param.grad is None or not param.requires_grad:
+            continue
+        component = _component_from_name(name)
+        if component is None:
+            continue
+        grad_norm = param.grad.data.norm(2)
+        if torch.isfinite(grad_norm):
+            _accumulate(component, grad_norm.item())
+
+    if not component_stats:
+        return
+
+    print(f"--- LSFPNet Component Gradients (Epoch {epoch}, Iter {iteration}) ---")
+    for comp, stats in sorted(component_stats.items()):
+        comp_norm = (stats["sum_sq"] ** 0.5)
+        print(f"  - {comp}: {comp_norm:.4e} ({stats['count']} params)")
+
+    log_path = os.path.join(output_dir, log_filename)
+    file_exists = os.path.isfile(log_path)
+    with open(log_path, 'a', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        if not file_exists:
+            writer.writerow(["epoch", "iteration", "component", "grad_norm", "param_count"])
+        for comp, stats in sorted(component_stats.items()):
+            comp_norm = (stats["sum_sq"] ** 0.5)
+            writer.writerow([epoch, iteration, comp, comp_norm, stats["count"]])
+
+
 
 def trajGR(Nkx, Nspokes):
     '''

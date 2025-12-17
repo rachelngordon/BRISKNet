@@ -66,6 +66,8 @@ def _build_model(config: dict, device, block_dir: str):
         film_identity_init=config["model"]["film_identity_init"],
         svd_noise_std=config["model"]["svd_noise_std"],
         film_L=config["model"]["film_L"],
+        kernel_size_L=config["model"].get("kernel_size_L", 3),
+        kernel_size_S=config["model"].get("kernel_size_S", 3),
     )
 
     if config["model"]["encode_acceleration"] and config["model"]["encode_time_index"]:

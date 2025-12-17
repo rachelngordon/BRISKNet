@@ -103,6 +103,8 @@ class BasicBlock(nn.Module):
         film_identity_init: bool = True,
         svd_noise_std: float = 0.0,
         film_L: bool = True,
+        kernel_size_L=3,
+        kernel_size_S=3,
     ):
         super().__init__()
         self.channels = channels
@@ -110,6 +112,10 @@ class BasicBlock(nn.Module):
         self.film_L = film_L
         self.lowk_alpha = lowk_alpha
         self.lowk_radius_frac = lowk_frac
+        self.kernel_size_L = self._to_3tuple(kernel_size_L)
+        self.kernel_size_S = self._to_3tuple(kernel_size_S)
+        self.padding_L = tuple(k // 2 for k in self.kernel_size_L)
+        self.padding_S = tuple(k // 2 for k in self.kernel_size_S)
 
         # learnable raw params; we will softplus them in forward
         self.lambda_L        = nn.Parameter(torch.tensor([lambdas['lambda_L']]))
@@ -129,21 +135,21 @@ class BasicBlock(nn.Module):
             init.zeros_(self.style_injector_S.weight); init.zeros_(self.style_injector_S.bias)
 
         # 3D conv (real/imag packed as channel=2 at input)
-        self.conv1_forward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, 1, 3, 3, 3)))
-        self.conv2_forward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
-        self.conv3_forward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
+        self.conv1_forward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, 1, *self.kernel_size_L)))
+        self.conv2_forward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_L)))
+        self.conv3_forward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_L)))
 
-        self.conv1_backward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
-        self.conv2_backward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
-        self.conv3_backward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(1, self.channels, 3, 3, 3)))
+        self.conv1_backward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_L)))
+        self.conv2_backward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_L)))
+        self.conv3_backward_l = nn.Parameter(init.xavier_normal_(torch.Tensor(1, self.channels, *self.kernel_size_L)))
 
-        self.conv1_forward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, 1, 3, 3, 3)))
-        self.conv2_forward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
-        self.conv3_forward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
+        self.conv1_forward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, 1, *self.kernel_size_S)))
+        self.conv2_forward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_S)))
+        self.conv3_forward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_S)))
 
-        self.conv1_backward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
-        self.conv2_backward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, 3, 3, 3)))
-        self.conv3_backward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(1, self.channels, 3, 3, 3)))
+        self.conv1_backward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_S)))
+        self.conv2_backward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(self.channels, self.channels, *self.kernel_size_S)))
+        self.conv3_backward_s = nn.Parameter(init.xavier_normal_(torch.Tensor(1, self.channels, *self.kernel_size_S)))
 
         # runtime knobs for A/B
         self.svd_mode          = svd_mode
@@ -179,6 +185,14 @@ class BasicBlock(nn.Module):
         M = (r <= thr)
         M = rearrange(M, 's t -> 1 s t')  # broadcast over coils
         return torch.where(M, alpha * y + (1.0 - alpha) * k_pred, k_pred)
+
+    @staticmethod
+    def _to_3tuple(k):
+        if isinstance(k, int):
+            return (k, k, k)
+        if isinstance(k, (list, tuple)) and len(k) == 3:
+            return tuple(int(v) for v in k)
+        raise ValueError("kernel_size must be an int or a tuple/list of three ints.")
 
     def forward(self, M0, param_E, param_d, L, S, pt_L, pt_S, p_L, p_S, csmaps, style_embedding=None):
         """
@@ -232,9 +246,9 @@ class BasicBlock(nn.Module):
 
         # ===== L branch ======================================================
         # conv backprop on p_L
-        pb_L = F.conv3d(p_L, self.conv1_backward_l, padding=1); pb_L = F.relu(pb_L)
-        pb_L = F.conv3d(pb_L, self.conv2_backward_l, padding=1); pb_L = F.relu(pb_L)
-        pb_L = F.conv3d(pb_L, self.conv3_backward_l, padding=1)
+        pb_L = F.conv3d(p_L, self.conv1_backward_l, padding=self.padding_L); pb_L = F.relu(pb_L)
+        pb_L = F.conv3d(pb_L, self.conv2_backward_l, padding=self.padding_L); pb_L = F.relu(pb_L)
+        pb_L = F.conv3d(pb_L, self.conv3_backward_l, padding=self.padding_L)
         pb_L = rearrange(pb_L.squeeze(), 'two nx ny nt -> two (nx ny) nt', nx=nx, ny=ny)  # already flattened
         pb_L = pb_L[0, :, :] + 1j * pb_L[1, :, :]
 
@@ -278,13 +292,13 @@ class BasicBlock(nn.Module):
         # tL_in  = torch.cat((torch.real(y_L), torch.imag(y_L)), 0).to(torch.float32)
         tL_in = from_torch_complex(y_L)
         tL_in  = rearrange(tL_in, '(nx ny) two nt -> two 1 nx ny nt', nx=nx, ny=ny)
-        tL     = F.conv3d(tL_in, self.conv1_forward_l, padding=1); tL = F.relu(tL)
-        tL     = F.conv3d(tL,    self.conv2_forward_l, padding=1)
+        tL     = F.conv3d(tL_in, self.conv1_forward_l, padding=self.padding_L); tL = F.relu(tL)
+        tL     = F.conv3d(tL,    self.conv2_forward_l, padding=self.padding_L)
         if style_embedding is not None and self.film_L:
             tL = self._film(tL, self.style_injector_L, style_embedding, self.film_bounded, self.film_gain)
         else:
             tL = F.relu(tL)
-        tL_out = F.conv3d(tL, self.conv3_forward_l, padding=1)
+        tL_out = F.conv3d(tL, self.conv3_forward_l, padding=self.padding_L)
 
         tL_out_c = tL_out + p_L
         tL_out_c = tL_out_c[0, :, :, :, :] + 1j * tL_out_c[1, :, :, :, :]
@@ -294,9 +308,9 @@ class BasicBlock(nn.Module):
         # p_L = torch.cat((torch.real(p_L), torch.imag(p_L)), 0).to(torch.float32)
         p_L = from_torch_complex(p_L)
         p_L = rearrange(p_L, 'ch two nx ny nt -> two ch nx ny nt')
-        pb_L = F.conv3d(p_L, self.conv1_backward_l, padding=1); pb_L = F.relu(pb_L)
-        pb_L = F.conv3d(pb_L, self.conv2_backward_l, padding=1); pb_L = F.relu(pb_L)
-        pb_L_out = F.conv3d(pb_L, self.conv3_backward_l, padding=1)
+        pb_L = F.conv3d(p_L, self.conv1_backward_l, padding=self.padding_L); pb_L = F.relu(pb_L)
+        pb_L = F.conv3d(pb_L, self.conv2_backward_l, padding=self.padding_L); pb_L = F.relu(pb_L)
+        pb_L_out = F.conv3d(pb_L, self.conv3_backward_l, padding=self.padding_L)
         pb_L = rearrange(pb_L_out.squeeze(), 'two nx ny nt -> two (nx ny) nt', nx=nx, ny=ny)
         # pb_L = rearrange(pb_L_out, 'two (nx ny) nt -> two (nx ny) nt', nx=nx, ny=ny)
         pb_L = pb_L[0, :, :] + 1j * pb_L[1, :, :]
@@ -305,9 +319,9 @@ class BasicBlock(nn.Module):
         adjloss_L = tL_out * p_L - pb_L_out * tL_in
 
         # ===== S branch ======================================================
-        pb_S = F.conv3d(p_S, self.conv1_backward_s, padding=1); pb_S = F.relu(pb_S)
-        pb_S = F.conv3d(pb_S, self.conv2_backward_s, padding=1); pb_S = F.relu(pb_S)
-        pb_S = F.conv3d(pb_S, self.conv3_backward_s, padding=1)
+        pb_S = F.conv3d(p_S, self.conv1_backward_s, padding=self.padding_S); pb_S = F.relu(pb_S)
+        pb_S = F.conv3d(pb_S, self.conv2_backward_s, padding=self.padding_S); pb_S = F.relu(pb_S)
+        pb_S = F.conv3d(pb_S, self.conv3_backward_s, padding=self.padding_S)
         pb_S = rearrange(pb_S.squeeze(), 'two nx ny nt -> two (nx ny) nt', nx=nx, ny=ny)
         # pb_S = rearrange(pb_S, 'two (nx ny) nt -> two (nx ny) nt', nx=nx, ny=ny)
         pb_S = pb_S[0, :, :] + 1j * pb_S[1, :, :]
@@ -318,13 +332,13 @@ class BasicBlock(nn.Module):
         # tS_in  = torch.cat((torch.real(y_S), torch.imag(y_S)), 0).to(torch.float32)
         tS_in = from_torch_complex(y_S)
         tS_in  = rearrange(tS_in, '(nx ny) two nt -> two 1 nx ny nt', nx=nx, ny=ny)
-        tS     = F.conv3d(tS_in, self.conv1_forward_s, padding=1); tS = F.relu(tS)
-        tS     = F.conv3d(tS,    self.conv2_forward_s, padding=1)
+        tS     = F.conv3d(tS_in, self.conv1_forward_s, padding=self.padding_S); tS = F.relu(tS)
+        tS     = F.conv3d(tS,    self.conv2_forward_s, padding=self.padding_S)
         if style_embedding is not None:
             tS = self._film(tS, self.style_injector_S, style_embedding, self.film_bounded, self.film_gain)
         else:
             tS = F.relu(tS)
-        tS_out = F.conv3d(tS, self.conv3_forward_s, padding=1)
+        tS_out = F.conv3d(tS, self.conv3_forward_s, padding=self.padding_S)
 
         tS_out_c = tS_out + p_S
         tS_out_c = tS_out_c[0, :, :, :, :] + 1j * tS_out_c[1, :, :, :, :]
@@ -333,9 +347,9 @@ class BasicBlock(nn.Module):
         # p_S = torch.cat((torch.real(p_S), torch.imag(p_S)), 0).to(torch.float32)
         p_S = from_torch_complex(p_S)
         p_S = rearrange(p_S, 'ch two nx ny nt -> two ch nx ny nt')
-        pb_S = F.conv3d(p_S, self.conv1_backward_s, padding=1); pb_S = F.relu(pb_S)
-        pb_S = F.conv3d(pb_S, self.conv2_backward_s, padding=1); pb_S = F.relu(pb_S)
-        pb_S_out = F.conv3d(pb_S, self.conv3_backward_s, padding=1)
+        pb_S = F.conv3d(p_S, self.conv1_backward_s, padding=self.padding_S); pb_S = F.relu(pb_S)
+        pb_S = F.conv3d(pb_S, self.conv2_backward_s, padding=self.padding_S); pb_S = F.relu(pb_S)
+        pb_S_out = F.conv3d(pb_S, self.conv3_backward_s, padding=self.padding_S)
         pb_S = rearrange(pb_S_out.squeeze(), 'two nx ny nt -> two (nx ny) nt', nx=nx, ny=ny)
         # pb_S = rearrange(pb_S_out, 'two (nx ny) nt -> two (nx ny) nt', nx=nx, ny=ny)
         pb_S = pb_S[0, :, :] + 1j * pb_S[1, :, :]
@@ -682,6 +696,8 @@ class LSFPNet(nn.Module):
                  film_identity_init: bool = True,
                  svd_noise_std: float = 0.0,
                  film_L: bool = True,
+                 kernel_size_L=3,
+                 kernel_size_S=3,
         ):
         super(LSFPNet, self).__init__()
         onelayer = []
@@ -703,6 +719,8 @@ class LSFPNet(nn.Module):
                                        film_identity_init=film_identity_init,
                                        svd_noise_std=svd_noise_std,
                                        film_L=film_L,
+                                       kernel_size_L=kernel_size_L,
+                                       kernel_size_S=kernel_size_S,
                                        ))
 
         self.fcs = nn.ModuleList(onelayer)

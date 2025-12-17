@@ -60,6 +60,8 @@ model:
   lambda_step: 0.1
   encode_acceleration: true
   encode_time_index: true
+  kernel_size_L: [3, 3, 3]
+  kernel_size_S: [3, 3, 1]
   optimizer:
     name: "Adam"
     lr: 0.0005
@@ -125,4 +127,4 @@ evaluation:
 debugging:
   calc_step_0: True
   enable_gradient_monitoring: true
-  monitoring_interval: 5
+  monitoring_interval: 1
