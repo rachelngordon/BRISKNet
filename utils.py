@@ -392,7 +392,7 @@ def remove_module_prefix(state_dict):
 
 
 def save_checkpoint(model, optimizer, epoch,
-                    train_curves, val_curves, eval_curves, ei_weight, step0_train_ei_loss, epoch_train_mc_loss, filename):
+                    train_curves, val_curves, eval_curves, ei_weight, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, filename):
     
     # If the model is a DDP model, we need to access the underlying model
     # via the .module attribute to save a clean state_dict.
@@ -405,6 +405,15 @@ def save_checkpoint(model, optimizer, epoch,
         "ei_weight": ei_weight,
         "step0_train_ei_loss": step0_train_ei_loss,
         "epoch_train_mc_loss": epoch_train_mc_loss,
+        "avg_grasp_ssim": avg_grasp_ssim,
+        "avg_grasp_psnr": avg_grasp_psnr,
+        "avg_grasp_mse": avg_grasp_mse,
+        "avg_grasp_lpips": avg_grasp_lpips,
+        "avg_grasp_dc_mse": avg_grasp_dc_mse,
+        "avg_grasp_dc_mae": avg_grasp_dc_mae,
+        "avg_grasp_curve_corr": avg_grasp_curve_corr,
+        "avg_grasp_raw_dc_mae": avg_grasp_raw_dc_mae,
+        "avg_grasp_raw_dc_mse": avg_grasp_raw_dc_mse,
         **train_curves,   # unpack the dicts
         **val_curves,
         **eval_curves,
@@ -448,7 +457,7 @@ def load_checkpoint(model, optimizer, filename):
         "eval_curve_corrs": ckpt.get("eval_curve_corrs", []),
     }
 
-    return model, optimizer, ckpt.get("epoch", 1), ckpt.get("ei_weight"), ckpt.get("step0_train_ei_loss"), ckpt.get("epoch_train_mc_loss"), train_curves, val_curves, eval_curves
+    return model, optimizer, ckpt.get("epoch", 1), ckpt.get("ei_weight"), ckpt.get("step0_train_ei_loss"), ckpt.get("epoch_train_mc_loss"), train_curves, val_curves, eval_curves, ckpt.get("avg_grasp_ssim"), ckpt.get("avg_grasp_psnr"), ckpt.get("avg_grasp_mse"), ckpt.get("avg_grasp_lpips"), ckpt.get("avg_grasp_dc_mse"), ckpt.get("avg_grasp_dc_mae"), ckpt.get("avg_grasp_curve_corr"), ckpt.get("avg_grasp_raw_dc_mae"), ckpt.get("avg_grasp_raw_dc_mse")
 
 def to_torch_complex(x: torch.Tensor):
     """(B, 2, ...) real -> (B, ...) complex"""

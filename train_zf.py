@@ -384,7 +384,8 @@ def main():
     if args.from_checkpoint == True:
         # if global_rank == 0 or config['training']['multigpu'] == False:
         checkpoint_file = f'output/{exp_name}/{exp_name}_model.pth'
-        model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves = load_checkpoint(model, optimizer, checkpoint_file)
+        model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
+
     else:
         start_epoch = 1
         # target_w_ei = 0.0
@@ -770,6 +771,7 @@ def main():
         avg_grasp_curve_corr = np.mean(grasp_curve_corrs)
         avg_grasp_raw_dc_mae = np.mean(raw_grasp_dc_maes)
         avg_grasp_raw_dc_mse = np.mean(raw_grasp_dc_mses)
+
 
 
     # Training Loop
@@ -1306,7 +1308,7 @@ def main():
                             eval_curve_corrs=eval_curve_corrs
                         )
                         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
-                        save_checkpoint(model, optimizer, epoch + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, model_save_path)
+                        save_checkpoint(model, optimizer, epoch + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
                         print(f'Model saved to {model_save_path}')
 
 
@@ -1589,7 +1591,7 @@ def main():
             eval_curve_corrs=eval_curve_corrs,
         )
         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
-        save_checkpoint(model, optimizer, epochs + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, model_save_path)
+        save_checkpoint(model, optimizer, epochs + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
         print(f'Model saved to {model_save_path}')
 
 
@@ -1915,27 +1917,27 @@ def main():
                     csvwriter.writerow(['Recon', 'Spokes Per Frame', 'SSIM', 'PSNR', 'MSE', "LPIPS", 'DC MSE', 'DC MAE', 'EC Correlation'])
 
                     csvwriter.writerow(['DL', spokes, 
-                    f'{np.mean(stress_test_ssims):.4f} ± {np.std(stress_test_ssims):.4f}', 
-                    f'{np.mean(stress_test_psnrs):.4f} ± {np.std(stress_test_psnrs):.4f}', 
-                    f'{np.mean(stress_test_mses):.4f} ± {np.std(stress_test_mses):.4f}', 
-                    f'{np.mean(stress_test_lpipses):.4f} ± {np.std(stress_test_lpipses):.4f}', 
-                    f'{np.mean(stress_test_dc_mses):.4f} ± {np.std(stress_test_dc_mses):.4f}',
-                    f'{np.mean(stress_test_dc_maes):.4f} ± {np.std(stress_test_dc_maes):.4f}',
-                    f'{np.mean(stress_test_raw_dc_mses):.4f} ± {np.std(stress_test_raw_dc_mses):.4f}',
-                    f'{np.mean(stress_test_raw_dc_maes):.4f} ± {np.std(stress_test_raw_dc_maes):.4f}',
-                    f'{np.mean(stress_test_corrs):.4f} ± {np.std(stress_test_corrs):.4f}'
+                    f'{np.mean(stress_test_ssims):.4f} +- {np.std(stress_test_ssims):.4f}', 
+                    f'{np.mean(stress_test_psnrs):.4f} +- {np.std(stress_test_psnrs):.4f}', 
+                    f'{np.mean(stress_test_mses):.4f} +- {np.std(stress_test_mses):.4f}', 
+                    f'{np.mean(stress_test_lpipses):.4f} +- {np.std(stress_test_lpipses):.4f}', 
+                    f'{np.mean(stress_test_dc_mses):.4f} +- {np.std(stress_test_dc_mses):.4f}',
+                    f'{np.mean(stress_test_dc_maes):.4f} +- {np.std(stress_test_dc_maes):.4f}',
+                    f'{np.mean(stress_test_raw_dc_mses):.4f} +- {np.std(stress_test_raw_dc_mses):.4f}',
+                    f'{np.mean(stress_test_raw_dc_maes):.4f} +- {np.std(stress_test_raw_dc_maes):.4f}',
+                    f'{np.mean(stress_test_corrs):.4f} +- {np.std(stress_test_corrs):.4f}'
                     ])
 
                     csvwriter.writerow(['GRASP', spokes, 
-                    f'{np.mean(stress_test_grasp_ssims):.4f} ± {np.std(stress_test_grasp_ssims):.4f}', 
-                    f'{np.mean(stress_test_grasp_psnrs):.4f} ± {np.std(stress_test_grasp_psnrs):.4f}', 
-                    f'{np.mean(stress_test_grasp_mses):.4f} ± {np.std(stress_test_grasp_mses):.4f}', 
-                    f'{np.mean(stress_test_grasp_lpipses):.4f} ± {np.std(stress_test_grasp_lpipses):.4f}', 
-                    f'{np.mean(stress_test_grasp_dc_mses):.4f} ± {np.std(stress_test_grasp_dc_mses):.4f}',
-                    f'{np.mean(stress_test_grasp_dc_maes):.4f} ± {np.std(stress_test_grasp_dc_maes):.4f}',
-                    f'{np.mean(stress_test_raw_grasp_dc_mses):.4f} ± {np.std(stress_test_raw_grasp_dc_mses):.4f}',
+                    f'{np.mean(stress_test_grasp_ssims):.4f} +- {np.std(stress_test_grasp_ssims):.4f}', 
+                    f'{np.mean(stress_test_grasp_psnrs):.4f} +- {np.std(stress_test_grasp_psnrs):.4f}', 
+                    f'{np.mean(stress_test_grasp_mses):.4f} +- {np.std(stress_test_grasp_mses):.4f}', 
+                    f'{np.mean(stress_test_grasp_lpipses):.4f} +- {np.std(stress_test_grasp_lpipses):.4f}', 
+                    f'{np.mean(stress_test_grasp_dc_mses):.4f} +- {np.std(stress_test_grasp_dc_mses):.4f}',
+                    f'{np.mean(stress_test_grasp_dc_maes):.4f} +- {np.std(stress_test_grasp_dc_maes):.4f}',
+                    f'{np.mean(stress_test_raw_grasp_dc_mses):.4f} +- {np.std(stress_test_raw_grasp_dc_mses):.4f}',
                     f'{np.mean(stress_test_raw_grasp_dc_maes):.4f} ± {np.std(stress_test_raw_grasp_dc_maes):.4f}',
-                    f'{np.mean(stress_test_grasp_corrs):.4f} ± {np.std(stress_test_grasp_corrs):.4f}',
+                    f'{np.mean(stress_test_grasp_corrs):.4f} +- {np.std(stress_test_grasp_corrs):.4f}',
                     ])
 
 
