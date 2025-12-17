@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_baseline_4layers"
-    config_path = 'configs/config_ei_4layers.yaml'
+    job_name = "ei_warp_24spf"
+    config_path = 'configs/config_ei_warp_24spf.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -64,7 +64,7 @@ def main():
         nodes=1,
         tasks_per_node=1,
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
-        slurm_gres=f"gpu:h200:{num_gpus}",     # 4× H200 on a single node
+        slurm_gres=f"gpu:a100:{num_gpus}",     # 4× H200 on a single node
         timeout_min=700,
 
         # IMPORTANT: no cpu_bind here anymore, this only affects sbatch

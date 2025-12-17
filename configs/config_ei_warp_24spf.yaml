@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 36
+  timeframes: 12
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 36
-  eval_spokes: 8
+  eval_timeframes: 12
+  eval_spokes: 24
   spf_aug: false
   weight_accelerations: false
-  fpg: 36
-  train_spokes_per_frame: 8
+  fpg: 24
+  train_spokes_per_frame: 24
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -72,7 +72,7 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: False
+    use_ei_loss: true
     mc_loss:
       weight: 10
       metric: "MAE"
@@ -81,7 +81,7 @@ model:
       temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
-      weight: 0
+      weight: 40000
       warmup: 25
       duration: 200
       subsample_ratio_min: 0.7
@@ -93,7 +93,7 @@ model:
 
 # Training settings
 training:
-  epochs: 100
+  epochs: 200
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -120,8 +120,8 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 36
-  chunk_overlap: 18
+  chunk_size: 24
+  chunk_overlap: 12
   rescale: False
 
 debugging:

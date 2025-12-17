@@ -60,8 +60,8 @@ model:
   lambda_step: 0.1
   encode_acceleration: true
   encode_time_index: true
-  kernel_size_L: [3, 3, 3]
-  kernel_size_S: [3, 3, 3]
+  kernel_size_L: [3, 3, 5]
+  kernel_size_S: [3, 3, 1]
   optimizer:
     name: "Adam"
     lr: 0.0005
@@ -72,7 +72,7 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: False
+    use_ei_loss: true
     mc_loss:
       weight: 10
       metric: "MAE"
@@ -81,7 +81,7 @@ model:
       temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
-      weight: 0
+      weight: 40000
       warmup: 25
       duration: 200
       subsample_ratio_min: 0.7
@@ -93,7 +93,7 @@ model:
 
 # Training settings
 training:
-  epochs: 100
+  epochs: 200
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

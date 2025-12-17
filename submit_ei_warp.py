@@ -7,7 +7,7 @@ class Trainer(submitit.helpers.Checkpointable):
     """
     A Checkpointable class to handle training and resubmission.
     """
-    def __init__(self, exp_name, config_path, num_gpus, from_checkpoint=True):
+    def __init__(self, exp_name, config_path, num_gpus, from_checkpoint=False):
         self.exp_name = exp_name
         self.config_path = config_path
         self.num_gpus = num_gpus
