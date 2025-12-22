@@ -6,23 +6,23 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 18
+  timeframes: 36
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 18
-  eval_spokes: 16
+  eval_timeframes: 36
+  eval_spokes: 8
   spf_aug: false
   weight_accelerations: false
-  fpg: 24
-  train_spokes_per_frame: 16
+  fpg: 36
+  train_spokes_per_frame: 8
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
@@ -59,8 +59,8 @@ model:
   gamma: 0.5
   lambda_step: 0.1
   encode_acceleration: true
-  encode_time_index: true
-  kernel_size_L: [3, 3, 3]
+  encode_time_index: false
+  kernel_size_L: [3, 3, 5]
   kernel_size_S: [3, 3, 3]
   optimizer:
     name: "Adam"
@@ -120,8 +120,8 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 24
-  chunk_overlap: 12
+  chunk_size: 36
+  chunk_overlap: 18
   rescale: False
 
 debugging:

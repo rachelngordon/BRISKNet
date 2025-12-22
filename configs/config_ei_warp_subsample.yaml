@@ -22,7 +22,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
@@ -78,7 +78,7 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp"
+      temporal_transform: "warp_subsample"
       spatial_transform: "all"
       rotate_range: 20
       weight: 40000
@@ -93,7 +93,7 @@ model:
 
 # Training settings
 training:
-  epochs: 200
+  epochs: 250
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
