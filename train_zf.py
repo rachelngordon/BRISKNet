@@ -65,10 +65,13 @@ def main():
     # print experiment name and git commit
     exp_name = args.exp_name
 
+    # NOTE: need to change for running on Randi
+    config_dir = '/net/projects2/annawoodard/rachelgordon/experiments'
+
 
     # Load the configuration file
     if args.from_checkpoint == True:
-        with open(os.path.join(output_dir, f"{exp_name}/config.yaml"), "r") as file:
+        with open(os.path.join(config_dir, f"{exp_name}/config.yaml"), "r") as file:
             config = yaml.safe_load(file)
 
         with open(args.config, "r") as file:
@@ -84,6 +87,13 @@ def main():
     config = apply_cluster_paths(config)
     if args.from_checkpoint:
         new_config = apply_cluster_paths(new_config)
+
+
+    # create output directories
+    output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
+    eval_dir = os.path.join(output_dir, "eval_results")
+    block_dir = os.path.join(output_dir, "block_outputs")
+    ec_dir = os.path.join(output_dir, 'enhancement_curves')
 
 
         
@@ -118,13 +128,6 @@ def main():
         print(f"Experiment: {exp_name}")
 
 
-
-
-    # create output directories
-    output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
-    eval_dir = os.path.join(output_dir, "eval_results")
-    block_dir = os.path.join(output_dir, "block_outputs")
-    ec_dir = os.path.join(output_dir, 'enhancement_curves')
 
     if global_rank == 0 or not config['training']['multigpu']:
         
@@ -388,7 +391,7 @@ def main():
     # Load the checkpoint to resume training
     if args.from_checkpoint == True:
         # if global_rank == 0 or config['training']['multigpu'] == False:
-        checkpoint_file = os.path.join(output_dir, f'{exp_name}/{exp_name}_model.pth')
+        checkpoint_file = os.path.join(output_dir, f'{exp_name}_model.pth')
         model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
 
     else:
