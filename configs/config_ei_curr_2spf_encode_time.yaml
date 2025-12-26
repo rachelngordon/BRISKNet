@@ -6,23 +6,23 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 12
+  timeframes: 36
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 12
-  eval_spokes: 24
+  eval_timeframes: 36
+  eval_spokes: 8
   spf_aug: True
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 24
+  train_spokes_per_frame: 8
   slices: 192
   slices_to_eval: 1
-  eval_frequency: 1
+  eval_frequency: 5
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
@@ -30,7 +30,7 @@ dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 2
+  max_subjects: 300
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -58,10 +58,10 @@ model:
   lambda_spatial_S: 0.05
   gamma: 0.5
   lambda_step: 0.1
-  encode_acceleration: true
+  encode_acceleration: false
   encode_time_index: true
-  kernel_size_L: [3, 3, 3]
-  kernel_size_S: [3, 3, 1]
+  kernel_size_L: [3, 3, 5]
+  kernel_size_S: [3, 3, 3]
   optimizer:
     name: "Adam"
     lr: 0.0005
@@ -78,7 +78,7 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp_subsample"
+      temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
       weight: 40000
@@ -93,11 +93,11 @@ model:
 
 # Training settings
 training:
-  epochs: 4
+  epochs: 250
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
-  multigpu: False
+  multigpu: True
   curriculum_learning:
     enabled: True
     phases:
@@ -106,13 +106,18 @@ training:
         train_spokes_range: [16, 24, 36]
         eval_spokes_per_frame: 16       # Validate on the highest acceleration in this phase
         eval_num_frames: 18 # (16 * 18 = 288 total spokes, assuming a fixed total spoke budget)
-      - name: "Phase 2: Higher Accelerations"
-        start_epoch: 2
+      - name: "Phase 2: High Accelerations"
+        start_epoch: 50
         train_spokes_range: [8, 16, 24, 36] # Introduces 8 spokes/frame
         eval_spokes_per_frame: 8
         eval_num_frames: 36 # (8 * 36 = 288 total spokes)
-      - name: "Phase 3: Ultra-High Accelerations"
-        start_epoch: 3
+      - name: "Phase 3: Higher Accelerations"
+        start_epoch: 100
+        train_spokes_range: [4, 8, 16, 24, 36] # Introduces 2 and 4 spokes/frame
+        eval_spokes_per_frame: 4
+        eval_num_frames: 72
+      - name: "Phase 4: Ultra-High Accelerations"
+        start_epoch: 150
         train_spokes_range: [2, 4, 8, 16, 24, 36] # Introduces 2 and 4 spokes/frame
         eval_spokes_per_frame: 2
         eval_num_frames: 144 # (2 * 144 = 288 total spokes)
@@ -120,11 +125,11 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 16
-  chunk_overlap: 8
+  chunk_size: 36
+  chunk_overlap: 18
   rescale: False
 
 debugging:
   calc_step_0: True
   enable_gradient_monitoring: true
-  monitoring_interval: 1
+  monitoring_interval: 5

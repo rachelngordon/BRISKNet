@@ -211,6 +211,14 @@ def main():
     # Curriculum Learning Configuration
     curriculum_enabled = config['training']['curriculum_learning']['enabled']
     curriculum_phases = config['training']['curriculum_learning']['phases']
+    low_spf_eval_targets = []
+    if curriculum_enabled:
+        low_spf_eval_targets = sorted({
+            int(phase["eval_spokes_per_frame"])
+            for phase in curriculum_phases
+            if phase.get("eval_spokes_per_frame") is not None
+            and int(phase["eval_spokes_per_frame"]) <= 8
+        })
 
     # Initial setup for train_dataset based on the first phase if curriculum is enabled
     initial_train_spokes_range = [8, 16, 24, 36]
@@ -309,11 +317,23 @@ def main():
 
 
 
-    # define eval physics model and dataset based on evaluation parameters for first curriculum learning phase
+    # Define eval physics and dataset. For curriculum learning, fix eval to the highest acceleration
+    # (smallest spokes/frame) so plots remain consistent even before that phase is reached.
+    fixed_eval_metrics = False
     if curriculum_enabled:
-        N_spokes_eval = curriculum_phases[0]['eval_spokes_per_frame']
-        N_time_eval = curriculum_phases[0]['eval_num_frames']
-
+        eval_phases = [
+            phase for phase in curriculum_phases
+            if phase.get("eval_spokes_per_frame") is not None and phase.get("eval_num_frames") is not None
+        ]
+        if not eval_phases:
+            raise ValueError("Curriculum learning is enabled but no eval settings were found in the phases.")
+        eval_phase = min(
+            eval_phases,
+            key=lambda phase: phase["eval_spokes_per_frame"],
+        )
+        N_spokes_eval = eval_phase["eval_spokes_per_frame"]
+        N_time_eval = eval_phase["eval_num_frames"]
+        fixed_eval_metrics = True
     else:
         N_time_eval, N_spokes_eval = config["data"]["eval_timeframes"], config["data"]["eval_spokes"]
 
@@ -493,6 +513,22 @@ def main():
         eval_raw_dc_mses = []
         eval_raw_dc_maes = []
         eval_curve_corrs = []
+
+
+    eval_spf_curves = {}
+    if args.from_checkpoint:
+        eval_spf_curves = eval_curves.get("eval_spf_curves", {})
+    for spf in low_spf_eval_targets:
+        if spf not in eval_spf_curves:
+            eval_spf_curves[spf] = dict(
+                epochs=[],
+                eval_ssims=[],
+                eval_psnrs=[],
+                eval_mses=[],
+                eval_lpipses=[],
+                eval_raw_dc_maes=[],
+                eval_curve_corrs=[],
+            )
 
 
     grasp_ssims = []
@@ -755,6 +791,16 @@ def main():
             eval_raw_dc_maes.append(initial_eval_raw_dc_mae) 
             eval_curve_corrs.append(initial_eval_curve_corr)
 
+            spf_key = int(N_spokes_eval)
+            if spf_key in eval_spf_curves:
+                eval_spf_curves[spf_key]["epochs"].append(0)
+                eval_spf_curves[spf_key]["eval_ssims"].append(initial_eval_ssim)
+                eval_spf_curves[spf_key]["eval_psnrs"].append(initial_eval_psnr)
+                eval_spf_curves[spf_key]["eval_mses"].append(initial_eval_mse)
+                eval_spf_curves[spf_key]["eval_lpipses"].append(initial_eval_lpips)
+                eval_spf_curves[spf_key]["eval_raw_dc_maes"].append(initial_eval_raw_dc_mae)
+                eval_spf_curves[spf_key]["eval_curve_corrs"].append(initial_eval_curve_corr)
+
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('Metric/SSIM', initial_eval_ssim, 0)
                 writer.add_scalar('Metric/PSNR', initial_eval_psnr, 0)
@@ -826,30 +872,31 @@ def main():
 
                             current_curriculum_phase_idx = i
 
-                            # define eval physics model and dataset based on evaluation parameters for first curriculum learning phase
-                            N_spokes_eval = phase['eval_spokes_per_frame']
-                            N_time_eval = phase['eval_num_frames']
+                            if not fixed_eval_metrics:
+                                # define eval physics model and dataset based on evaluation parameters for curriculum phase
+                                N_spokes_eval = phase['eval_spokes_per_frame']
+                                N_time_eval = phase['eval_num_frames']
 
-                            # define physics object for evaluation
-                            eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(N_samples, N_spokes_eval, N_time_eval)
-                            eval_ktraj = eval_ktraj.to(device)
-                            eval_dcomp = eval_dcomp.to(device)
-                            eval_nufft_ob = eval_nufft_ob.to(device)
-                            eval_adjnufft_ob = eval_adjnufft_ob.to(device)
+                                # define physics object for evaluation
+                                eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(N_samples, N_spokes_eval, N_time_eval)
+                                eval_ktraj = eval_ktraj.to(device)
+                                eval_dcomp = eval_dcomp.to(device)
+                                eval_nufft_ob = eval_nufft_ob.to(device)
+                                eval_adjnufft_ob = eval_adjnufft_ob.to(device)
 
-                            eval_physics = MCNUFFT(eval_nufft_ob, eval_adjnufft_ob, eval_ktraj, eval_dcomp)
+                                eval_physics = MCNUFFT(eval_nufft_ob, eval_adjnufft_ob, eval_ktraj, eval_dcomp)
 
-                            val_dro_dataset.spokes_per_frame = N_spokes_eval
-                            val_dro_dataset.num_frames = N_time_eval
-                            val_dro_dataset._update_sample_paths()
+                                val_dro_dataset.spokes_per_frame = N_spokes_eval
+                                val_dro_dataset.num_frames = N_time_eval
+                                val_dro_dataset._update_sample_paths()
 
-                            val_dro_loader = DataLoader(
-                                val_dro_dataset,
-                                batch_size=config["dataloader"]["batch_size"],
-                                shuffle=False,
-                                num_workers=config["dataloader"]["num_workers"],
-                                pin_memory=True,
-                            )
+                                val_dro_loader = DataLoader(
+                                    val_dro_dataset,
+                                    batch_size=config["dataloader"]["batch_size"],
+                                    shuffle=False,
+                                    num_workers=config["dataloader"]["num_workers"],
+                                    pin_memory=True,
+                                )
 
             # if use_ei_loss:
 
@@ -875,8 +922,6 @@ def main():
                 train_loader.sampler.set_epoch(epoch)
 
             for measured_kspace, csmap, N_samples, N_spokes, N_time in train_loader_tqdm:  # measured_kspace shape: (B, C, I, S, T)
-
-                print("spokes per frame: ", N_spokes)
                 
                 start = time.time()
 
@@ -1031,7 +1076,7 @@ def main():
 
                     plot_reconstruction_sample(
                         x_recon,
-                        f"Training Sample - Epoch {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
+                        f"Training Sample - Epoch {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)}, FPG = {Ng})",
                         f"train_sample_epoch_{epoch}",
                         output_dir,
                     )
@@ -1219,6 +1264,16 @@ def main():
                     eval_raw_dc_maes.append(epoch_eval_raw_dc_mae)    
                     eval_curve_corrs.append(epoch_eval_curve_corr)  
 
+                    spf_key = int(N_spokes_eval)
+                    if spf_key in eval_spf_curves:
+                        eval_spf_curves[spf_key]["epochs"].append(epoch)
+                        eval_spf_curves[spf_key]["eval_ssims"].append(epoch_eval_ssim)
+                        eval_spf_curves[spf_key]["eval_psnrs"].append(epoch_eval_psnr)
+                        eval_spf_curves[spf_key]["eval_mses"].append(epoch_eval_mse)
+                        eval_spf_curves[spf_key]["eval_lpipses"].append(epoch_eval_lpips)
+                        eval_spf_curves[spf_key]["eval_raw_dc_maes"].append(epoch_eval_raw_dc_mae)
+                        eval_spf_curves[spf_key]["eval_curve_corrs"].append(epoch_eval_curve_corr)
+
     
                     writer.add_scalar('Metric/SSIM', epoch_eval_ssim, epoch)
                     writer.add_scalar('Metric/PSNR', epoch_eval_psnr, epoch)
@@ -1320,7 +1375,8 @@ def main():
                             eval_dc_maes=eval_dc_maes,
                             eval_raw_dc_mses=eval_raw_dc_mses,
                             eval_raw_dc_maes=eval_raw_dc_maes,
-                            eval_curve_corrs=eval_curve_corrs
+                            eval_curve_corrs=eval_curve_corrs,
+                            eval_spf_curves=eval_spf_curves,
                         )
                         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
                         save_checkpoint(model, optimizer, epoch + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
@@ -1486,6 +1542,78 @@ def main():
                         plt.savefig(os.path.join(output_dir, "eval_metrics.png"))
                         plt.close()
 
+                        if curriculum_enabled and eval_spf_curves:
+                            for spf in sorted(eval_spf_curves):
+                                spf_curves = eval_spf_curves[spf]
+                                if not spf_curves["epochs"]:
+                                    continue
+
+                                fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+                                fig.suptitle(
+                                    f"Evaluation Metrics Over Epochs ({spf} spokes/frame)",
+                                    fontsize=20,
+                                )
+
+                                sns.lineplot(
+                                    x=spf_curves["epochs"],
+                                    y=spf_curves["eval_ssims"],
+                                    ax=axes[0, 0],
+                                )
+                                axes[0, 0].set_title("DRO Evaluation SSIM")
+                                axes[0, 0].set_xlabel("Epoch")
+                                axes[0, 0].set_ylabel("SSIM")
+
+                                sns.lineplot(
+                                    x=spf_curves["epochs"],
+                                    y=spf_curves["eval_psnrs"],
+                                    ax=axes[0, 1],
+                                )
+                                axes[0, 1].set_title("DRO Evaluation PSNR")
+                                axes[0, 1].set_xlabel("Epoch")
+                                axes[0, 1].set_ylabel("PSNR")
+
+                                sns.lineplot(
+                                    x=spf_curves["epochs"],
+                                    y=spf_curves["eval_mses"],
+                                    ax=axes[0, 2],
+                                )
+                                axes[0, 2].set_title("DRO Evaluation Image MSE")
+                                axes[0, 2].set_xlabel("Epoch")
+                                axes[0, 2].set_ylabel("MSE")
+
+                                sns.lineplot(
+                                    x=spf_curves["epochs"],
+                                    y=spf_curves["eval_lpipses"],
+                                    ax=axes[1, 0],
+                                )
+                                axes[1, 0].set_title("Evaluation LPIPS")
+                                axes[1, 0].set_xlabel("Epoch")
+                                axes[1, 0].set_ylabel("LPIPS")
+
+                                sns.lineplot(
+                                    x=spf_curves["epochs"],
+                                    y=spf_curves["eval_raw_dc_maes"],
+                                    ax=axes[1, 1],
+                                )
+                                axes[1, 1].set_title("Non-DRO Evaluation Raw k-space MAE")
+                                axes[1, 1].set_xlabel("Epoch")
+                                axes[1, 1].set_ylabel("MAE")
+
+                                sns.lineplot(
+                                    x=spf_curves["epochs"],
+                                    y=spf_curves["eval_curve_corrs"],
+                                    ax=axes[1, 2],
+                                )
+                                axes[1, 2].set_title("DRO Tumor Enhancement Curve Correlation")
+                                axes[1, 2].set_xlabel("Epoch")
+                                axes[1, 2].set_ylabel("Pearson Correlation Coefficient")
+
+                                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                                plt.savefig(
+                                    os.path.join(output_dir, f"eval_metrics_{spf}spf.png")
+                                )
+                                plt.close()
+
                         epoch_labels = range(0, len(eval_dc_mses)*eval_frequency, eval_frequency)
 
                         
@@ -1604,6 +1732,7 @@ def main():
             eval_raw_dc_mses=eval_raw_dc_mses,
             eval_raw_dc_maes=eval_raw_dc_maes,
             eval_curve_corrs=eval_curve_corrs,
+            eval_spf_curves=eval_spf_curves,
         )
         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
         save_checkpoint(model, optimizer, epochs + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
@@ -1822,7 +1951,25 @@ def main():
 
 
                     ## Evaluation
-                    ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr = eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, dro_grasp_img, acceleration, int(spokes), eval_dir, f"{spokes}spf", device, cluster=cluster, dro_eval=True, grasp_path=grasp_path, rescale=config['evaluation']['rescale'])
+                    ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr = eval_sample(
+                        kspace,
+                        csmap,
+                        ground_truth,
+                        x_recon,
+                        physics,
+                        mask,
+                        dro_grasp_img,
+                        acceleration,
+                        int(spokes),
+                        eval_dir,
+                        f"{spokes}spf",
+                        device,
+                        cluster=cluster,
+                        dro_eval=True,
+                        grasp_path=grasp_path,
+                        rescale=config['evaluation']['rescale'],
+                        filename_suffix=f"{spokes}spf",
+                    )
                     stress_test_ssims.append(ssim)
                     stress_test_psnrs.append(psnr)
                     stress_test_mses.append(mse)
@@ -1846,7 +1993,26 @@ def main():
 
                     # raw k-space
                     dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, physics, device, eval_dir, dro_eval=False)
-                    dc_mse_raw, dc_mae_raw = eval_sample(raw_kspace, raw_csmaps, ground_truth, raw_x_recon, physics, mask, raw_grasp_img, acceleration, int(N_spokes), eval_dir, label=f"{spokes}spf", device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
+                    dc_mse_raw, dc_mae_raw = eval_sample(
+                        raw_kspace,
+                        raw_csmaps,
+                        ground_truth,
+                        raw_x_recon,
+                        physics,
+                        mask,
+                        raw_grasp_img,
+                        acceleration,
+                        int(N_spokes),
+                        eval_dir,
+                        label=f"{spokes}spf",
+                        device=device,
+                        cluster=cluster,
+                        dro_eval=False,
+                        grasp_path=grasp_path,
+                        raw_slice_idx=raw_grasp_slice_idx,
+                        rescale=config['evaluation']['rescale'],
+                        filename_suffix=f"{spokes}spf",
+                    )
 
                     stress_test_raw_grasp_dc_mses.append(dc_mse_raw_grasp)
                     stress_test_raw_grasp_dc_maes.append(dc_mae_raw_grasp)

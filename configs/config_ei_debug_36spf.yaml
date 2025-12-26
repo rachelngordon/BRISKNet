@@ -6,23 +6,23 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 36
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 36
-  eval_spokes: 8
-  spf_aug: false
+  eval_timeframes: 8
+  eval_spokes: 36
+  spf_aug: False
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 8
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
-  eval_frequency: 5
+  eval_frequency: 1
 
 # Experiment settings
 experiment:
-  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
   cluster: "DSI"
 
 # DataLoader settings
@@ -30,7 +30,7 @@ dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 300
+  max_subjects: 2
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -60,8 +60,8 @@ model:
   lambda_step: 0.1
   encode_acceleration: true
   encode_time_index: true
-  kernel_size_L: [3, 3, 5]
-  kernel_size_S: [3, 3, 3]
+  kernel_size_L: [3, 3, 3]
+  kernel_size_S: [3, 3, 1]
   optimizer:
     name: "Adam"
     lr: 0.0005
@@ -93,11 +93,11 @@ model:
 
 # Training settings
 training:
-  epochs: 250
+  epochs: 1
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
-  multigpu: True
+  multigpu: False
   curriculum_learning:
     enabled: False
     phases:
@@ -120,11 +120,11 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 36
-  chunk_overlap: 18
+  chunk_size: 16
+  chunk_overlap: 8
   rescale: False
 
 debugging:
   calc_step_0: True
   enable_gradient_monitoring: true
-  monitoring_interval: 5
+  monitoring_interval: 1

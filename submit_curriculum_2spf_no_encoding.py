@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_warp_no_encoding"
-    config_path = 'configs/config_ei_warp_no_encoding.yaml'
+    job_name = "ei_warp_curriculum_2spf_no_encoding"
+    config_path = 'configs/config_ei_curr_2spf_no_encoding.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"

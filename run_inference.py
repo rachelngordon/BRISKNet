@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import statistics
 import time
 from typing import Tuple
 
@@ -89,7 +90,7 @@ def _load_weights(model, ckpt_path: str):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run inference on validation samples.")
-    parser.add_argument("--exp_name", required=True, help="Experiment name under output/.")
+    parser.add_argument("--exp_dir", required=True, help="Experiment directory location.")
     parser.add_argument("--config", help="Path to config.yaml (defaults to output/<exp>/config.yaml).")
     parser.add_argument("--checkpoint", help="Path to model checkpoint (defaults to output/<exp>/<exp>_model.pth).")
     parser.add_argument("--num_samples", type=int, help="Number of validation samples to evaluate (default: config value).")
@@ -105,9 +106,11 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
+    exp_name = args.exp_dir.split('/')[-1]
+
     # Resolve config/checkpoint paths and load config.
-    config_path = args.config or os.path.join("output", args.exp_name, "config.yaml")
-    ckpt_path = args.checkpoint or os.path.join("output", args.exp_name, f"{args.exp_name}_model.pth")
+    config_path = args.config or os.path.join(args.exp_dir, "config.yaml")
+    ckpt_path = args.checkpoint or os.path.join(args.exp_dir, f"{exp_name}_model.pth")
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -120,7 +123,7 @@ def main():
     cluster = config.get("experiment", {}).get("cluster", "Randi")
 
     # Where to save inference outputs.
-    output_dir = os.path.join(config["experiment"]["output_dir"], args.exp_name)
+    output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
     inference_dir = os.path.join(output_dir, f"inference_{time.strftime('%Y%m%d_%H%M%S')}")
     os.makedirs(inference_dir, exist_ok=True)
 
@@ -318,6 +321,7 @@ def main():
 
             ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr = dro_metrics
             grasp_ssim, grasp_psnr, grasp_mse, grasp_lpips, grasp_dc_mse, grasp_dc_mae = grasp_metrics
+
             results.append(
                 dict(
                     sample=label,
@@ -356,7 +360,7 @@ def main():
             "dl_dc_mse",
             "dl_dc_mae",
             "dl_recon_corr",
-            "dl_grasp_corr",
+            "grasp_corr",
             "grasp_ssim",
             "grasp_psnr",
             "grasp_mse",
@@ -389,37 +393,63 @@ def main():
             ]
             f.write(",".join(row) + "\n")
 
-    def _mean(values, key):
+    def _mean_std(values, key):
         vals = [v[key] for v in values if v[key] is not None]
-        return sum(vals) / len(vals) if vals else None
+        if not vals:
+            return None, None
+        mean = sum(vals) / len(vals)
+        std = statistics.stdev(vals) if len(vals) > 1 else 0.0
+        return mean, std
 
     dl_summary = {
-        "ssim": _mean(results, "ssim"),
-        "psnr": _mean(results, "psnr"),
-        "mse": _mean(results, "mse"),
-        "lpips": _mean(results, "lpips"),
-        "dc_mse": _mean(results, "dc_mse"),
-        "dc_mae": _mean(results, "dc_mae"),
-        "recon_corr": _mean(results, "recon_corr"),
+        "ssim": _mean_std(results, "ssim"),
+        "psnr": _mean_std(results, "psnr"),
+        "mse": _mean_std(results, "mse"),
+        "lpips": _mean_std(results, "lpips"),
+        "dc_mse": _mean_std(results, "dc_mse"),
+        "dc_mae": _mean_std(results, "dc_mae"),
+        "recon_corr": _mean_std(results, "recon_corr"),
+        "grasp_corr": _mean_std(results, "grasp_corr"),
     }
 
     grasp_summary = {
-        "ssim": _mean(grasp_results, "ssim"),
-        "psnr": _mean(grasp_results, "psnr"),
-        "mse": _mean(grasp_results, "mse"),
-        "lpips": _mean(grasp_results, "lpips"),
-        "dc_mse": _mean(grasp_results, "dc_mse"),
-        "dc_mae": _mean(grasp_results, "dc_mae"),
+        "ssim": _mean_std(grasp_results, "ssim"),
+        "psnr": _mean_std(grasp_results, "psnr"),
+        "mse": _mean_std(grasp_results, "mse"),
+        "lpips": _mean_std(grasp_results, "lpips"),
+        "dc_mse": _mean_std(grasp_results, "dc_mse"),
+        "dc_mae": _mean_std(grasp_results, "dc_mae"),
     }
 
-    recon_corr_str = "" if dl_summary["recon_corr"] is None else f"{dl_summary['recon_corr']:.4f}"
+    def _format_mean_std(mean, std):
+        if mean is None:
+            return ""
+        return f"{mean:.4f} (std {std:.4f})"
+
+    recon_corr_str = _format_mean_std(*dl_summary["recon_corr"])
+    grasp_corr_str = _format_mean_std(*dl_summary["grasp_corr"])
 
     print("=== Inference Summary (averaged over samples) ===")
-    print(f"DL   -> SSIM: {dl_summary['ssim']:.4f}, PSNR: {dl_summary['psnr']:.2f}, MSE: {dl_summary['mse']:.6f}, "
-          f"LPIPS: {dl_summary['lpips']:.4f}, DC_MSE: {dl_summary['dc_mse']:.6f}, DC_MAE: {dl_summary['dc_mae']:.6f}, "
-          f"EC Corr: {recon_corr_str}")
-    print(f"GRASP-> SSIM: {grasp_summary['ssim']:.4f}, PSNR: {grasp_summary['psnr']:.2f}, MSE: {grasp_summary['mse']:.6f}, "
-          f"LPIPS: {grasp_summary['lpips']:.4f}, DC_MSE: {grasp_summary['dc_mse']:.6f}, DC_MAE: {grasp_summary['dc_mae']:.6f}")
+    print(
+        "DL   -> "
+        f"SSIM: {_format_mean_std(*dl_summary['ssim'])}, "
+        f"PSNR: {_format_mean_std(*dl_summary['psnr'])}, "
+        f"MSE: {_format_mean_std(*dl_summary['mse'])}, "
+        f"LPIPS: {_format_mean_std(*dl_summary['lpips'])}, "
+        f"DC_MSE: {_format_mean_std(*dl_summary['dc_mse'])}, "
+        f"DC_MAE: {_format_mean_std(*dl_summary['dc_mae'])}, "
+        f"EC Corr (DL): {recon_corr_str}, "
+        f"EC Corr (GRASP): {grasp_corr_str}"
+    )
+    print(
+        "GRASP-> "
+        f"SSIM: {_format_mean_std(*grasp_summary['ssim'])}, "
+        f"PSNR: {_format_mean_std(*grasp_summary['psnr'])}, "
+        f"MSE: {_format_mean_std(*grasp_summary['mse'])}, "
+        f"LPIPS: {_format_mean_std(*grasp_summary['lpips'])}, "
+        f"DC_MSE: {_format_mean_std(*grasp_summary['dc_mse'])}, "
+        f"DC_MAE: {_format_mean_std(*grasp_summary['dc_mae'])}"
+    )
     print(f"Inference complete. Results saved to {inference_dir}")
 
 

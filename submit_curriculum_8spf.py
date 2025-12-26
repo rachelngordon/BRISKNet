@@ -19,7 +19,7 @@ class Trainer(submitit.helpers.Checkpointable):
         """
         # Activate your Micromamba environment
         # CORRECTED THE TYPO IN THIS PATH
-        micromamba_path = "/gpfs/data/karczmar-lab/workspaces/rachelgordon/micromamba/etc/profile.d/micromamba.sh"
+        micromamba_path = "/home/rachelgordon/micromamba/etc/profile.d/mamba.sh"
         env_name = "recon_mri"
         
         command_str = (
@@ -48,9 +48,9 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_baseline_18spf"
-    config_path = 'configs/randi/config_ei_baseline_18spf.yaml'
-    num_gpus = 2
+    job_name = "ei_warp_curriculum_8spf"
+    config_path = 'configs/config_ei_curr_8spf.yaml'
+    num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
     os.makedirs(log_dir, exist_ok=True)
@@ -59,14 +59,20 @@ def main():
 
     # --- SLURM Parameter Configuration --
     executor.update_parameters(
-        slurm_partition="gpuq",
+        slurm_partition="general",
         slurm_job_name=job_name,
         nodes=1,
-        gpus_per_node=num_gpus,
         tasks_per_node=1,
-        cpus_per_task=4,
-        slurm_mem_per_gpu="50000",
-        timeout_min=1440,
+        cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
+        slurm_gres=f"gpu:h200:{num_gpus}",     # 4× H200 on a single node
+        timeout_min=700,
+
+        # IMPORTANT: no cpu_bind here anymore, this only affects sbatch
+        # and your sbatch doesn't support --cpu-bind
+        # slurm_additional_parameters={"export": "ALL,SLURM_CPU_BIND=off"},
+
+        # Instead: tell the *srun* that submitit uses not to do CPU binding
+        srun_args=["--cpu-bind=none"],
     )
 
     # --- Job Submission ---

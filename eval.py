@@ -30,6 +30,28 @@ from cluster_paths import _swap_base
 TUMOR_SEG_ROOT = os.environ.get("TUMOR_SEG_ROOT", "/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations_lcr")
 SLICE_MAP_PATH = Path(__file__).resolve().parent / "data" / "largest_tumor_slices.csv"
 
+# Plot styling 
+PLOT_FONT_SIZES = {
+    "suptitle": 28,
+    "title": 24,
+    "label": 20,
+    "tick": 18,
+    "legend": 16,
+}
+PLOT_LAYOUT = {
+    "pad": 0.5,
+    "w_pad": 0.5,
+    "h_pad": 0.5,
+}
+PLOT_ADJUST = {
+    "left": 0.02,
+    "right": 0.98,
+    "bottom": 0.03,
+    "top": 0.9,
+    "wspace": 0.1,
+    "hspace": 0.1,
+}
+
 # ==========================================================
 # EVALUATION FUNCTIONS
 # ==========================================================
@@ -238,46 +260,123 @@ def plot_spatial_quality(
         ssim_dl, ssim_map_dl = ssim_map_func(gt_img, recon_img, data_range=data_range, full=True)
         ssim_grasp, ssim_map_grasp = ssim_map_func(gt_img, grasp_img, data_range=data_range, full=True)
 
-        # Create a 2x4 plot grid
-        fig, axes = plt.subplots(2, 4, figsize=(24, 12))
-        fig.suptitle(f"Spatial Quality Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}", fontsize=20)
+        # Create a 2x4 plot grid with dedicated colorbar columns so image axes stay the same size.
+        fig = plt.figure(figsize=(24, 12))
+        gs = gridspec.GridSpec(
+            2,
+            6,
+            figure=fig,
+            width_ratios=[1, 1, 1, 0.05, 1, 0.05],
+            wspace=0.16,
+            hspace=0.16,
+        )
+        axes = np.empty((2, 4), dtype=object)
+        axes[0, 0] = fig.add_subplot(gs[0, 0])
+        axes[0, 1] = fig.add_subplot(gs[0, 1])
+        axes[0, 2] = fig.add_subplot(gs[0, 2])
+        cax_err_dl = fig.add_subplot(gs[0, 3])
+        axes[0, 3] = fig.add_subplot(gs[0, 4])
+        cax_ssim_dl = fig.add_subplot(gs[0, 5])
+        axes[1, 0] = fig.add_subplot(gs[1, 0])
+        axes[1, 1] = fig.add_subplot(gs[1, 1])
+        axes[1, 2] = fig.add_subplot(gs[1, 2])
+        cax_err_grasp = fig.add_subplot(gs[1, 3])
+        axes[1, 3] = fig.add_subplot(gs[1, 4])
+        cax_ssim_grasp = fig.add_subplot(gs[1, 5])
+        fig.suptitle(
+            f"Spatial Quality Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}",
+            fontsize=PLOT_FONT_SIZES["suptitle"],
+            y=0.95,
+        )
 
         # --- Top Row: DL Reconstruction Comparison ---
         axes[0, 0].imshow(gt_img, cmap='gray')
-        axes[0, 0].set_title("Ground Truth")
+        axes[0, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
 
         axes[0, 1].imshow(recon_img, cmap='gray')
-        axes[0, 1].set_title("DL Reconstruction")
+        axes[0, 1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
         im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-        axes[0, 2].set_title("DL Error Map (Recon - GT)")
-        fig.colorbar(im_err_dl, ax=axes[0, 2], fraction=0.046, pad=0.04)
+        axes[0, 2].set_title("DL Error Map", fontsize=PLOT_FONT_SIZES["title"])
+        cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
+        cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
         im_ssim_dl = axes[0, 3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
-        axes[0, 3].set_title(f"DL SSIM Map (SSIM Recon vs GT: {round(ssim_dl, 3)})")
-        fig.colorbar(im_ssim_dl, ax=axes[0, 3], fraction=0.046, pad=0.04)
+        axes[0, 3].set_title(
+            f"DL SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            fontsize=PLOT_FONT_SIZES["title"],
+        )
+        cb_ssim_dl = fig.colorbar(im_ssim_dl, cax=cax_ssim_dl)
+        cb_ssim_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
         # --- Bottom Row: GRASP Reconstruction Comparison ---
         axes[1, 0].imshow(gt_img, cmap='gray')
-        axes[1, 0].set_title("Ground Truth")
+        axes[1, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
 
         axes[1, 1].imshow(grasp_img, cmap='gray')
-        axes[1, 1].set_title("GRASP Reconstruction")
+        axes[1, 1].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
         im_err_grasp = axes[1, 2].imshow(error_map_grasp, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-        axes[1, 2].set_title("GRASP Error Map (Recon - GT)")
-        fig.colorbar(im_err_grasp, ax=axes[1, 2], fraction=0.046, pad=0.04)
+        axes[1, 2].set_title("GRASP Error Map", fontsize=PLOT_FONT_SIZES["title"])
+        cb_err_grasp = fig.colorbar(im_err_grasp, cax=cax_err_grasp)
+        cb_err_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
         im_ssim_grasp = axes[1, 3].imshow(ssim_map_grasp, cmap='viridis', vmin=0, vmax=1)
-        axes[1, 3].set_title(f"GRASP SSIM Map (SSIM Recon vs GT: {round(ssim_grasp, 3)})")
-        fig.colorbar(im_ssim_grasp, ax=axes[1, 3], fraction=0.046, pad=0.04)
+        axes[1, 3].set_title(
+            f"GRASP SSIM Map (SSIM: {round(ssim_grasp, 3)})",
+            fontsize=PLOT_FONT_SIZES["title"],
+        )
+        cb_ssim_grasp = fig.colorbar(im_ssim_grasp, cax=cax_ssim_grasp)
+        cb_ssim_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
         
         # Turn off axes for all plots
         for ax in axes.flat:
             ax.axis('off')
 
-        # plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-        plt.savefig(filename)
+        fig.subplots_adjust(**{**PLOT_ADJUST, "top": 0.86})
+        plt.savefig(filename, bbox_inches='tight', pad_inches=0.02)
+
+        # Save a separate first-row-only figure without a suptitle.
+        top_fig = plt.figure(figsize=(24, 6))
+        top_gs = gridspec.GridSpec(
+            1,
+            6,
+            figure=top_fig,
+            width_ratios=[1, 1, 1, 0.07, 1, 0.07],
+            wspace=0.24,
+        )
+        top_axes = np.empty(4, dtype=object)
+        top_axes[0] = top_fig.add_subplot(top_gs[0, 0])
+        top_axes[1] = top_fig.add_subplot(top_gs[0, 1])
+        top_axes[2] = top_fig.add_subplot(top_gs[0, 2])
+        top_cax_err = top_fig.add_subplot(top_gs[0, 3])
+        top_axes[3] = top_fig.add_subplot(top_gs[0, 4])
+        top_cax_ssim = top_fig.add_subplot(top_gs[0, 5])
+
+        top_axes[0].imshow(gt_img, cmap='gray')
+        top_axes[0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
+        top_axes[1].imshow(recon_img, cmap='gray')
+        top_axes[1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+        top_axes[2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
+        top_axes[2].set_title("DL Error Map", fontsize=PLOT_FONT_SIZES["title"])
+        top_cb_err = top_fig.colorbar(top_axes[2].images[0], cax=top_cax_err)
+        top_cb_err.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        top_axes[3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
+        top_axes[3].set_title(
+            f"DL SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            fontsize=PLOT_FONT_SIZES["title"],
+        )
+        top_cb_ssim = top_fig.colorbar(top_axes[3].images[0], cax=top_cax_ssim)
+        top_cb_ssim.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+
+        for ax in top_axes.flat:
+            ax.axis('off')
+
+        base_name, ext = os.path.splitext(filename)
+        top_row_filename = f"{base_name}_top_row{ext}"
+        top_fig.subplots_adjust(**{**PLOT_ADJUST, "top": 0.95, "bottom": 0.04})
+        top_fig.savefig(top_row_filename, bbox_inches='tight', pad_inches=0.02)
+        plt.close(top_fig)
         plt.close()
 
 
@@ -295,31 +394,54 @@ def plot_spatial_quality(
     vmin_ssim = np.percentile(ssim_map, 5)
     vmax_ssim = np.percentile(ssim_map, 95)
 
-    # Create a 1x4 plot grid
-    fig, axes = plt.subplots(1, 4, figsize=(24, 6))
-    fig.suptitle(f"DL vs GRASP Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}", fontsize=20)
+    # Create a 1x4 plot grid with dedicated colorbar columns so image axes stay the same size.
+    fig = plt.figure(figsize=(24, 6))
+    gs = gridspec.GridSpec(
+        1,
+        6,
+        figure=fig,
+        width_ratios=[1, 1, 1, 0.05, 1, 0.05],
+        wspace=0.16,
+    )
+    axes = np.empty(4, dtype=object)
+    axes[0] = fig.add_subplot(gs[0, 0])
+    axes[1] = fig.add_subplot(gs[0, 1])
+    axes[2] = fig.add_subplot(gs[0, 2])
+    cax_err_dl = fig.add_subplot(gs[0, 3])
+    axes[3] = fig.add_subplot(gs[0, 4])
+    cax_ssim_dl = fig.add_subplot(gs[0, 5])
+    fig.suptitle(
+        f"DL vs GRASP Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}",
+        fontsize=PLOT_FONT_SIZES["suptitle"],
+        y=0.995,
+    )
 
     # --- Top Row: DL Reconstruction Comparison ---
     axes[0].imshow(grasp_img, cmap='gray')
-    axes[0].set_title("GRASP Reconstruction")
+    axes[0].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
     axes[1].imshow(recon_img, cmap='gray')
-    axes[1].set_title("DL Reconstruction")
+    axes[1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
     im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', vmin=vmin, vmax=vmax)
-    axes[2].set_title("Error Map (DL Recon - GRASP)")
-    fig.colorbar(im_err_dl, ax=axes[2], fraction=0.046, pad=0.04)
+    axes[2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
+    cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
+    cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
     im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=vmin_ssim, vmax=vmax_ssim)
-    axes[3].set_title(f"SSIM Map (SSIM between DL and GRASP Recons: {round(ssim, 3)})")
-    fig.colorbar(im_ssim_dl, ax=axes[3], fraction=0.046, pad=0.04)
+    axes[3].set_title(
+        f"SSIM Map (SSIM: {round(ssim, 3)})",
+        fontsize=PLOT_FONT_SIZES["title"],
+    )
+    cb_ssim_dl = fig.colorbar(im_ssim_dl, cax=cax_ssim_dl)
+    cb_ssim_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
     
     # Turn off axes for all plots
     for ax in axes.flat:
         ax.axis('off')
 
-    # plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-    plt.savefig(grasp_comparison_filename)
+    fig.subplots_adjust(**{**PLOT_ADJUST, "top": 0.82})
+    plt.savefig(grasp_comparison_filename, bbox_inches='tight', pad_inches=0.02)
     plt.close()
 
 
@@ -357,7 +479,10 @@ def plot_temporal_curves(
 
     fig, axes = plt.subplots(1, len(regions), figsize=(7 * len(regions), 5))
     if len(regions) == 1: axes = [axes] # Ensure axes is always a list
-    fig.suptitle(f"Temporal Fidelity: Mean Signal vs. Time (AF = {acceleration}, SPF = {spokes_per_frame})", fontsize=16)
+    fig.suptitle(
+        f"Mean Signal vs. Time (AF = {acceleration}, SPF = {spokes_per_frame})",
+        fontsize=PLOT_FONT_SIZES["suptitle"],
+    )
 
     region_corrs = {}
 
@@ -372,6 +497,9 @@ def plot_temporal_curves(
         # compute the pearson correlation coefficients
         recon_correlation, _ = pearsonr(recon_curve, gt_curve)
         grasp_correlation, _ = pearsonr(grasp_curve, gt_curve)
+
+        recon_correlation = float(recon_correlation)
+        grasp_correlation = float(grasp_correlation)
 
         region_corrs[region] = {"DL": recon_correlation, "GRASP":  grasp_correlation}
 
@@ -389,16 +517,20 @@ def plot_temporal_curves(
         axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
         
         if plot_dro:
-            axes[i].set_title(f"Region: {region.capitalize()} (Correlation: DL: {round(recon_correlation, 2)}, GRASP: {round(grasp_correlation, 2)})")
+            axes[i].set_title(
+                f"{region.capitalize()} (DL: {recon_correlation:.2f}, GRASP: {grasp_correlation:.2f})",
+                fontsize=PLOT_FONT_SIZES["title"],
+            )
         else: 
-            axes[i].set_title(f"Region: {region.capitalize()}")
-        axes[i].set_xlabel("Time (s)")
+            axes[i].set_title(f"{region.capitalize()}", fontsize=PLOT_FONT_SIZES["title"])
+        axes[i].set_xlabel("Time (s)", fontsize=PLOT_FONT_SIZES["label"])
+        axes[i].tick_params(axis='both', which='major', labelsize=PLOT_FONT_SIZES["tick"])
         axes[i].grid(True)
-        axes[i].legend()
+        axes[i].legend(fontsize=PLOT_FONT_SIZES["legend"])
 
-    axes[0].set_ylabel("Mean Signal Intensity")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig(filename)
+    axes[0].set_ylabel("Mean Signal Intensity", fontsize=PLOT_FONT_SIZES["label"])
+    plt.tight_layout(rect=[0, 0.02, 1, 0.94], **PLOT_LAYOUT)
+    plt.savefig(filename, bbox_inches='tight', pad_inches=0.02)
     plt.close()
 
     return region_corrs
@@ -454,8 +586,12 @@ def plot_single_temporal_curve(
 
     # --- 1. Setup Figure and Layout ---
     fig = plt.figure(figsize=(20, 8.5))
-    fig.suptitle(f"Tumor Enhancement Over Time (AF = {acceleration}, SPF = {spokes_per_frame})")
-    gs = gridspec.GridSpec(2, 4, figure=fig, hspace=0.1, wspace=0.1)
+    fig.suptitle(
+        f"Tumor Enhancement Over Time (AF = {acceleration}, SPF = {spokes_per_frame})",
+        fontsize=PLOT_FONT_SIZES["suptitle"],
+        y=0.985,
+    )
+    gs = gridspec.GridSpec(2, 4, figure=fig, hspace=0.16, wspace=0.16)
 
     ax_curve = fig.add_subplot(gs[:, 0:2])
     ax_imgs = [
@@ -477,12 +613,12 @@ def plot_single_temporal_curve(
     ax_curve.plot(highlight_times, highlight_vals, 'r*', markersize=18, zorder=10) # zorder to ensure stars are on top
 
     # Formatting the curve plot
-    ax_curve.set_title("Tumor Contrast Enhancement Curve (CEC)", fontsize=18, pad=10)
-    ax_curve.set_xlabel("Time Frame", fontsize=16)
-    ax_curve.set_ylabel("Mean Signal Intensity", fontsize=16)
-    ax_curve.legend(fontsize=14)
+    ax_curve.set_title("Tumor Contrast Enhancement Curve (CEC)", fontsize=PLOT_FONT_SIZES["title"], pad=8)
+    ax_curve.set_xlabel("Time Frame", fontsize=PLOT_FONT_SIZES["label"])
+    ax_curve.set_ylabel("Mean Signal Intensity", fontsize=PLOT_FONT_SIZES["label"])
+    ax_curve.legend(fontsize=PLOT_FONT_SIZES["legend"])
     ax_curve.grid(True, linestyle='--')
-    ax_curve.tick_params(axis='both', which='major', labelsize=14)
+    ax_curve.tick_params(axis='both', which='major', labelsize=PLOT_FONT_SIZES["tick"])
 
     # --- 3. Plot Image Frames with ROI (Right Panel) ---
     # Find contours of the tumor mask to draw an outline
@@ -504,12 +640,12 @@ def plot_single_temporal_curve(
             ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
 
         # Formatting for each image subplot
-        ax.set_title(f"Frame {frame_idx}", fontsize=16)
+        ax.set_title(f"Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         ax.axis('off')
 
     # --- 4. Finalize and Save ---
-    plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust rect for suptitle
-    plt.savefig(filename, bbox_inches='tight', dpi=150)
+    plt.tight_layout(rect=[0, 0, 1, 0.9], **PLOT_LAYOUT)
+    plt.savefig(filename, bbox_inches='tight', pad_inches=0.02, dpi=150)
     plt.close(fig)
 
 
@@ -536,7 +672,11 @@ def plot_time_series(
     indices = np.linspace(0, num_frames - 1, 5, dtype=int)
     
     fig, axes = plt.subplots(2, 5, figsize=(25, 10))
-    fig.suptitle(f"Temporal Series Comparison (AF = {acceleration}, SPF = {spokes_per_frame})", fontsize=20)
+    fig.suptitle(
+        f"Temporal Series Comparison (AF = {acceleration}, SPF = {spokes_per_frame})",
+        fontsize=PLOT_FONT_SIZES["suptitle"],
+        y=0.995,
+    )
 
     # --- Row 1: Ground Truth ---
     # for i, frame_idx in enumerate(indices):
@@ -549,18 +689,18 @@ def plot_time_series(
     for i, frame_idx in enumerate(indices):
         img = recon_img_stack[:, :, frame_idx]
         axes[0, i].imshow(img, cmap='gray')
-        axes[0, i].set_title(f"DL: Frame {frame_idx}")
+        axes[0, i].set_title(f"DL: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[0, i].axis('off')
 
     # --- Row 3: GRASP Reconstruction ---
     for i, frame_idx in enumerate(indices):
         img = grasp_img_stack[:, :, frame_idx]
         axes[1, i].imshow(img, cmap='gray')
-        axes[1, i].set_title(f"GRASP: Frame {frame_idx}")
+        axes[1, i].set_title(f"GRASP: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[1, i].axis('off')
 
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(filename)
+    fig.subplots_adjust(**PLOT_ADJUST)
+    plt.savefig(filename, bbox_inches='tight', pad_inches=0.02)
     plt.close()
 
 
@@ -625,10 +765,11 @@ def eval_grasp(kspace, csmap, ground_truth, grasp_recon, physics, device, output
 
 
 
-def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, acceleration, spokes_per_frame, output_dir, label, device, cluster, dro_eval=True, grasp_path=None, raw_slice_idx=None, rescale=True):
+def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, acceleration, spokes_per_frame, output_dir, label, device, cluster, dro_eval=True, grasp_path=None, raw_slice_idx=None, rescale=True, filename_suffix=""):
 
     acceleration = round(acceleration.item(), 1)
     plot_label, patient_id = _resolve_plot_label(label, grasp_path)
+    suffix = f"_{filename_suffix}" if filename_suffix else ""
 
     # ==========================================================
     # EVALUATE DATA CONSISTENCY
@@ -727,8 +868,8 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 gt_img=gt_mag_np[:, :, peak_frame],
                 grasp_img=grasp_mag_np[:, :, peak_frame],
                 time_frame_index=peak_frame,
-                filename=os.path.join(output_dir, f"spatial_quality_{plot_label}.png"),
-                grasp_comparison_filename=os.path.join(output_dir, f"grasp_comparison_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"spatial_quality_{plot_label}{suffix}.png"),
+                grasp_comparison_filename=os.path.join(output_dir, f"grasp_comparison_{plot_label}{suffix}.png"),
                 data_range=data_range,
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
@@ -743,7 +884,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 grasp_img_stack=grasp_mag_np,
                 masks=masks_np,
                 time_points=aif_time_points,
-                filename=os.path.join(output_dir, f"temporal_curves_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"temporal_curves_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=True
@@ -754,7 +895,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 masks=masks_np,
                 time_points=aif_time_points,
                 num_frames=num_frames,
-                filename=os.path.join(output_dir, f"recon_temporal_curve_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"recon_temporal_curve_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
             )
@@ -762,7 +903,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
             plot_time_series(
                 recon_img_stack=recon_mag_np,
                 grasp_img_stack=grasp_mag_np,
-                filename=os.path.join(output_dir, f"time_points_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"time_points_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
             )
@@ -828,8 +969,8 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 gt_img=gt_mag_np[:, :, peak_frame],
                 grasp_img=grasp_mag_np[:, :, peak_frame],
                 time_frame_index=peak_frame,
-                filename=os.path.join(output_dir, f"non_dro_spatial_quality_{plot_label}.png"),
-                grasp_comparison_filename=os.path.join(output_dir, f"non_dro_grasp_comparison_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"non_dro_spatial_quality_{plot_label}{suffix}.png"),
+                grasp_comparison_filename=os.path.join(output_dir, f"non_dro_grasp_comparison_{plot_label}{suffix}.png"),
                 data_range=data_range,
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
@@ -844,7 +985,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 grasp_img_stack=grasp_mag_np,
                 masks=masks_np,
                 time_points=aif_time_points,
-                filename=os.path.join(output_dir, f"non_dro_temporal_curves_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"non_dro_temporal_curves_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=False
@@ -855,7 +996,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 masks=masks_np,
                 time_points=aif_time_points,
                 num_frames=num_frames,
-                filename=os.path.join(output_dir, f"non_dro_recon_temporal_curve_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"non_dro_recon_temporal_curve_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
             )
@@ -863,7 +1004,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
             plot_time_series(
                 recon_img_stack=recon_mag_np,
                 grasp_img_stack=grasp_mag_np,
-                filename=os.path.join(output_dir, f"non_dro_time_points_{plot_label}.png"),
+                filename=os.path.join(output_dir, f"non_dro_time_points_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
             )

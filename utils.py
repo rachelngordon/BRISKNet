@@ -521,6 +521,7 @@ def load_checkpoint(model, optimizer, filename):
         "eval_raw_dc_mses": ckpt.get("eval_raw_dc_mses", []),
         "eval_raw_dc_maes": ckpt.get("eval_raw_dc_maes", []),
         "eval_curve_corrs": ckpt.get("eval_curve_corrs", []),
+        "eval_spf_curves": ckpt.get("eval_spf_curves", {}),
     }
 
     return model, optimizer, ckpt.get("epoch", 1), ckpt.get("ei_weight"), ckpt.get("step0_train_ei_loss"), ckpt.get("epoch_train_mc_loss"), train_curves, val_curves, eval_curves, ckpt.get("avg_grasp_ssim"), ckpt.get("avg_grasp_psnr"), ckpt.get("avg_grasp_mse"), ckpt.get("avg_grasp_lpips"), ckpt.get("avg_grasp_dc_mse"), ckpt.get("avg_grasp_dc_mae"), ckpt.get("avg_grasp_curve_corr"), ckpt.get("avg_grasp_raw_dc_mae"), ckpt.get("avg_grasp_raw_dc_mse")
