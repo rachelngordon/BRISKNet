@@ -424,7 +424,7 @@ def main():
     def _format_mean_std(mean, std):
         if mean is None:
             return ""
-        return f"{mean:.4f} (std {std:.4f})"
+        return f"{mean:.4f} ± {std:.4f}"
 
     recon_corr_str = _format_mean_std(*dl_summary["recon_corr"])
     grasp_corr_str = _format_mean_std(*dl_summary["grasp_corr"])
