@@ -272,8 +272,8 @@ class ZFSliceDataset(Dataset):
         kspace_final = torch.flip(kspace_final, dims=[-1])
 
 
-        csmap = torch.from_numpy(csmap)
-        csmap_tensor = torch.rot90(csmap, k=2, dims=[-2, -1])
+        csmap_tensor = torch.from_numpy(csmap)
+        csmap_tensor = torch.rot90(csmap_tensor, k=2, dims=[-2, -1])
         csmap = csmap_tensor.numpy()
 
         return kspace_final, csmap, N_samples, spokes_per_frame, N_time

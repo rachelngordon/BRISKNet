@@ -37,6 +37,17 @@ def setup():
 def cleanup():
     dist.destroy_process_group()
 
+def sample_start_time_index(max_idx, use_edge_mixture):
+    if not use_edge_mixture:
+        return random.randint(0, max_idx - 1)
+
+    r = random.random()
+    if r < 1.0 / 3.0:
+        return 0
+    if r < 2.0 / 3.0:
+        return max_idx
+    return random.randint(0, max_idx)
+
 def main():
 
     set_seed(12)
@@ -88,6 +99,7 @@ def main():
     if args.from_checkpoint:
         new_config = apply_cluster_paths(new_config)
 
+    use_edge_time_index_sampling = config.get('training', {}).get('edge_time_index_sampling', False)
 
     # create output directories
     output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
@@ -589,7 +601,7 @@ def main():
                 
                 if N_time > Ng:
                     max_idx = N_time - Ng
-                    random_index = random.randint(0, max_idx - 1) 
+                    random_index = sample_start_time_index(max_idx, use_edge_time_index_sampling)
 
                     measured_kspace = measured_kspace[..., random_index:random_index + Ng]
 
@@ -939,7 +951,7 @@ def main():
                 if N_time > Ng:
 
                     max_idx = N_time - Ng
-                    random_index = random.randint(0, max_idx - 1) 
+                    random_index = sample_start_time_index(max_idx, use_edge_time_index_sampling)
 
                     measured_kspace = measured_kspace[..., random_index:random_index + Ng]
                     ktraj_chunk = ktraj[..., random_index:random_index + Ng]

@@ -169,7 +169,34 @@ def trajGR(Nkx, Nspokes):
 
     ktraj = np.stack((ky.flatten(), kx.flatten()), axis=0)
 
+    print(f"------ k-space trajectory shape: {ktraj.shape} ------")
+
     return ktraj
+
+
+def get_traj(N_spokes=13, N_time=1, base_res=320, gind=1):
+
+    N_tot_spokes = N_spokes * N_time
+
+    N_samples = base_res * 2
+
+    base_lin = np.arange(N_samples).reshape(1, -1) - base_res
+
+    tau = 0.5 * (1 + 5**0.5)
+    base_rad = np.pi / (gind + tau - 1)
+
+    base_rot = np.arange(N_tot_spokes).reshape(-1, 1) * base_rad
+
+    traj = np.zeros((N_tot_spokes, N_samples, 2))
+    traj[..., 0] = np.cos(base_rot) @ base_lin
+    traj[..., 1] = np.sin(base_rot) @ base_lin
+
+    traj = traj / 2
+
+    traj = traj.reshape(N_time, N_spokes, N_samples, 2)
+
+    return np.squeeze(traj)
+    
 
 ################### prepare NUFFT ################
 def prep_nufft(Nsample, Nspokes, Ng):
@@ -179,6 +206,9 @@ def prep_nufft(Nsample, Nspokes, Ng):
     grid_size = (Nsample, Nsample)
 
     ktraj = trajGR(Nsample, Nspokes * Ng)
+    # ktraj = get_traj(N_spokes=Nspokes * Ng, N_time=1, base_res=int(Nsample / 2))
+    # ktraj = rearrange(ktraj, 'sp sam i -> i (sp sam)')
+    # print("ktraj", ktraj.shape)
     ktraj = torch.tensor(ktraj, dtype=torch.float)
     dcomp = tkbn.calc_density_compensation_function(ktraj=ktraj, im_size=im_size)
     dcomp = dcomp.squeeze()
@@ -535,28 +565,7 @@ def to_torch_complex(x: torch.Tensor):
 
 
 
-def get_traj(N_spokes=13, N_time=1, base_res=320, gind=1):
 
-    N_tot_spokes = N_spokes * N_time
-
-    N_samples = base_res * 2
-
-    base_lin = np.arange(N_samples).reshape(1, -1) - base_res
-
-    tau = 0.5 * (1 + 5**0.5)
-    base_rad = np.pi / (gind + tau - 1)
-
-    base_rot = np.arange(N_tot_spokes).reshape(-1, 1) * base_rad
-
-    traj = np.zeros((N_tot_spokes, N_samples, 2))
-    traj[..., 0] = np.cos(base_rot) @ base_lin
-    traj[..., 1] = np.sin(base_rot) @ base_lin
-
-    traj = traj / 2
-
-    traj = traj.reshape(N_time, N_spokes, N_samples, 2)
-
-    return np.squeeze(traj)
 
 
 

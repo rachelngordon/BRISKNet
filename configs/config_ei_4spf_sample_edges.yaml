@@ -6,23 +6,23 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 12
+  timeframes: 72
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 12
-  eval_spokes: 24
-  spf_aug: True
+  eval_timeframes: 72
+  eval_spokes: 4
+  spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 24
+  train_spokes_per_frame: 4
   slices: 192
   slices_to_eval: 1
-  eval_frequency: 1
+  eval_frequency: 5
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
@@ -30,7 +30,7 @@ dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 2
+  max_subjects: 300
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -60,8 +60,8 @@ model:
   lambda_step: 0.1
   encode_acceleration: true
   encode_time_index: true
-  kernel_size_L: [3, 3, 3]
-  kernel_size_S: [3, 3, 1]
+  kernel_size_L: [3, 3, 5]
+  kernel_size_S: [3, 3, 3]
   optimizer:
     name: "Adam"
     lr: 0.0005
@@ -78,7 +78,7 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp_subsample"
+      temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
       weight: 40000
@@ -93,14 +93,14 @@ model:
 
 # Training settings
 training:
-  epochs: 4
+  epochs: 250
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
-  multigpu: False
+  multigpu: True
   edge_time_index_sampling: true
   curriculum_learning:
-    enabled: false
+    enabled: False
     phases:
       - name: "Phase 1: Moderate Accelerations"
         start_epoch: 1
@@ -121,11 +121,11 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 16
-  chunk_overlap: 8
+  chunk_size: 36
+  chunk_overlap: 18
   rescale: False
 
 debugging:
   calc_step_0: True
   enable_gradient_monitoring: true
-  monitoring_interval: 1
+  monitoring_interval: 5
