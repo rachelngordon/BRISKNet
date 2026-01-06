@@ -262,9 +262,6 @@ def main():
                     raw_kspace, eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm=config["model"]["norm"]
                 )
 
-            # Align raw recon orientation to match training eval.
-            raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3, -2])
-
             sample_dir = os.path.join(inference_dir, f"sample_{idx:02d}")
             os.makedirs(sample_dir, exist_ok=True)
             label = f"sample{idx:02d}"

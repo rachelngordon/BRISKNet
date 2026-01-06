@@ -716,7 +716,7 @@ def main():
                     adj_loss = adj_loss.item()
 
                 # fix orientation of raw k-space recon
-                raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
+                # raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
                 
 
                 # compute losses
@@ -1197,7 +1197,7 @@ def main():
                                 val_adj_loss = val_adj_loss.item()
 
                             # fix orientation of raw k-space recon
-                            val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
+                            # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
 
 
                             
@@ -1959,7 +1959,7 @@ def main():
                     ground_truth = rearrange(ground_truth, 'b i h w t -> b i t h w')
 
                     # fix orientation of raw k-space recon
-                    raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
+                    # raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
 
 
                     ## Evaluation

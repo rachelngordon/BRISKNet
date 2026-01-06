@@ -169,7 +169,7 @@ def trajGR(Nkx, Nspokes):
 
     ktraj = np.stack((ky.flatten(), kx.flatten()), axis=0)
 
-    print(f"------ k-space trajectory shape: {ktraj.shape} ------")
+    # print(f"------ k-space trajectory shape: {ktraj.shape} ------")
 
     return ktraj
 
@@ -206,9 +206,7 @@ def prep_nufft(Nsample, Nspokes, Ng):
     grid_size = (Nsample, Nsample)
 
     ktraj = trajGR(Nsample, Nspokes * Ng)
-    # ktraj = get_traj(N_spokes=Nspokes * Ng, N_time=1, base_res=int(Nsample / 2))
-    # ktraj = rearrange(ktraj, 'sp sam i -> i (sp sam)')
-    # print("ktraj", ktraj.shape)
+
     ktraj = torch.tensor(ktraj, dtype=torch.float)
     dcomp = tkbn.calc_density_compensation_function(ktraj=ktraj, im_size=im_size)
     dcomp = dcomp.squeeze()

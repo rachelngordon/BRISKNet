@@ -921,7 +921,6 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
         # ==========================================================
         # VISUALIZATION
         # ==========================================================
-
         grasp_recon_complex_np = rearrange(to_torch_complex(grasp_img).squeeze(), 'h t w -> h w t').cpu().numpy()
         grasp_mag_np = np.abs(grasp_recon_complex_np)
 

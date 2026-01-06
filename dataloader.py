@@ -269,8 +269,8 @@ class ZFSliceDataset(Dataset):
         real_part = ksp_prep.real
         imag_part = ksp_prep.imag
         kspace_final = torch.stack([real_part, imag_part], dim=0).float()
-        kspace_final = torch.flip(kspace_final, dims=[-1])
 
+        kspace_final = torch.flip(kspace_final, dims=[-1])
 
         csmap_tensor = torch.from_numpy(csmap)
         csmap_tensor = torch.rot90(csmap_tensor, k=2, dims=[-2, -1])
@@ -519,10 +519,10 @@ class SliceDataset(Dataset):
         real_part = kspace_slice.real
         imag_part = kspace_slice.imag
         kspace_final = torch.stack([real_part, imag_part], dim=0).float()
+
         kspace_final = torch.flip(kspace_final, dims=[-1])
 
         csmap = torch.from_numpy(csmap)
-            
         csmap_tensor = torch.rot90(csmap, k=2, dims=[-2, -1])
         csmap = csmap_tensor.numpy()
 
@@ -655,6 +655,9 @@ class SimulatedDataset(Dataset):
         ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
         ksp_prep_shape = ksp_prep.shape
         ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
+
+        ksp_prep = torch.flip(ksp_prep, dims=[-1])
+
         raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(kspace_torch.dtype)
 
 
@@ -689,6 +692,9 @@ class SimulatedDataset(Dataset):
         csmaps_torch = torch.from_numpy(csmaps).permute(2, 0, 1).unsqueeze(0)
         raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
         raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(csmaps_torch.dtype)
+
+        raw_csmaps_torch = torch.rot90(raw_csmaps_torch, k=2, dims=[-2, -1])
+        raw_csmaps_torch = raw_csmaps_torch.numpy()
 
         return kspace_torch, csmaps_torch, ground_truth_torch, grasp_recon_torch, mask, grasp_path, raw_kspace_slice, raw_grasp_recon, raw_csmaps_torch #, parMap, aif, S0, T10, mask
     
@@ -779,7 +785,6 @@ class SimulatedSPFDataset(Dataset):
             grasp_recon_torch = torch.from_numpy(grasp_recon).permute(2, 0, 1) # T, H, W
             grasp_recon_torch = torch.stack([grasp_recon_torch.real, grasp_recon_torch.imag], dim=0)
 
-
             grasp_recon_torch = torch.flip(grasp_recon_torch, dims=[-3])
             grasp_recon_torch = torch.rot90(grasp_recon_torch, k=3, dims=[-3,-1])
 
@@ -858,10 +863,16 @@ class SimulatedSPFDataset(Dataset):
         ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
         ksp_prep_shape = ksp_prep.shape
         ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
+        
+        ksp_prep = torch.flip(ksp_prep, dims=[-1])
+
         raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(smap_torch.dtype)
 
         raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
         raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(smap_torch.dtype)
+
+        raw_csmaps_torch = torch.rot90(raw_csmaps_torch, k=2, dims=[-2, -1])
+        raw_csmaps_torch = raw_csmaps_torch.numpy()
 
 
         return smap_torch, simImg_torch, grasp_recon_torch, mask, grasp_path, raw_kspace_slice, raw_csmaps_torch, raw_grasp_recon #, parMap, aif, S0, T10, mask
