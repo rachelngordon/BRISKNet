@@ -829,7 +829,14 @@ def sliding_window_inference(
 
         # Forward pass
         x_recon_chunk, adj_loss, *_ = model(
-            kspace_chunk, physics_chunk, csmap, acceleration_encoding, sti, epoch=epoch, norm="both"
+            kspace_chunk,
+            physics_chunk,
+            csmap,
+            acceleration_encoding,
+            sti,
+            epoch=epoch,
+            norm="both",
+            total_frames=N_frames,
         )
         # x_recon_chunk: (1, 2, H, W, T_chunk)
         adj_losses.append(adj_loss.item())

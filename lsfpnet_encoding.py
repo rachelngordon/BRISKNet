@@ -882,7 +882,11 @@ class ArtifactRemovalLSFPNet(nn.Module):
 
             if start_timepoint_index is not None:
                 # feature 2: start index as fraction of total frames
-                T = x_init_norm.shape[-1]
+                total_frames = kwargs.get("total_frames", None)
+                if total_frames is None:
+                    T = x_init_norm.shape[-1]
+                else:
+                    T = int(total_frames)
                 start_frac = (start_timepoint_index / max(T - 1, 1)).view(-1, 1)
 
                 if acceleration is not None:
