@@ -400,6 +400,8 @@ def main():
                             film_L=config['model']['film_L'],
                             kernel_size_L=kernel_size_L,
                             kernel_size_S=kernel_size_S,
+                            activation_checkpointing=config["model"].get("activation_checkpointing", False),
+                            checkpoint_use_reentrant=config["model"].get("checkpoint_use_reentrant", False),
                             )
 
     if config['model']['encode_acceleration'] and config['model']['encode_time_index']:

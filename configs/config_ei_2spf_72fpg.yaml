@@ -62,6 +62,8 @@ model:
   encode_time_index: true
   kernel_size_L: [3, 3, 5]
   kernel_size_S: [3, 3, 3]
+  activation_checkpointing: true
+  checkpoint_use_reentrant: false
   optimizer:
     name: "Adam"
     lr: 0.0005

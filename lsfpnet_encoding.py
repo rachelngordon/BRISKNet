@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch.nn import init
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from lsp import Project_inf, Wxs, Wtxs
 from time import time
 from einops import rearrange
@@ -698,12 +699,16 @@ class LSFPNet(nn.Module):
                  film_L: bool = True,
                  kernel_size_L=3,
                  kernel_size_S=3,
+                 activation_checkpointing: bool = False,
+                 checkpoint_use_reentrant: bool = False,
         ):
         super(LSFPNet, self).__init__()
         onelayer = []
         self.LayerNo = LayerNo
         self.channels = channels
         self.style_dim = style_dim
+        self.activation_checkpointing = activation_checkpointing
+        self.checkpoint_use_reentrant = checkpoint_use_reentrant
 
         for ii in range(LayerNo):
             # onelayer.append(BasicBlock(lambdas, channels=self.channels, style_dim=style_dim))
@@ -778,8 +783,28 @@ class LSFPNet(nn.Module):
         layers_adj_L = []
         layers_adj_S = []
 
+        use_checkpointing = self.activation_checkpointing and self.training
+        checkpoint_dummy = None
+        if use_checkpointing:
+            checkpoint_dummy = torch.ones(1, device=param_d.device, requires_grad=True)
+
         for ii in range(self.LayerNo):
-            [L, S, layer_adj_L, layer_adj_S, pt_L, pt_S, p_L, p_S, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step] = self.fcs[ii](M0, param_E, param_d, L, S, pt_L, pt_S, p_L, p_S, csmap, style_embedding)
+            if use_checkpointing:
+                block = self.fcs[ii]
+
+                def _run_block(L_t, S_t, pt_L_t, pt_S_t, p_L_t, p_S_t, dummy_t, _block=block):
+                    return tuple(_block(M0, param_E, param_d, L_t, S_t, pt_L_t, pt_S_t, p_L_t, p_S_t, csmap, style_embedding))
+
+                (L, S, layer_adj_L, layer_adj_S, pt_L, pt_S, p_L, p_S, lambda_L, lambda_S,
+                 lambda_spatial_L, lambda_spatial_S, gamma, lambda_step) = checkpoint(
+                    _run_block, L, S, pt_L, pt_S, p_L, p_S, checkpoint_dummy,
+                    use_reentrant=self.checkpoint_use_reentrant
+                )
+            else:
+                (L, S, layer_adj_L, layer_adj_S, pt_L, pt_S, p_L, p_S, lambda_L, lambda_S,
+                 lambda_spatial_L, lambda_spatial_S, gamma, lambda_step) = self.fcs[ii](
+                    M0, param_E, param_d, L, S, pt_L, pt_S, p_L, p_S, csmap, style_embedding
+                )
             layers_adj_L.append(layer_adj_L)
             layers_adj_S.append(layer_adj_S)
 
