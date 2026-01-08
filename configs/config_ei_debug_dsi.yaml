@@ -60,8 +60,10 @@ model:
   lambda_step: 0.1
   encode_acceleration: true
   encode_time_index: true
-  kernel_size_L: [3, 3, 3]
+  kernel_size_L: [3, 3, 5]
   kernel_size_S: [3, 3, 1]
+  activation_checkpointing: false
+  checkpoint_use_reentrant: false
   optimizer:
     name: "Adam"
     lr: 0.0005
@@ -83,11 +85,12 @@ model:
       rotate_range: 20
       weight: 40000
       warmup: 25
-      duration: 200
+      duration: 10000
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
+      no_grad: false
   norm: "both"
 
 

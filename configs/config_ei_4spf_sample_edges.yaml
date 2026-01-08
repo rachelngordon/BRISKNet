@@ -83,7 +83,7 @@ model:
       rotate_range: 20
       weight: 40000
       warmup: 25
-      duration: 200
+      duration: 10000
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6

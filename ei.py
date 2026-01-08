@@ -100,9 +100,16 @@ class EILoss(Loss):
         x2_complex = to_torch_complex(x2)
         y = physics(inv=False, data=x2_complex, smaps=csmap).to(csmap.device)
     
-        x3, *_ = model(y, physics, csmap, acceleration, start_timepoint_index, epoch=None)
+        x3, *_ = model(
+            y,
+            physics,
+            csmap,
+            acceleration,
+            start_timepoint_index,
+            epoch=None,
+            disable_checkpointing=True,
+        )
 
         loss_ei = self.weight * self.metric(x3, x2)
         return loss_ei, x2
     
-

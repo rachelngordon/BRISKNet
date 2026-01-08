@@ -83,7 +83,7 @@ model:
       rotate_range: 20
       weight: 40000
       warmup: 25
-      duration: 200
+      duration: 10000
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
@@ -120,8 +120,8 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 36
-  chunk_overlap: 18
+  chunk_size: 54
+  chunk_overlap: 27
   rescale: False
 
 debugging:

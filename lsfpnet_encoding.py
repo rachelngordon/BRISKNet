@@ -195,9 +195,33 @@ class BasicBlock(nn.Module):
             return tuple(int(v) for v in k)
         raise ValueError("kernel_size must be an int or a tuple/list of three ints.")
 
-    def forward(self, M0, param_E, param_d, L, S, pt_L, pt_S, p_L, p_S, csmaps, style_embedding=None):
+    def _compute_gradient(self, M0, param_E, param_d, L, S, csmaps):
+        nx, ny, nt = M0.size()
+        x_sum = torch.reshape(L + S, [nx, ny, nt])
+        k_pred = param_E(inv=False, data=x_sum, smaps=csmaps)
+
+        residual = k_pred - param_d
+
+        if self.use_lowk_dc:
+            k = param_E.ktraj.to(param_d.device)
+            if k.dim() == 3:
+                kr = (k[0]**2 + k[1]**2).sqrt()
+                r0 = self.lowk_radius_frac * kr.max()
+                mask = (kr <= r0).to(residual.real.dtype)
+                gate = 1.0 - self.lowk_alpha * rearrange(mask, 's t -> 1 s t')
+            else:
+                kr = (k[0]**2 + k[1]**2).sqrt()
+                r0 = self.lowk_radius_frac * kr.max()
+                mask = (kr <= r0).to(residual.real.dtype)
+                gate = 1.0 - self.lowk_alpha * rearrange(mask, 's -> 1 s 1')
+            residual = residual * gate
+
+        gradient = param_E(inv=True, data=residual, smaps=csmaps)
+        return torch.reshape(gradient, [nx * ny, nt])
+
+    def _forward_with_gradient(self, M0, gradient, L, S, pt_L, pt_S, p_L, p_S, style_embedding=None):
         """
-        runs one LS+S iteration
+        runs one LS+S iteration with a precomputed image-space gradient
         inputs are complex in (nx, ny, nt) except p_*, pt_* which are packed as in your code
         returns same tuple as your original implementation
         """
@@ -212,38 +236,6 @@ class BasicBlock(nn.Module):
         c = lambda_step / gamma
 
         nx, ny, nt = M0.size()
-
-        # ----- gradient with optional low‑k projection
-        x_sum  = torch.reshape(L + S, [nx, ny, nt])
-        k_pred = param_E(inv=False, data=x_sum, smaps=csmaps)
-        # k_meas = param_d
-        # if self.use_lowk_dc:
-        #     k_proj = self._lowk_project(k_pred, k_meas, param_E.ktraj, self.lowk_frac, self.lowk_alpha)
-        # else:
-        #     k_proj = k_pred
-        # gradient = param_E(inv=True, data=k_proj - k_meas, smaps=csmaps)
-
-        residual = k_pred - param_d  
-
-        # optional low‑k residual gating (soft, on the same normalized tensors)
-        if self.use_lowk_dc:
-            k = param_E.ktraj.to(param_d.device)                                         # (2, samples, t) or (2, samples)
-            if k.dim() == 3:
-                kr = (k[0]**2 + k[1]**2).sqrt()                                          # (samples, t)
-                r0 = self.lowk_radius_frac * kr.max()
-                mask = (kr <= r0).to(residual.real.dtype)                                 # 1 inside ball
-                gate = 1.0 - self.lowk_alpha * rearrange(mask, 's t -> 1 s t')                # broadcast over coils
-            else:                                                                         # single‑frame edge case
-                kr = (k[0]**2 + k[1]**2).sqrt()                                          # (samples,)
-                r0 = self.lowk_radius_frac * kr.max()
-                mask = (kr <= r0).to(residual.real.dtype)
-                gate = 1.0 - self.lowk_alpha * rearrange(mask, 's -> 1 s 1')
-            residual = residual * gate
-
-        # adjoint of gated residual gives gradient in image domain
-        gradient = param_E(inv=True, data=residual, smaps=csmaps)  
-
-        gradient = torch.reshape(gradient, [nx * ny, nt])
 
         # ===== L branch ======================================================
         # conv backprop on p_L
@@ -363,6 +355,10 @@ class BasicBlock(nn.Module):
             L, S, adjloss_L, adjloss_S, pt_L, pt_S, p_L, p_S,
             lambda_L_eff, lambda_S_eff, lam_sp_L_eff, lam_sp_S_eff, gamma, lambda_step
         ]
+
+    def forward(self, M0, param_E, param_d, L, S, pt_L, pt_S, p_L, p_S, csmaps, style_embedding=None):
+        gradient = self._compute_gradient(M0, param_E, param_d, L, S, csmaps)
+        return self._forward_with_gradient(M0, gradient, L, S, pt_L, pt_S, p_L, p_S, style_embedding)
     
 
 
@@ -767,7 +763,7 @@ class LSFPNet(nn.Module):
         plt.close()
 
 
-    def forward(self, M0, param_E, param_d, csmap, epoch, output_dir, style_embedding=None):
+    def forward(self, M0, param_E, param_d, csmap, epoch, output_dir, style_embedding=None, disable_checkpointing=False):
 
         # M0 = M0[..., 0] + 1j * M0[..., 1]
         # param_d = param_d[..., 0] + 1j * param_d[..., 1]
@@ -783,7 +779,7 @@ class LSFPNet(nn.Module):
         layers_adj_L = []
         layers_adj_S = []
 
-        use_checkpointing = self.activation_checkpointing and self.training
+        use_checkpointing = self.activation_checkpointing and self.training and not disable_checkpointing
         checkpoint_dummy = None
         if use_checkpointing:
             checkpoint_dummy = torch.ones(1, device=param_d.device, requires_grad=True)
@@ -791,13 +787,14 @@ class LSFPNet(nn.Module):
         for ii in range(self.LayerNo):
             if use_checkpointing:
                 block = self.fcs[ii]
+                gradient = block._compute_gradient(M0, param_E, param_d, L, S, csmap)
 
-                def _run_block(L_t, S_t, pt_L_t, pt_S_t, p_L_t, p_S_t, dummy_t, _block=block):
-                    return tuple(_block(M0, param_E, param_d, L_t, S_t, pt_L_t, pt_S_t, p_L_t, p_S_t, csmap, style_embedding))
+                def _run_block(L_t, S_t, pt_L_t, pt_S_t, p_L_t, p_S_t, grad_t, dummy_t, _block=block):
+                    return tuple(_block._forward_with_gradient(M0, grad_t, L_t, S_t, pt_L_t, pt_S_t, p_L_t, p_S_t, style_embedding))
 
                 (L, S, layer_adj_L, layer_adj_S, pt_L, pt_S, p_L, p_S, lambda_L, lambda_S,
                  lambda_spatial_L, lambda_spatial_S, gamma, lambda_step) = checkpoint(
-                    _run_block, L, S, pt_L, pt_S, p_L, p_S, checkpoint_dummy,
+                    _run_block, L, S, pt_L, pt_S, p_L, p_S, gradient, checkpoint_dummy,
                     use_reentrant=self.checkpoint_use_reentrant
                 )
             else:
@@ -860,7 +857,7 @@ class ArtifactRemovalLSFPNet(nn.Module):
              scale = 1.0
         return x / scale, scale
 
-    def forward(self, y, E, csmap, acceleration=None, start_timepoint_index=None, epoch=None, norm="both", **kwargs):
+    def forward(self, y, E, csmap, acceleration=None, start_timepoint_index=None, epoch=None, norm="both", disable_checkpointing=False, **kwargs):
 
         # 1. Get the initial ZF recon. This defines our target energy/scale.
         x_init = E(inv=True, data=y, smaps=csmap)
@@ -916,10 +913,28 @@ class ArtifactRemovalLSFPNet(nn.Module):
 
             style_embedding = self.mapping_network(combined_input)
 
-            L, S, loss_layers_adj_L, loss_layers_adj_S, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step  = self.backbone_net(x_init_norm, E, y_norm, csmap, epoch, self.output_dir, style_embedding)
+            L, S, loss_layers_adj_L, loss_layers_adj_S, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step  = self.backbone_net(
+                x_init_norm,
+                E,
+                y_norm,
+                csmap,
+                epoch,
+                self.output_dir,
+                style_embedding,
+                disable_checkpointing=disable_checkpointing,
+            )
 
         else:
-            L, S, loss_layers_adj_L, loss_layers_adj_S, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step  = self.backbone_net(x_init_norm, E, y_norm, csmap, epoch, self.output_dir)
+            L, S, loss_layers_adj_L, loss_layers_adj_S, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step  = self.backbone_net(
+                x_init_norm,
+                E,
+                y_norm,
+                csmap,
+                epoch,
+                self.output_dir,
+                None,
+                disable_checkpointing=disable_checkpointing,
+            )
 
         loss_constraint_L = torch.square(torch.mean(loss_layers_adj_L[0])) / self.backbone_net.LayerNo
         loss_constraint_S = torch.square(torch.mean(loss_layers_adj_S[0])) / self.backbone_net.LayerNo

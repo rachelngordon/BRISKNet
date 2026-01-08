@@ -76,7 +76,7 @@ def main():
     )
 
     # --- Job Submission ---
-    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus, from_checkpoint=True)
+    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus, from_checkpoint=False)
     job = executor.submit(initial_trainer)
 
     print(f"Submitted job with ID: {job.job_id}")

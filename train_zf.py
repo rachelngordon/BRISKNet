@@ -449,6 +449,8 @@ def main():
     else:
         ei_loss_metric = torch.nn.MSELoss()
 
+    ei_no_grad = config['model']['losses']['ei_loss'].get("no_grad", False)
+
 
     # define EI loss transformations
     if use_ei_loss:
@@ -462,28 +464,28 @@ def main():
 
         if config['model']['losses']['ei_loss']['temporal_transform'] == "subsample":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(subsample, metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss(subsample, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
             else:
-                ei_loss_fn = EILoss(subsample | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss(subsample | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(monophasic_warp, metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss(monophasic_warp, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
             else:
-                ei_loss_fn = EILoss(monophasic_warp | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss(monophasic_warp | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "noise":
-            ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type)
+            ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp_subsample":
-            ei_loss_fn = EILoss((subsample | monophasic_warp) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type)
+            ei_loss_fn = EILoss((subsample | monophasic_warp) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "none":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "rotate":
-                ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
             elif config['model']['losses']['ei_loss']['spatial_transform'] == "diffeo":
-                ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
             else:
-                ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
         elif config['model']['losses']['ei_loss']['spatial_transform'] == "all":
             if config['model']['losses']['ei_loss']['temporal_transform'] == "all":
-                ei_loss_fn = EILoss((subsample | monophasic_warp | temp_noise) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type)
+                ei_loss_fn = EILoss((subsample | monophasic_warp | temp_noise) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
         else:
             raise(ValueError, "Unsupported Temporal Transform.")
 
