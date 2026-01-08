@@ -26,6 +26,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import h5py
+import signal
 from torch.utils.tensorboard import SummaryWriter
 from cluster_paths import apply_cluster_paths
 
@@ -36,6 +37,28 @@ def setup():
 
 def cleanup():
     dist.destroy_process_group()
+
+def _load_run_state(run_state_path):
+    if not os.path.exists(run_state_path):
+        return {
+            "attempt_count": 0,
+            "cumulative_wall_time_sec": 0.0,
+            "max_peak_mem_gb": 0.0,
+            "attempt_history": [],
+        }
+    with open(run_state_path, "r") as file:
+        return json.load(file)
+
+def _save_run_state(run_state_path, run_state):
+    with open(run_state_path, "w") as file:
+        json.dump(run_state, file, indent=2)
+
+def _get_param_counts(model):
+    if isinstance(model, DDP):
+        model = model.module
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total_params, trainable_params
 
 def sample_start_time_index(max_idx, use_edge_mixture):
     if not use_edge_mixture:
@@ -107,6 +130,12 @@ def main():
     block_dir = os.path.join(output_dir, "block_outputs")
     ec_dir = os.path.join(output_dir, 'enhancement_curves')
 
+    attempt_start_time = time.time()
+    attempt_peak_mem_gb = 0.0
+    run_state_path = os.path.join(output_dir, "run_state.json")
+    run_state = None
+    state_written = False
+    attempt_idx = None
 
         
 
@@ -148,6 +177,9 @@ def main():
         os.makedirs(block_dir, exist_ok=True)
         os.makedirs(ec_dir, exist_ok=True)
 
+        run_state = _load_run_state(run_state_path)
+        attempt_idx = run_state.get("attempt_count", 0) + 1
+
         # Initialize TensorBoard SummaryWriter
         log_dir = os.path.join(output_dir, 'logs')
         writer = SummaryWriter(log_dir)
@@ -158,6 +190,54 @@ def main():
         if args.from_checkpoint == False:
             with open(os.path.join(output_dir, 'config.yaml'), 'w') as file:
                 yaml.dump(config, file)
+
+    def _finalize_run_state(reason):
+        nonlocal attempt_peak_mem_gb, state_written, run_state
+        if state_written:
+            return
+        if global_rank != 0 and config['training']['multigpu']:
+            state_written = True
+            return
+        if run_state is None or attempt_idx is None:
+            return
+
+        wall_time_sec = time.time() - attempt_start_time
+        cumulative_wall_time_sec = run_state.get("cumulative_wall_time_sec", 0.0) + wall_time_sec
+        max_peak_mem_gb = max(run_state.get("max_peak_mem_gb", 0.0), attempt_peak_mem_gb)
+
+        run_state["attempt_count"] = attempt_idx
+        run_state["cumulative_wall_time_sec"] = cumulative_wall_time_sec
+        run_state["max_peak_mem_gb"] = max_peak_mem_gb
+        run_state.setdefault("attempt_history", []).append(
+            {
+                "attempt": attempt_idx,
+                "wall_time_sec": wall_time_sec,
+                "peak_mem_gb": attempt_peak_mem_gb,
+                "reason": reason,
+            }
+        )
+
+        _save_run_state(run_state_path, run_state)
+        state_written = True
+
+        print(f"[RunState] Attempt {attempt_idx} wall time (sec): {wall_time_sec:.2f}")
+        print(f"[RunState] Cumulative wall time (hours): {cumulative_wall_time_sec / 3600.0:.2f}")
+        print(f"[RunState] Attempt peak GPU memory (GB): {attempt_peak_mem_gb:.2f}")
+        print(f"[RunState] Global max peak GPU memory (GB): {max_peak_mem_gb:.2f}")
+
+    def _handle_signal(sig, _frame):
+        nonlocal attempt_peak_mem_gb
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+            current_peak_gb = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+            attempt_peak_mem_gb = max(attempt_peak_mem_gb, current_peak_gb)
+        _finalize_run_state(f"signal_{sig}")
+        signal.signal(sig, signal.SIG_DFL)
+        os.kill(os.getpid(), sig)
+
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGUSR1", None), getattr(signal, "SIGUSR2", None)):
+        if sig is not None:
+            signal.signal(sig, _handle_signal)
 
 
     # load params
@@ -411,6 +491,15 @@ def main():
 
     if config['training']['multigpu']:
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+
+    if global_rank == 0 or not config['training']['multigpu']:
+        if run_state is not None and ("total_params" not in run_state or "trainable_params" not in run_state):
+            total_params, trainable_params = _get_param_counts(model)
+            run_state["total_params"] = total_params
+            run_state["trainable_params"] = trainable_params
+            _save_run_state(run_state_path, run_state)
+            print(f"[RunState] Total parameters: {total_params:,}")
+            print(f"[RunState] Trainable parameters: {trainable_params:,}")
 
 
     optimizer = torch.optim.AdamW(
@@ -855,6 +944,8 @@ def main():
 
         for epoch in range(start_epoch, epochs + 1):
             model.train()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats(device)
             running_mc_loss = 0.0
             running_ei_loss = 0.0
             running_adj_loss = 0.0
@@ -1718,9 +1809,13 @@ def main():
                     print(f"GRASP DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {np.std(raw_grasp_dc_mses):.4f}")
                     print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {np.std(grasp_curve_corrs):.4f}")
 
+            if torch.cuda.is_available():
+                torch.cuda.synchronize(device)
+                epoch_peak_gb = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+                attempt_peak_mem_gb = max(attempt_peak_mem_gb, epoch_peak_gb)
 
 
-                    
+
 
 
     # Save the model at the end of training
@@ -2217,10 +2312,8 @@ def main():
         plt.savefig(os.path.join(output_dir, "spf_eval_metrics.png"))
         plt.close()
 
-
-
-
     if global_rank == 0 or not config['training']['multigpu']:
+        _finalize_run_state("completed")
         writer.close()
 
     cleanup()

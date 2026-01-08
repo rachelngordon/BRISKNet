@@ -56,6 +56,13 @@ PLOT_ADJUST = {
 # EVALUATION FUNCTIONS
 # ==========================================================
 
+def robust_window(img, p_low=1, p_high=99):
+    lo, hi = np.percentile(img, [p_low, p_high])
+    if hi <= lo:
+        hi = lo + 1e-6
+    return lo, hi
+
+
 def normalize_for_lpips(image, data_range):
     """Normalizes an image tensor to the [-1, 1] range for LPIPS."""
     min_val, max_val = data_range
@@ -251,6 +258,7 @@ def plot_spatial_quality(
         time_frame_index (int): The index of the time frame for titling.
         filename (str): The path to save the output plot.
     """
+
     if plot_dro:
         # Calculate error maps
         error_map_dl = recon_img - gt_img
@@ -290,10 +298,12 @@ def plot_spatial_quality(
         )
 
         # --- Top Row: DL Reconstruction Comparison ---
-        axes[0, 0].imshow(gt_img, cmap='gray')
+        vmin_window, vmax_window = robust_window(gt_img, 1, 99.5)
+
+        axes[0, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         axes[0, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
 
-        axes[0, 1].imshow(recon_img, cmap='gray')
+        axes[0, 1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         axes[0, 1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
         im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
@@ -310,10 +320,10 @@ def plot_spatial_quality(
         cb_ssim_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
         # --- Bottom Row: GRASP Reconstruction Comparison ---
-        axes[1, 0].imshow(gt_img, cmap='gray')
+        axes[1, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         axes[1, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
 
-        axes[1, 1].imshow(grasp_img, cmap='gray')
+        axes[1, 1].imshow(grasp_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         axes[1, 1].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
         im_err_grasp = axes[1, 2].imshow(error_map_grasp, cmap='coolwarm', vmin=-0.5, vmax=0.5)
@@ -353,9 +363,9 @@ def plot_spatial_quality(
         top_axes[3] = top_fig.add_subplot(top_gs[0, 4])
         top_cax_ssim = top_fig.add_subplot(top_gs[0, 5])
 
-        top_axes[0].imshow(gt_img, cmap='gray')
+        top_axes[0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         top_axes[0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
-        top_axes[1].imshow(recon_img, cmap='gray')
+        top_axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         top_axes[1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
         top_axes[2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
         top_axes[2].set_title("DL Error Map", fontsize=PLOT_FONT_SIZES["title"])
@@ -417,6 +427,7 @@ def plot_spatial_quality(
     )
 
     # --- Top Row: DL Reconstruction Comparison ---
+
     axes[0].imshow(grasp_img, cmap='gray')
     axes[0].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
@@ -624,6 +635,8 @@ def plot_single_temporal_curve(
     # Find contours of the tumor mask to draw an outline
     contours = find_contours(tumor_mask, 0.5)
 
+    vmin_window, vmax_window = robust_window(img_stack, 1, 99.5)
+
     # Use consistent intensity scaling for all image frames
     # vmin, vmax = np.percentile(img_stack, [1, 99.5])
 
@@ -632,7 +645,7 @@ def plot_single_temporal_curve(
         image = img_stack[:, :, frame_idx]
 
         # Display the image
-        ax.imshow(image, cmap='gray')#, vmin=vmin, vmax=vmax)
+        ax.imshow(image, cmap='gray', vmin=vmin_window, vmax=vmax_window)
 
         # Overlay the tumor ROI outline
         for contour in contours:
@@ -678,6 +691,8 @@ def plot_time_series(
         y=0.995,
     )
 
+    vmin_window, vmax_window = robust_window(recon_img_stack, 1, 99.5)
+
     # --- Row 1: Ground Truth ---
     # for i, frame_idx in enumerate(indices):
     #     img = gt_img_stack[:, :, frame_idx]
@@ -688,14 +703,14 @@ def plot_time_series(
     # --- Row 2: DL Reconstruction ---
     for i, frame_idx in enumerate(indices):
         img = recon_img_stack[:, :, frame_idx]
-        axes[0, i].imshow(img, cmap='gray')
+        axes[0, i].imshow(img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         axes[0, i].set_title(f"DL: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[0, i].axis('off')
 
     # --- Row 3: GRASP Reconstruction ---
     for i, frame_idx in enumerate(indices):
         img = grasp_img_stack[:, :, frame_idx]
-        axes[1, i].imshow(img, cmap='gray')
+        axes[1, i].imshow(img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         axes[1, i].set_title(f"GRASP: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[1, i].axis('off')
 
