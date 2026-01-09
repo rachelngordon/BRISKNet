@@ -28,6 +28,7 @@ from torch.utils.data.distributed import DistributedSampler
 import h5py
 from torch.utils.tensorboard import SummaryWriter
 from cluster_paths import apply_cluster_paths
+from contextlib import nullcontext
 
 
 def setup():
@@ -131,6 +132,16 @@ def main():
     else:
         global_rank = 0
         device = torch.device(config["training"]["device"])
+
+    # AMP/mixed precision config (optional)
+    amp_cfg = config.get("training", {}).get("amp", {})
+    amp_enabled = bool(amp_cfg.get("enabled", False)) and torch.cuda.is_available() and str(device).startswith("cuda")
+    amp_dtype_str = str(amp_cfg.get("dtype", "bf16")).lower()
+    amp_dtype = torch.bfloat16 if amp_dtype_str in ("bf16", "bfloat16") else torch.float16
+    use_scaler = bool(amp_cfg.get("use_grad_scaler", amp_dtype == torch.float16))
+    scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+    def amp_autocast():
+        return torch.cuda.amp.autocast(dtype=amp_dtype) if amp_enabled else nullcontext()
 
     
     if global_rank == 0 or not config['training']['multigpu']:
@@ -635,22 +646,23 @@ def main():
                 if config['model']['encode_time_index'] == False:
                     start_timepoint_index = None
 
-                x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                    measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
-                )
-
-                # calculate losses
-                initial_train_adj_loss += adj_loss.item()
-
-                mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
-                initial_train_mc_loss += mc_loss.item()
-
-                if use_ei_loss:
-                    ei_loss, t_img = ei_loss_fn(
-                        x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                with amp_autocast():
+                    x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
+                        measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
                     )
 
-                    initial_train_ei_loss += ei_loss.item()
+                    # calculate losses
+                    initial_train_adj_loss += adj_loss.item()
+
+                    mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
+                    initial_train_mc_loss += mc_loss.item()
+
+                    if use_ei_loss:
+                        ei_loss, t_img = ei_loss_fn(
+                            x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                        )
+
+                        initial_train_ei_loss += ei_loss.item()
 
                     
             # record losses
@@ -993,39 +1005,40 @@ def main():
                 # print("Time encoding: ", start_timepoint_index.item())
 
                 try:
-                    x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                        measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
-                    )
-
-                    # compute losses
-                    running_adj_loss += adj_loss.item()
-
-                    mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
-                    running_mc_loss += mc_loss.item()
-
-                    if use_ei_loss:
-                        ei_loss, t_img = ei_loss_fn(
-                            x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                    with amp_autocast():
+                        x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
+                            measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
                         )
 
+                        # compute losses
+                        running_adj_loss += adj_loss.item()
 
-                        ei_loss_weight = get_cosine_ei_weight(
-                            current_epoch=epoch,
-                            warmup_epochs=warmup,
-                            schedule_duration=duration,
-                            target_weight=target_w_ei
-                        )
+                        mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
+                        running_mc_loss += mc_loss.item()
+
+                        if use_ei_loss:
+                            ei_loss, t_img = ei_loss_fn(
+                                x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                            )
 
 
-                        running_ei_loss += ei_loss.item()
-                        total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                        train_loader_tqdm.set_postfix(
-                            mc_loss=mc_loss.item(), ei_loss=ei_loss.item()
-                        )
+                            ei_loss_weight = get_cosine_ei_weight(
+                                current_epoch=epoch,
+                                warmup_epochs=warmup,
+                                schedule_duration=duration,
+                                target_weight=target_w_ei
+                            )
 
-                    else:
-                        total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                        train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
+
+                            running_ei_loss += ei_loss.item()
+                            total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
+                            train_loader_tqdm.set_postfix(
+                                mc_loss=mc_loss.item(), ei_loss=ei_loss.item()
+                            )
+
+                        else:
+                            total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
+                            train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
 
                     if torch.isnan(total_loss):
                         print(
@@ -1033,8 +1046,11 @@ def main():
                         )
                         raise RuntimeError("total_loss is NaN")
 
-
-                    total_loss.backward()
+                    if use_scaler:
+                        scaler.scale(total_loss).backward()
+                        scaler.unscale_(optimizer)
+                    else:
+                        total_loss.backward()
 
 
                     if config["debugging"]["enable_gradient_monitoring"] == True and iteration_count % config["debugging"]["monitoring_interval"] == 0:
@@ -1056,7 +1072,11 @@ def main():
 
 
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    optimizer.step()
+                    if use_scaler:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
 
                     # cosine LR with 5-epoch warmup
                     total = epochs; warm = 5
@@ -1188,41 +1208,39 @@ def main():
                             start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
                             
                         try:
-                            if N_time_eval > eval_chunk_size:
-                                val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device)  
-                                val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
-                            else:
-                                val_x_recon, val_adj_loss, *_ = model(
-                                val_dro_kspace_batch.to(device), eval_physics, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
-                                )
-                                val_raw_x_recon, *_ = model(
-                                val_raw_kspace.to(device), eval_physics, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
-                                )
-                                val_adj_loss = val_adj_loss.item()
+                            with amp_autocast():
+                                if N_time_eval > eval_chunk_size:
+                                    val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device)  
+                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
+                                else:
+                                    val_x_recon, val_adj_loss, *_ = model(
+                                    val_dro_kspace_batch.to(device), eval_physics, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
+                                    )
+                                    val_raw_x_recon, *_ = model(
+                                    val_raw_kspace.to(device), eval_physics, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
+                                    )
+                                    val_adj_loss = val_adj_loss.item()
 
-                            # fix orientation of raw k-space recon
-                            # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
+                                # fix orientation of raw k-space recon
+                                # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
 
+                                # compute losses
+                                val_running_adj_loss += val_adj_loss
 
-                            
+                                val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
+                                val_running_mc_loss += val_mc_loss.item()
 
-                            # compute losses
-                            val_running_adj_loss += val_adj_loss
+                                if use_ei_loss:
+                                    val_ei_loss, val_t_img = ei_loss_fn(
+                                        val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
+                                    )
 
-                            val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
-                            val_running_mc_loss += val_mc_loss.item()
-
-                            if use_ei_loss:
-                                val_ei_loss, val_t_img = ei_loss_fn(
-                                    val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
-                                )
-
-                                val_running_ei_loss += val_ei_loss.item()
-                                val_loader_tqdm.set_postfix(
-                                    val_mc_loss=val_mc_loss.item(), val_ei_loss=val_ei_loss.item()
-                                )
-                            else:
-                                val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item())
+                                    val_running_ei_loss += val_ei_loss.item()
+                                    val_loader_tqdm.set_postfix(
+                                        val_mc_loss=val_mc_loss.item(), val_ei_loss=val_ei_loss.item()
+                                    )
+                                else:
+                                    val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item())
 
 
                             ## Evaluation

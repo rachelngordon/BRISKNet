@@ -101,6 +101,10 @@ training:
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: False
+  amp:
+    enabled: True
+    dtype: "bf16"
+    use_grad_scaler: False
   curriculum_learning:
     enabled: False
     phases:
