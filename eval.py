@@ -28,6 +28,8 @@ from cluster_paths import _swap_base
 
 
 TUMOR_SEG_ROOT = os.environ.get("TUMOR_SEG_ROOT", "/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations_lcr")
+TUMOR_SEG_WARN = os.environ.get("TUMOR_SEG_WARN", "1") not in ("0", "false", "False")
+_MISSING_TUMOR_SEGS = set()
 SLICE_MAP_PATH = Path(__file__).resolve().parent / "data" / "largest_tumor_slices.csv"
 
 # Plot styling 
@@ -178,7 +180,9 @@ def _load_tumor_mask(cluster: str, patient_id: str, slice_idx: int = None, seg_r
 
     seg_path = os.path.join(seg_root, f"{patient_id}.nii.gz")
     if not os.path.exists(seg_path):
-        print(f"Tumor segmentation not found at {seg_path}")
+        if TUMOR_SEG_WARN and seg_path not in _MISSING_TUMOR_SEGS:
+            print(f"Tumor segmentation not found at {seg_path}")
+            _MISSING_TUMOR_SEGS.add(seg_path)
         return None
 
     seg_vol = nib.load(seg_path).get_fdata()

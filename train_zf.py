@@ -3,6 +3,7 @@ import json
 import os
 import matplotlib.pyplot as plt
 import torch
+import warnings
 import yaml
 from dataloader import ZFSliceDataset, SimulatedDataset, SimulatedSPFDataset
 from einops import rearrange
@@ -141,7 +142,14 @@ def main():
     use_scaler = bool(amp_cfg.get("use_grad_scaler", amp_dtype == torch.float16))
     scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
     def amp_autocast():
-        return torch.cuda.amp.autocast(dtype=amp_dtype) if amp_enabled else nullcontext()
+        return torch.amp.autocast(device_type="cuda", dtype=amp_dtype) if amp_enabled else nullcontext()
+
+    # Silence torchmetrics LPIPS FutureWarning about torch.load(weights_only=...)
+    warnings.filterwarnings(
+        "ignore",
+        message="You are using `torch.load` with `weights_only=False`.*",
+        category=FutureWarning,
+    )
 
     
     if global_rank == 0 or not config['training']['multigpu']:
