@@ -253,7 +253,7 @@ class BasicBlock(nn.Module):
         if self.svd_mode == "detached_uv":
             U, Svals, Vh = torch.linalg.svd(Z, full_matrices=False)
             U_d, Vh_d = U.detach(), Vh.detach()
-            S_shrunk = Project_inf(Svals, lambda_L_eff)
+            S_shrunk = Project_inf(Svals, lambda_L_eff).to(U_d.dtype)
             pt_L = U_d @ torch.diag_embed(S_shrunk) @ Vh_d
 
         elif self.svd_mode == "mag":
