@@ -22,7 +22,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  output_dir: "/net/projects2/annawoodard/runs"
   cluster: "DSI"
 
 # DataLoader settings
@@ -30,7 +30,7 @@ dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 300
+  max_subjects: 2
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -100,7 +100,7 @@ training:
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
-  multigpu: True
+  multigpu: False
   curriculum_learning:
     enabled: False
     phases:
