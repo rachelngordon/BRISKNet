@@ -30,7 +30,7 @@ dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 300
+  max_subjects: 2
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -91,6 +91,7 @@ model:
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
       no_grad: false
+      checkpoint_model: true
   norm: "both"
 
 
@@ -133,6 +134,6 @@ evaluation:
 
 debugging:
   calc_step_0: True
-  calc_step_0_val: True
+  calc_step_0_val: False
   enable_gradient_monitoring: true
   monitoring_interval: 5

@@ -2,6 +2,7 @@ from typing import Union
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from deepinv.loss.loss import Loss
 from deepinv.loss.metric.metric import Metric
 from deepinv.transform.base import Transform
@@ -50,6 +51,7 @@ class EILoss(Loss):
         apply_noise=True,
         weight=1.0,
         no_grad=False,
+        checkpoint_model: bool = False,
         *args,
         **kwargs,
     ):
@@ -60,6 +62,7 @@ class EILoss(Loss):
         self.T = transform
         self.noise = apply_noise
         self.no_grad = no_grad
+        self.checkpoint_model = checkpoint_model
         self.model_type = model_type
 
     def forward(self, x_net, physics, model, csmap, acceleration, start_timepoint_index, **kwargs):
@@ -100,15 +103,30 @@ class EILoss(Loss):
         x2_complex = to_torch_complex(x2)
         y = physics(inv=False, data=x2_complex, smaps=csmap).to(csmap.device)
     
-        x3, *_ = model(
-            y,
-            physics,
-            csmap,
-            acceleration,
-            start_timepoint_index,
-            epoch=None,
-            disable_checkpointing=True,
-        )
+        if self.checkpoint_model:
+            def _run_model(y_in):
+                x3_inner, *_ = model(
+                    y_in,
+                    physics,
+                    csmap,
+                    acceleration,
+                    start_timepoint_index,
+                    epoch=None,
+                    disable_checkpointing=True,
+                )
+                return x3_inner
+
+            x3 = checkpoint(_run_model, y, use_reentrant=True)
+        else:
+            x3, *_ = model(
+                y,
+                physics,
+                csmap,
+                acceleration,
+                start_timepoint_index,
+                epoch=None,
+                disable_checkpointing=True,
+            )
 
         loss_ei = self.weight * self.metric(x3, x2)
         return loss_ei, x2
