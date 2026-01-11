@@ -101,6 +101,10 @@ training:
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: False
+  amp:
+    enabled: False
+    dtype: "bf16"
+    use_grad_scaler: False
   edge_time_index_sampling: true
   curriculum_learning:
     enabled: false
@@ -130,5 +134,6 @@ evaluation:
 
 debugging:
   calc_step_0: True
+  calc_step_0_val: False
   enable_gradient_monitoring: true
   monitoring_interval: 1

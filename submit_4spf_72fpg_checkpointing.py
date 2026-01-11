@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_warp_4spf_sample_edges"
-    config_path = 'configs/config_ei_4spf_sample_edges.yaml'
+    job_name = "ei_warp_4spf_72fpg_checkpointing"
+    config_path = 'configs/config_ei_4spf_72fpg_checkpointing.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -76,7 +76,7 @@ def main():
     )
 
     # --- Job Submission ---
-    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus, from_checkpoint=False)
+    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus, from_checkpoint=True)
     job = executor.submit(initial_trainer)
 
     print(f"Submitted job with ID: {job.job_id}")
