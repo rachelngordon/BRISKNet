@@ -126,5 +126,6 @@ evaluation:
 
 debugging:
   calc_step_0: True
+  calc_step_0_val: True
   enable_gradient_monitoring: true
   monitoring_interval: 5

@@ -80,6 +80,7 @@ def main():
 
     # NOTE: need to change for running on Randi
     config_dir = '/net/projects2/annawoodard/rachelgordon/experiments'
+    # config_dir = 'output'
 
 
     # Load the configuration file
@@ -577,15 +578,16 @@ def main():
     raw_grasp_dc_maes = []
 
     # Defaults so checkpointing works even if Step-0 validation is skipped
-    avg_grasp_ssim = 0.0
-    avg_grasp_psnr = 0.0
-    avg_grasp_mse = 0.0
-    avg_grasp_lpips = 0.0
-    avg_grasp_dc_mse = 0.0
-    avg_grasp_dc_mae = 0.0
-    avg_grasp_curve_corr = 0.0
-    avg_grasp_raw_dc_mae = 0.0
-    avg_grasp_raw_dc_mse = 0.0
+    if not args.from_checkpoint:
+        avg_grasp_ssim = 0.0
+        avg_grasp_psnr = 0.0
+        avg_grasp_mse = 0.0
+        avg_grasp_lpips = 0.0
+        avg_grasp_dc_mse = 0.0
+        avg_grasp_dc_mae = 0.0
+        avg_grasp_curve_corr = 0.0
+        avg_grasp_raw_dc_mae = 0.0
+        avg_grasp_raw_dc_mse = 0.0
 
     lambda_Ls = []
     lambda_Ss = []

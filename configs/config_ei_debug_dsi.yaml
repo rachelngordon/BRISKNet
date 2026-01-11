@@ -14,7 +14,7 @@ data:
   eval_spokes: 24
   spf_aug: True
   weight_accelerations: false
-  fpg: 36
+  fpg: 12
   train_spokes_per_frame: 24
   slices: 192
   slices_to_eval: 1
@@ -96,7 +96,7 @@ model:
 
 # Training settings
 training:
-  epochs: 4
+  epochs: 3
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -128,12 +128,12 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 16
+  chunk_size: 12
   chunk_overlap: 8
   rescale: False
 
 debugging:
   calc_step_0: True
-  calc_step_0_val: False
+  calc_step_0_val: True
   enable_gradient_monitoring: true
   monitoring_interval: 1

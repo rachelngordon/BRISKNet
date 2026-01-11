@@ -22,7 +22,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/net/projects2/annawoodard/runs"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
