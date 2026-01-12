@@ -432,6 +432,8 @@ def main():
     if config['training']['multigpu']:
         find_unused = config["training"].get("ddp_find_unused_parameters", False)
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused)
+        if config["training"].get("ddp_set_static_graph", False):
+            model._set_static_graph()
 
 
     optimizer = torch.optim.AdamW(
