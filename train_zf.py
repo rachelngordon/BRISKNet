@@ -430,7 +430,8 @@ def main():
         model = ArtifactRemovalLSFPNet(lsfp_backbone, block_dir, channels=1).to(device)
 
     if config['training']['multigpu']:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        find_unused = config["training"].get("ddp_find_unused_parameters", False)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused)
 
 
     optimizer = torch.optim.AdamW(
@@ -471,6 +472,8 @@ def main():
 
     ei_no_grad = config['model']['losses']['ei_loss'].get("no_grad", False)
     ei_checkpoint_model = config['model']['losses']['ei_loss'].get("checkpoint_model", False)
+    ei_checkpoint_mode = config['model']['losses']['ei_loss'].get("checkpoint_mode", None)
+    ei_checkpoint_use_reentrant = config['model']['losses']['ei_loss'].get("checkpoint_use_reentrant", False)
 
 
     # define EI loss transformations
@@ -485,28 +488,28 @@ def main():
 
         if config['model']['losses']['ei_loss']['temporal_transform'] == "subsample":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(subsample, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss(subsample, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
-                ei_loss_fn = EILoss(subsample | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss(subsample | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(monophasic_warp, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss(monophasic_warp, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
-                ei_loss_fn = EILoss(monophasic_warp | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss(monophasic_warp | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "noise":
-            ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+            ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp_subsample":
-            ei_loss_fn = EILoss((subsample | monophasic_warp) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+            ei_loss_fn = EILoss((subsample | monophasic_warp) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "none":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "rotate":
-                ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             elif config['model']['losses']['ei_loss']['spatial_transform'] == "diffeo":
-                ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
-                ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['spatial_transform'] == "all":
             if config['model']['losses']['ei_loss']['temporal_transform'] == "all":
-                ei_loss_fn = EILoss((subsample | monophasic_warp | temp_noise) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model)
+                ei_loss_fn = EILoss((subsample | monophasic_warp | temp_noise) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         else:
             raise(ValueError, "Unsupported Temporal Transform.")
 

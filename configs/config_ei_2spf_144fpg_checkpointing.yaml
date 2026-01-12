@@ -92,6 +92,8 @@ model:
       warp_ratio_max: 0.95
       no_grad: false
       checkpoint_model: true
+      checkpoint_mode: "both"
+      checkpoint_use_reentrant: false
   norm: "both"
 
 

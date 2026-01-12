@@ -52,6 +52,8 @@ class EILoss(Loss):
         weight=1.0,
         no_grad=False,
         checkpoint_model: bool = False,
+        checkpoint_mode: str | None = None,
+        checkpoint_use_reentrant: bool = False,
         *args,
         **kwargs,
     ):
@@ -62,7 +64,27 @@ class EILoss(Loss):
         self.T = transform
         self.noise = apply_noise
         self.no_grad = no_grad
-        self.checkpoint_model = checkpoint_model
+        self.checkpoint_use_reentrant = checkpoint_use_reentrant
+        self.checkpoint_outer = checkpoint_model
+        self.checkpoint_inner = True
+        if checkpoint_mode is not None:
+            mode = checkpoint_mode.lower()
+            if mode == "none":
+                self.checkpoint_outer = False
+                self.checkpoint_inner = False
+            elif mode == "outer":
+                self.checkpoint_outer = True
+                self.checkpoint_inner = False
+            elif mode == "inner":
+                self.checkpoint_outer = False
+                self.checkpoint_inner = True
+            elif mode == "both":
+                self.checkpoint_outer = True
+                self.checkpoint_inner = True
+            else:
+                raise ValueError(
+                    f"Unsupported checkpoint_mode '{checkpoint_mode}'. Expected one of: none, outer, inner, both."
+                )
         self.model_type = model_type
 
     def forward(self, x_net, physics, model, csmap, acceleration, start_timepoint_index, **kwargs):
@@ -103,7 +125,8 @@ class EILoss(Loss):
         x2_complex = to_torch_complex(x2)
         y = physics(inv=False, data=x2_complex, smaps=csmap).to(csmap.device)
     
-        if self.checkpoint_model:
+        disable_checkpointing = not self.checkpoint_inner
+        if self.checkpoint_outer:
             def _run_model(y_in):
                 x3_inner, *_ = model(
                     y_in,
@@ -112,11 +135,11 @@ class EILoss(Loss):
                     acceleration,
                     start_timepoint_index,
                     epoch=None,
-                    disable_checkpointing=True,
+                    disable_checkpointing=disable_checkpointing,
                 )
                 return x3_inner
 
-            x3 = checkpoint(_run_model, y, use_reentrant=True)
+            x3 = checkpoint(_run_model, y, use_reentrant=self.checkpoint_use_reentrant)
         else:
             x3, *_ = model(
                 y,
@@ -125,7 +148,7 @@ class EILoss(Loss):
                 acceleration,
                 start_timepoint_index,
                 epoch=None,
-                disable_checkpointing=True,
+                disable_checkpointing=disable_checkpointing,
             )
 
         loss_ei = self.weight * self.metric(x3, x2)

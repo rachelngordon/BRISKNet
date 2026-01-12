@@ -309,7 +309,8 @@ class BasicBlock(nn.Module):
         pb_L = pb_L[0, :, :] + 1j * pb_L[1, :, :]
 
         L = L - gamma * gradient - gamma * pt_L - gamma * pb_L
-        adjloss_L = tL_out * p_L - pb_L_out * tL_in
+        # Reduce immediately to avoid keeping full per-layer adjloss tensors alive.
+        adjloss_L = (tL_out * p_L - pb_L_out * tL_in).mean()
 
         # ===== S branch ======================================================
         pb_S = F.conv3d(p_S, self.conv1_backward_s, padding=self.padding_S); pb_S = F.relu(pb_S)
@@ -348,7 +349,8 @@ class BasicBlock(nn.Module):
         pb_S = pb_S[0, :, :] + 1j * pb_S[1, :, :]
 
         S = S - gamma * gradient - gamma * Wtxs(pt_S) - gamma * pb_S
-        adjloss_S = tS_out * p_S - pb_S_out * tS_in
+        # Reduce immediately to avoid keeping full per-layer adjloss tensors alive.
+        adjloss_S = (tS_out * p_S - pb_S_out * tS_in).mean()
 
         # return the positive (reparam’d) scalars for logging
         return [
