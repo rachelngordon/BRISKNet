@@ -6,24 +6,24 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 12
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 12
-  eval_spokes: 24
+  eval_timeframes: 8
+  eval_spokes: 36
   spf_aug: false
   weight_accelerations: false
-  fpg: 12
-  train_spokes_per_frame: 24
+  fpg: 36
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
-  eval_frequency: 1
+  eval_frequency: 5
   flip_kspace: False
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
@@ -31,7 +31,7 @@ dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 2
+  max_subjects: 300
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -59,10 +59,10 @@ model:
   lambda_spatial_S: 0.05
   gamma: 0.5
   lambda_step: 0.1
-  encode_acceleration: true
-  encode_time_index: true
+  encode_acceleration: false
+  encode_time_index: false
   kernel_size_L: [3, 3, 5]
-  kernel_size_S: [3, 3, 1]
+  kernel_size_S: [3, 3, 3]
   activation_checkpointing: false
   checkpoint_use_reentrant: false
   optimizer:
@@ -81,7 +81,7 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp_subsample"
+      temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
       weight: 40000
@@ -92,23 +92,27 @@ model:
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
       no_grad: false
+      checkpoint_model: false
+      checkpoint_mode: "inner"
+      checkpoint_use_reentrant: false
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 3
+  epochs: 250
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
-  multigpu: False
+  multigpu: True
+  ddp_find_unused_parameters: true
+  ddp_set_static_graph: false
   amp:
     enabled: False
     dtype: "bf16"
     use_grad_scaler: False
-  edge_time_index_sampling: true
   curriculum_learning:
-    enabled: false
+    enabled: False
     phases:
       - name: "Phase 1: Moderate Accelerations"
         start_epoch: 1
@@ -129,12 +133,12 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 12
-  chunk_overlap: 8
+  chunk_size: 36
+  chunk_overlap: 18
   rescale: False
 
 debugging:
   calc_step_0: True
-  calc_step_0_val: False
+  calc_step_0_val: True
   enable_gradient_monitoring: true
-  monitoring_interval: 1
+  monitoring_interval: 5

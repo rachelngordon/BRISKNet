@@ -231,7 +231,8 @@ def main():
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
 
     cluster = config["experiment"].get("cluster", "Randi")
-    
+
+    flip_kspace = config["data"].get("flip_kspace", True)
 
 
     if config["data"]["train_spokes_per_frame"] != "None":
@@ -297,7 +298,8 @@ def main():
             spokes_per_frame=train_spokes_per_frame,
             weight_accelerations=config['data']['weight_accelerations'],
             initial_spokes_range=initial_train_spokes_range,
-            cluster=cluster
+            cluster=cluster,
+            flip_kspace=flip_kspace,
         )
     else:
         train_dataset = ZFSliceDataset(
@@ -313,7 +315,8 @@ def main():
             spokes_per_frame=train_spokes_per_frame,
             weight_accelerations=config['data']['weight_accelerations'],
             initial_spokes_range=initial_train_spokes_range,
-            cluster=cluster
+            cluster=cluster,
+            flip_kspace=flip_kspace
         )
 
 
