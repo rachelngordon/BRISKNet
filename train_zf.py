@@ -430,7 +430,7 @@ def main():
         model = ArtifactRemovalLSFPNet(lsfp_backbone, block_dir, channels=1).to(device)
 
     if config['training']['multigpu']:
-        find_unused = config["training"].get("ddp_find_unused_parameters", False)
+        find_unused = config["training"].get("ddp_find_unused_parameters", True)
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused)
         if config["training"].get("ddp_set_static_graph", False):
             model._set_static_graph()
@@ -474,7 +474,7 @@ def main():
 
     ei_no_grad = config['model']['losses']['ei_loss'].get("no_grad", False)
     ei_checkpoint_model = config['model']['losses']['ei_loss'].get("checkpoint_model", False)
-    ei_checkpoint_mode = config['model']['losses']['ei_loss'].get("checkpoint_mode", None)
+    ei_checkpoint_mode = config['model']['losses']['ei_loss'].get("checkpoint_mode", "none")
     ei_checkpoint_use_reentrant = config['model']['losses']['ei_loss'].get("checkpoint_use_reentrant", False)
 
 

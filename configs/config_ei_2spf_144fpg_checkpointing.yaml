@@ -30,7 +30,7 @@ dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 2
+  max_subjects: 300
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -138,6 +138,6 @@ evaluation:
 
 debugging:
   calc_step_0: True
-  calc_step_0_val: False
+  calc_step_0_val: True
   enable_gradient_monitoring: true
   monitoring_interval: 5

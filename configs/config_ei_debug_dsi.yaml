@@ -12,7 +12,7 @@ data:
   coils: 16
   eval_timeframes: 12
   eval_spokes: 24
-  spf_aug: True
+  spf_aug: false
   weight_accelerations: false
   fpg: 12
   train_spokes_per_frame: 24
@@ -134,6 +134,6 @@ evaluation:
 
 debugging:
   calc_step_0: True
-  calc_step_0_val: True
+  calc_step_0_val: False
   enable_gradient_monitoring: true
   monitoring_interval: 1
