@@ -3,6 +3,7 @@ import subprocess
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
+from typing import Optional
 from einops import rearrange
 import torchkbnufft as tkbn
 import csv
@@ -565,6 +566,67 @@ def to_torch_complex(x: torch.Tensor):
 
 
 
+
+
+def _ktraj_to_sigpy_coord(ktraj: torch.Tensor, samples_per_spoke: int) -> np.ndarray:
+    if not torch.is_tensor(ktraj):
+        ktraj = torch.tensor(ktraj)
+    if ktraj.ndim != 3 or ktraj.shape[0] != 2:
+        raise ValueError(f"GRASP expects ktraj with shape (2, M, T), got {ktraj.shape}")
+    M, T = ktraj.shape[1], ktraj.shape[2]
+    if M % samples_per_spoke != 0:
+        raise ValueError("GRASP ktraj length is not divisible by samples_per_spoke.")
+    spokes = M // samples_per_spoke
+    ktraj = ktraj.reshape(2, spokes, samples_per_spoke, T).permute(3, 1, 2, 0)
+    return ktraj.cpu().numpy()
+
+
+def GRASPRecon_from_ktraj(
+    csmaps: torch.Tensor,
+    kspace: torch.Tensor,
+    ktraj: torch.Tensor,
+    samples_per_spoke: int,
+    device: Optional[sp.Device] = None,
+    lamda: float = 0.001,
+    max_iter: int = 10,
+    rho: float = 0.1,
+):
+    if device is None:
+        device = sp.Device(0 if torch.cuda.is_available() else -1)
+
+    if kspace.dim() == 3:
+        if kspace.shape[1] % samples_per_spoke != 0:
+            raise ValueError("GRASP kspace length is not divisible by samples_per_spoke.")
+        spokes = kspace.shape[1] // samples_per_spoke
+        kspace = kspace.reshape(kspace.shape[0], spokes, samples_per_spoke, kspace.shape[2])
+    elif kspace.dim() != 4:
+        raise ValueError(f"Unsupported GRASP kspace shape: {kspace.shape}")
+
+    kspace = kspace.permute(3, 0, 1, 2).unsqueeze(1).unsqueeze(3).cpu().numpy()
+
+    if csmaps.dim() == 3:
+        csmaps = csmaps.unsqueeze(0)
+    csmaps = rearrange(csmaps, 'b c h w -> c b h w').cpu().numpy()
+
+    traj = _ktraj_to_sigpy_coord(ktraj, samples_per_spoke)
+
+    recon = app.HighDimensionalRecon(
+        kspace,
+        csmaps,
+        combine_echo=False,
+        lamda=lamda,
+        coord=traj,
+        regu='TV',
+        regu_axes=[0],
+        max_iter=max_iter,
+        solver='ADMM',
+        rho=rho,
+        device=device,
+        show_pbar=False,
+        verbose=False,
+    ).run()
+
+    return np.squeeze(recon.get())
 
 
 def GRASPRecon(csmaps, kspace, spokes_per_frame, num_frames, grasp_path):

@@ -14,7 +14,12 @@ from tqdm import tqdm
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SimulatedDataset
-from eval import eval_grasp, eval_sample
+from eval import (
+    compute_ssdu_kspace_nmse,
+    compute_ssdu_kspace_nmse_grasp,
+    eval_grasp,
+    eval_sample,
+)
 from lsfpnet_encoding import ArtifactRemovalLSFPNet, LSFPNet
 from radial_lsfp import MCNUFFT
 from utils import (
@@ -22,6 +27,7 @@ from utils import (
     prep_nufft,
     remove_module_prefix,
     set_seed,
+    GRASPRecon_from_ktraj,
 )
 
 
@@ -306,6 +312,9 @@ def main():
 
     eval_chunk_size = config.get("evaluation", {}).get("chunk_size", N_time_eval)
     eval_chunk_overlap = config.get("evaluation", {}).get("chunk_overlap", 0)
+    ssdu_k_folds = config.get("evaluation", {}).get("ssdu_k_folds", 4)
+    ssdu_grasp_k_folds = config.get("evaluation", {}).get("ssdu_grasp_k_folds", ssdu_k_folds)
+    ssdu_weighting = config.get("evaluation", {}).get("ssdu_weighting", "sqrt_dcomp")
     eval_pad_size = args.pad_size
     if eval_pad_size is None:
         eval_pad_size = config.get("evaluation", {}).get("pad_size", eval_chunk_overlap)
@@ -453,6 +462,47 @@ def main():
             os.makedirs(sample_dir, exist_ok=True)
             label = f"sample{idx:02d}"
 
+            ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
+            ssdu_result = compute_ssdu_kspace_nmse(
+                model,
+                raw_kspace,
+                raw_csmaps,
+                eval_ktraj,
+                eval_dcomp,
+                eval_nufft_ob,
+                eval_adjnufft_ob,
+                spokes_per_frame=int(N_spokes_eval),
+                K_folds=ssdu_k_folds,
+                baseline_weighting=ssdu_weighting,
+                device=device,
+                acceleration_encoding=acceleration_encoding,
+                start_timepoint_index=start_timepoint_index,
+                norm=config["model"]["norm"],
+                epoch="inference",
+                chunk_size=ssdu_chunk_size,
+                chunk_overlap=eval_chunk_overlap,
+            )
+            ssdu_grasp_result = compute_ssdu_kspace_nmse_grasp(
+                lambda y_used, ktraj_used, dcomp_used, csmap, samples_per_spoke: GRASPRecon_from_ktraj(
+                    csmap,
+                    y_used,
+                    ktraj_used,
+                    samples_per_spoke,
+                    device=None,
+                ),
+                raw_kspace,
+                raw_csmaps,
+                eval_ktraj,
+                eval_dcomp,
+                eval_nufft_ob,
+                eval_adjnufft_ob,
+                spokes_per_frame=int(N_spokes_eval),
+                K_folds=ssdu_grasp_k_folds,
+                orientation_transform="raw_grasp",
+                baseline_weighting=ssdu_weighting,
+                device=device,
+            )
+
             dro_metrics = eval_sample(
                 dro_kspace,
                 csmap,
@@ -548,6 +598,8 @@ def main():
                     raw_dc_mae=raw_dc_mae,
                     raw_grasp_dc_mse=raw_grasp_dc_mse,
                     raw_grasp_dc_mae=raw_grasp_dc_mae,
+                    raw_ssdu_nmse=ssdu_result.get("ssdu_nmse_mean"),
+                    raw_grasp_ssdu_nmse=ssdu_grasp_result.get("ssdu_nmse_mean"),
                 )
             )
 
@@ -574,6 +626,8 @@ def main():
             "raw_dc_mae",
             "raw_grasp_dc_mse",
             "raw_grasp_dc_mae",
+            "raw_ssdu_nmse",
+            "raw_grasp_ssdu_nmse",
         ]
         f.write(",".join(headers) + "\n")
         for dro_row, grasp_row, raw_row in zip(results, grasp_results, raw_results):
@@ -597,6 +651,8 @@ def main():
                 f"{raw_row['raw_dc_mae']:.6f}",
                 f"{raw_row['raw_grasp_dc_mse']:.6f}",
                 f"{raw_row['raw_grasp_dc_mae']:.6f}",
+                "" if raw_row.get("raw_ssdu_nmse") is None else f"{raw_row['raw_ssdu_nmse']:.6f}",
+                "" if raw_row.get("raw_grasp_ssdu_nmse") is None else f"{raw_row['raw_grasp_ssdu_nmse']:.6f}",
             ]
             f.write(",".join(row) + "\n")
 
@@ -679,6 +735,8 @@ def main():
         "raw_dc_mae": _mean_std(raw_results, "raw_dc_mae"),
         "raw_grasp_dc_mse": _mean_std(raw_results, "raw_grasp_dc_mse"),
         "raw_grasp_dc_mae": _mean_std(raw_results, "raw_grasp_dc_mae"),
+        "raw_ssdu_nmse": _mean_std(raw_results, "raw_ssdu_nmse"),
+        "raw_grasp_ssdu_nmse": _mean_std(raw_results, "raw_grasp_ssdu_nmse"),
     }
 
     print("=== Inference Summary (averaged over samples) ===")
@@ -712,7 +770,9 @@ def main():
         f"DL DC_MSE: {_format_mean_std_precise(*raw_summary['raw_dc_mse'])}, "
         f"DL DC_MAE: {_format_mean_std_precise(*raw_summary['raw_dc_mae'])}, "
         f"GRASP DC_MSE: {_format_mean_std_precise(*raw_summary['raw_grasp_dc_mse'])}, "
-        f"GRASP DC_MAE: {_format_mean_std_precise(*raw_summary['raw_grasp_dc_mae'])}"
+        f"GRASP DC_MAE: {_format_mean_std_precise(*raw_summary['raw_grasp_dc_mae'])}, "
+        f"DL SSDU NMSE: {_format_mean_std_precise(*raw_summary['raw_ssdu_nmse'])}, "
+        f"GRASP SSDU NMSE: {_format_mean_std_precise(*raw_summary['raw_grasp_ssdu_nmse'])}"
     )
     def _has_any_metric(keys):
         return any(

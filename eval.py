@@ -11,6 +11,7 @@ import torchmetrics
 import time
 from dataloader import SimulatedDataset
 from lsfpnet import to_torch_complex, from_torch_complex
+from radial_lsfp import MCNUFFT
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.interpolate import PchipInterpolator
@@ -19,7 +20,7 @@ from scipy.stats import mannwhitneyu
 from skimage.metrics import structural_similarity as ssim_map_func
 import matplotlib.gridspec as gridspec
 from skimage.measure import find_contours
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple, Callable
 from scipy.stats import pearsonr
 import nibabel as nib
 import pandas as pd
@@ -142,6 +143,383 @@ def calc_dc(input, reference, device):
     mae = mae(input, reference)
 
     return mse.item(), mae.item()
+
+
+def _standardize_kspace_for_ssdu(kspace: torch.Tensor, spokes_per_frame: int) -> Tuple[torch.Tensor, int]:
+    kspace = kspace.squeeze()
+    if kspace.ndim == 5:
+        if kspace.shape[0] != 1:
+            raise ValueError(f"SSDU expects batch size 1, got {kspace.shape}")
+        kspace = kspace.squeeze(0)
+
+    if kspace.ndim == 4:
+        if kspace.shape[1] == spokes_per_frame:
+            kspace_std = kspace
+        elif kspace.shape[0] == spokes_per_frame:
+            kspace_std = kspace.permute(1, 0, 2, 3)
+        elif kspace.shape[2] == spokes_per_frame:
+            if kspace.shape[3] > kspace.shape[1]:
+                kspace_std = kspace.permute(1, 2, 3, 0)
+            else:
+                kspace_std = kspace.permute(0, 2, 1, 3)
+        elif kspace.shape[3] == spokes_per_frame:
+            kspace_std = kspace.permute(1, 2, 3, 0)
+        else:
+            raise ValueError(f"Unsupported 4D k-space shape for SSDU: {kspace.shape}")
+    elif kspace.ndim == 3:
+        if kspace.shape[1] % spokes_per_frame == 0:
+            samples_per_spoke = kspace.shape[1] // spokes_per_frame
+            kspace_std = kspace.reshape(kspace.shape[0], spokes_per_frame, samples_per_spoke, kspace.shape[2])
+        elif kspace.shape[2] % spokes_per_frame == 0:
+            samples_per_spoke = kspace.shape[2] // spokes_per_frame
+            kspace_std = kspace.permute(1, 2, 0).reshape(kspace.shape[1], spokes_per_frame, samples_per_spoke, kspace.shape[0])
+        else:
+            raise ValueError(f"Unsupported 3D k-space shape for SSDU: {kspace.shape}")
+    else:
+        raise ValueError(f"Unsupported k-space shape for SSDU: {kspace.shape}")
+
+    samples_per_spoke = kspace_std.shape[2]
+    return kspace_std, samples_per_spoke
+
+
+def _standardize_ktraj_for_ssdu(ktraj: torch.Tensor, M: int, T: int) -> torch.Tensor:
+    if ktraj.ndim != 3:
+        raise ValueError(f"SSDU expects 3D ktraj, got {ktraj.shape}")
+
+    if ktraj.shape[0] == 2:
+        if ktraj.shape[1] == M and ktraj.shape[2] == T:
+            return ktraj
+        if ktraj.shape[1] == T and ktraj.shape[2] == M:
+            return ktraj.permute(0, 2, 1)
+    elif ktraj.shape[2] == 2:
+        if ktraj.shape[0] == M and ktraj.shape[1] == T:
+            return ktraj.permute(2, 0, 1)
+        if ktraj.shape[0] == T and ktraj.shape[1] == M:
+            return ktraj.permute(2, 1, 0)
+
+    raise ValueError(f"Unsupported ktraj shape for SSDU: {ktraj.shape}")
+
+
+def _standardize_dcomp_for_ssdu(dcomp: torch.Tensor, M: int, T: int) -> torch.Tensor:
+    if dcomp.ndim == 2:
+        if dcomp.shape[0] == M and dcomp.shape[1] == T:
+            return dcomp
+        if dcomp.shape[0] == T and dcomp.shape[1] == M:
+            return dcomp.permute(1, 0)
+    elif dcomp.ndim == 1 and dcomp.shape[0] == M:
+        return dcomp.unsqueeze(1).expand(M, T)
+
+    raise ValueError(f"Unsupported dcomp shape for SSDU: {dcomp.shape}")
+
+
+def _build_ssdu_fold_indices(
+    spokes_per_frame: int,
+    samples_per_spoke: int,
+    K_folds: int,
+    device: torch.device,
+    allow_single_spoke: bool,
+) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    effective_K = min(K_folds, spokes_per_frame)
+    if effective_K < 2:
+        return []
+
+    M = spokes_per_frame * samples_per_spoke
+    fold_indices = []
+    for fold_idx in range(effective_K):
+        held_spokes = torch.arange(fold_idx, spokes_per_frame, effective_K, device=device)
+        used_spokes = spokes_per_frame - held_spokes.numel()
+        if used_spokes < 2 and not allow_single_spoke:
+            continue
+
+        held_idx = (held_spokes[:, None] * samples_per_spoke + torch.arange(samples_per_spoke, device=device)[None, :]).reshape(-1)
+        held_mask = torch.zeros(M, dtype=torch.bool, device=device)
+        held_mask[held_idx] = True
+        used_idx = (~held_mask).nonzero(as_tuple=False).squeeze(-1)
+        fold_indices.append((held_idx, used_idx))
+
+    return fold_indices
+
+
+def _apply_grasp_orientation(
+    img: torch.Tensor,
+    orientation_transform: Optional[object],
+) -> torch.Tensor:
+    if orientation_transform is None or orientation_transform == "none":
+        return img
+    if callable(orientation_transform):
+        return orientation_transform(img)
+    if not isinstance(orientation_transform, str):
+        raise ValueError("SSDU GRASP orientation_transform must be a callable or string.")
+
+    img_complex = img
+    if img_complex.ndim == 3 and img_complex.shape[0] != img_complex.shape[1]:
+        img_thw = img_complex
+    elif img_complex.ndim == 3:
+        img_thw = img_complex.permute(2, 0, 1)
+    else:
+        raise ValueError(f"Unsupported GRASP image shape for orientation: {img_complex.shape}")
+
+    img_ri = torch.stack([img_thw.real, img_thw.imag], dim=0)
+    img_ri = torch.flip(img_ri, dims=[1])
+
+    if orientation_transform == "raw_grasp":
+        img_ri = torch.rot90(img_ri, k=1, dims=[1, 3])
+    elif orientation_transform == "dro_grasp":
+        img_ri = torch.rot90(img_ri, k=3, dims=[1, 3])
+    else:
+        raise ValueError(f"Unsupported GRASP orientation_transform: {orientation_transform}")
+
+    img_out = img_ri[0] + 1j * img_ri[1]
+    return img_out.permute(1, 2, 0)
+
+
+@torch.no_grad()
+def compute_ssdu_kspace_nmse(
+    model,
+    kspace: torch.Tensor,
+    csmap: torch.Tensor,
+    ktraj: torch.Tensor,
+    dcomp: torch.Tensor,
+    nufft_ob,
+    adjnufft_ob,
+    spokes_per_frame: int,
+    K_folds: int = 4,
+    baseline_weighting: str = "sqrt_dcomp",
+    device: Optional[torch.device] = None,
+    acceleration_encoding: Optional[torch.Tensor] = None,
+    start_timepoint_index: Optional[torch.Tensor] = None,
+    norm: str = "both",
+    epoch: str = "inference",
+    chunk_size: Optional[int] = None,
+    chunk_overlap: int = 0,
+    allow_single_spoke: bool = False,
+) -> Dict[str, object]:
+    if device is None:
+        device = kspace.device
+
+    if csmap.ndim == 3:
+        csmap = csmap.unsqueeze(0)
+    csmap = csmap.to(device)
+
+    kspace_std, samples_per_spoke = _standardize_kspace_for_ssdu(kspace, spokes_per_frame)
+    C, Sp, Samp, T = kspace_std.shape
+    kspace_flat = kspace_std.reshape(C, Sp * Samp, T).to(device)
+
+    M = kspace_flat.shape[1]
+    ktraj_std = _standardize_ktraj_for_ssdu(ktraj.to(device), M, T)
+    dcomp_std = _standardize_dcomp_for_ssdu(dcomp.to(device), M, T)
+
+    fold_indices = _build_ssdu_fold_indices(
+        spokes_per_frame,
+        samples_per_spoke,
+        K_folds,
+        device,
+        allow_single_spoke,
+    )
+    if not fold_indices:
+        return {"ssdu_nmse_mean": float("nan"), "ssdu_nmse_folds": [], "ssdu_nmse_per_frame": None}
+
+    fold_nmse = []
+    fold_nmse_per_frame = []
+
+    for held_idx, used_idx in fold_indices:
+        y_used = kspace_flat[:, used_idx, :]
+        y_held = kspace_flat[:, held_idx, :]
+
+        ktraj_used = ktraj_std[:, used_idx, :]
+        ktraj_held = ktraj_std[:, held_idx, :]
+        dcomp_used = dcomp_std[used_idx, :]
+        dcomp_held = dcomp_std[held_idx, :]
+
+        physics_used = MCNUFFT(nufft_ob, adjnufft_ob, ktraj_used, dcomp_used)
+        physics_held = MCNUFFT(nufft_ob, adjnufft_ob, ktraj_held, dcomp_held)
+
+        if chunk_size is not None and T > chunk_size:
+            from utils import sliding_window_inference
+
+            H, W = csmap.shape[-2], csmap.shape[-1]
+            x_hat, _ = sliding_window_inference(
+                H,
+                W,
+                T,
+                ktraj_used,
+                dcomp_used,
+                nufft_ob,
+                adjnufft_ob,
+                chunk_size,
+                chunk_overlap,
+                y_used,
+                csmap,
+                acceleration_encoding,
+                start_timepoint_index,
+                model,
+                epoch=epoch,
+                device=device,
+            )
+        else:
+            x_hat, *_ = model(
+                y_used,
+                physics_used,
+                csmap,
+                acceleration_encoding,
+                start_timepoint_index,
+                epoch=epoch,
+                norm=norm,
+            )
+
+        x_hat_complex = to_torch_complex(x_hat).squeeze(0)
+        y_hat_held = physics_held(False, x_hat_complex, csmap)
+
+        if baseline_weighting == "sqrt_dcomp":
+            weight = torch.sqrt(torch.abs(dcomp_held)).unsqueeze(0)
+        else:
+            weight = 1.0
+
+        diff = y_hat_held - y_held
+        if isinstance(weight, torch.Tensor):
+            num = torch.sum(torch.abs(weight * diff) ** 2)
+            den = torch.sum(torch.abs(weight * y_held) ** 2)
+            num_t = torch.sum(torch.abs(weight * diff) ** 2, dim=(0, 1))
+            den_t = torch.sum(torch.abs(weight * y_held) ** 2, dim=(0, 1))
+        else:
+            num = torch.sum(torch.abs(diff) ** 2)
+            den = torch.sum(torch.abs(y_held) ** 2)
+            num_t = torch.sum(torch.abs(diff) ** 2, dim=(0, 1))
+            den_t = torch.sum(torch.abs(y_held) ** 2, dim=(0, 1))
+
+        nmse_fold = (num / (den + 1e-8)).item()
+        nmse_per_frame = (num_t / (den_t + 1e-8)).detach().cpu()
+
+        fold_nmse.append(nmse_fold)
+        fold_nmse_per_frame.append(nmse_per_frame)
+
+    if not fold_nmse:
+        return {"ssdu_nmse_mean": float("nan"), "ssdu_nmse_folds": [], "ssdu_nmse_per_frame": None}
+
+    ssdu_nmse_mean = float(np.mean(fold_nmse))
+    ssdu_nmse_per_frame = None
+    if fold_nmse_per_frame:
+        ssdu_nmse_per_frame = torch.stack(fold_nmse_per_frame, dim=0).mean(dim=0).cpu().numpy()
+
+    return {
+        "ssdu_nmse_mean": ssdu_nmse_mean,
+        "ssdu_nmse_folds": fold_nmse,
+        "ssdu_nmse_per_frame": ssdu_nmse_per_frame,
+    }
+
+
+@torch.no_grad()
+def compute_ssdu_kspace_nmse_grasp(
+    grasp_recon_fn: Callable[..., torch.Tensor],
+    kspace: torch.Tensor,
+    csmap: torch.Tensor,
+    ktraj: torch.Tensor,
+    dcomp: torch.Tensor,
+    nufft_ob,
+    adjnufft_ob,
+    spokes_per_frame: int,
+    K_folds: int = 2,
+    orientation_transform: Optional[object] = "raw_grasp",
+    baseline_weighting: str = "sqrt_dcomp",
+    device: Optional[torch.device] = None,
+    allow_single_spoke: bool = False,
+) -> Dict[str, object]:
+    if device is None:
+        device = kspace.device
+
+    if csmap.ndim == 3:
+        csmap = csmap.unsqueeze(0)
+    csmap = csmap.to(device)
+
+    kspace_std, samples_per_spoke = _standardize_kspace_for_ssdu(kspace, spokes_per_frame)
+    C, Sp, Samp, T = kspace_std.shape
+    kspace_flat = kspace_std.reshape(C, Sp * Samp, T).to(device)
+
+    M = kspace_flat.shape[1]
+    ktraj_std = _standardize_ktraj_for_ssdu(ktraj.to(device), M, T)
+    dcomp_std = _standardize_dcomp_for_ssdu(dcomp.to(device), M, T)
+
+    fold_indices = _build_ssdu_fold_indices(
+        spokes_per_frame,
+        samples_per_spoke,
+        K_folds,
+        device,
+        allow_single_spoke,
+    )
+    if not fold_indices:
+        return {"ssdu_nmse_mean": float("nan"), "ssdu_nmse_folds": [], "ssdu_nmse_per_frame": None}
+
+    fold_nmse = []
+    fold_nmse_per_frame = []
+
+    for held_idx, used_idx in fold_indices:
+        y_used = kspace_flat[:, used_idx, :]
+        y_held = kspace_flat[:, held_idx, :]
+
+        ktraj_used = ktraj_std[:, used_idx, :]
+        ktraj_held = ktraj_std[:, held_idx, :]
+        dcomp_used = dcomp_std[used_idx, :]
+        dcomp_held = dcomp_std[held_idx, :]
+
+        x_grasp = grasp_recon_fn(
+            y_used,
+            ktraj_used,
+            dcomp_used,
+            csmap,
+            samples_per_spoke=samples_per_spoke,
+        )
+        if not torch.is_tensor(x_grasp):
+            x_grasp = torch.tensor(x_grasp)
+        if not torch.is_complex(x_grasp):
+            raise ValueError("SSDU GRASP requires complex-valued image output.")
+
+        x_grasp = x_grasp.to(device)
+        x_grasp = rearrange(x_grasp, 't h w -> h w t')
+
+        # x_grasp = _apply_grasp_orientation(x_grasp, orientation_transform)
+
+        physics_held = MCNUFFT(nufft_ob, adjnufft_ob, ktraj_held, dcomp_held)
+        if not hasattr(physics_held, "forward"):
+            raise AttributeError("SSDU GRASP requires MCNUFFT to implement forward().")
+        
+        y_hat_held = physics_held(False, x_grasp, csmap.to(x_grasp.dtype))
+
+        if baseline_weighting == "sqrt_dcomp":
+            weight = torch.sqrt(torch.abs(dcomp_held)).unsqueeze(0)
+        else:
+            weight = 1.0
+
+        diff = y_hat_held - y_held
+        if isinstance(weight, torch.Tensor):
+            num = torch.sum(torch.abs(weight * diff) ** 2)
+            den = torch.sum(torch.abs(weight * y_held) ** 2)
+            num_t = torch.sum(torch.abs(weight * diff) ** 2, dim=(0, 1))
+            den_t = torch.sum(torch.abs(weight * y_held) ** 2, dim=(0, 1))
+        else:
+            num = torch.sum(torch.abs(diff) ** 2)
+            den = torch.sum(torch.abs(y_held) ** 2)
+            num_t = torch.sum(torch.abs(diff) ** 2, dim=(0, 1))
+            den_t = torch.sum(torch.abs(y_held) ** 2, dim=(0, 1))
+
+        nmse_fold = (num / (den + 1e-8)).item()
+        nmse_per_frame = (num_t / (den_t + 1e-8)).detach().cpu()
+
+        fold_nmse.append(nmse_fold)
+        fold_nmse_per_frame.append(nmse_per_frame)
+
+    if not fold_nmse:
+        return {"ssdu_nmse_mean": float("nan"), "ssdu_nmse_folds": [], "ssdu_nmse_per_frame": None}
+
+    ssdu_nmse_mean = float(np.mean(fold_nmse))
+    ssdu_nmse_per_frame = None
+    if fold_nmse_per_frame:
+        ssdu_nmse_per_frame = torch.stack(fold_nmse_per_frame, dim=0).mean(dim=0).cpu().numpy()
+
+    return {
+        "ssdu_nmse_mean": ssdu_nmse_mean,
+        "ssdu_nmse_folds": fold_nmse,
+        "ssdu_nmse_per_frame": ssdu_nmse_per_frame,
+    }
 
 
 def _get_patient_id_from_grasp_path(grasp_path: str, mapping_csv: str = "data/DROSubID_vs_fastMRIbreastID.csv") -> str:
