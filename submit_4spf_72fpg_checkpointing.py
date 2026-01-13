@@ -48,13 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-<<<<<<<< HEAD:submit_mc_large_Lkernel.py
-    job_name = "mc_baseline_8spf_large_Lkernel"
-    config_path = 'configs/config_mc_dsi.yaml'
-========
     job_name = "ei_warp_4spf_72fpg_checkpointing"
     config_path = 'configs/config_ei_4spf_72fpg_checkpointing.yaml'
->>>>>>>> amp:submit_4spf_72fpg_checkpointing.py
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -70,7 +65,7 @@ def main():
         tasks_per_node=1,
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
         timeout_min=700,
-        slurm_gpus_per_node=4,
+        slurm_gres=f"gpu:h200:{num_gpus}",     # 4× H200 on a single node
 
 
         # IMPORTANT: no cpu_bind here anymore, this only affects sbatch

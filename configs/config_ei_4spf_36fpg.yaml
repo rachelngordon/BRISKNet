@@ -6,19 +6,20 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 18
+  timeframes: 72
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 18
-  eval_spokes: 16
+  eval_timeframes: 72
+  eval_spokes: 4
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 16
+  train_spokes_per_frame: 4
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
+  flip_kspace: True
 
 # Experiment settings
 experiment:
@@ -104,13 +105,8 @@ training:
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: True
-  edge_time_index_sampling: false
   ddp_find_unused_parameters: true
   ddp_set_static_graph: false
-  amp:
-    enabled: False
-    dtype: "bf16"
-    use_grad_scaler: False
   curriculum_learning:
     enabled: False
     phases:

@@ -48,13 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-<<<<<<<< HEAD:submit_ei_36spf.py
-    job_name = "ei_warp_36spf"
-    config_path = 'configs/config_ei_36spf.yaml'
-========
     job_name = "ei_warp_24spf"
     config_path = 'configs/config_ei_24spf.yaml'
->>>>>>>> amp:submit_24spf.py
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -69,10 +64,7 @@ def main():
         nodes=1,
         tasks_per_node=1,
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
-<<<<<<<< HEAD:submit_ei_36spf.py
-========
         slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
->>>>>>>> amp:submit_24spf.py
         timeout_min=700,
         slurm_gpus_per_node=4,
 

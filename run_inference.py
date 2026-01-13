@@ -144,7 +144,8 @@ def main():
     model_type = config["model"]["name"]
 
     val_dataset = SimulatedDataset(
-        root_dir=config["evaluation"]["simulated_dataset_path"],
+        # root_dir=config["evaluation"]["simulated_dataset_path"],
+        root_dir="/net/scratch2/rachelgordon/dro_dataset_frontpad",
         raw_kspace_path=data_dir,
         model_type=model_type,
         patient_ids=val_ids,
@@ -208,6 +209,8 @@ def main():
                 raw_grasp_img,
                 raw_csmaps,
             ) = batch
+
+            print("dro_kspace: ", dro_kspace)
 
             csmap = csmap.squeeze(0).to(device)
             ground_truth = ground_truth.to(device)
