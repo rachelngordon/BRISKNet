@@ -69,7 +69,8 @@ class ZFSliceDataset(Dataset):
         spokes_per_frame=None,
         weight_accelerations=False, 
         initial_spokes_range=[8, 16, 24, 36],
-        cluster="Randi"
+        cluster="Randi",
+        flip_kspace=True,
     ):
         """
         Args:
@@ -94,6 +95,7 @@ class ZFSliceDataset(Dataset):
         self.spf_aug = spf_aug
         self.weight_acc = weight_accelerations
         self.cluster=cluster
+        self.flip_kspace=flip_kspace
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -270,11 +272,12 @@ class ZFSliceDataset(Dataset):
         imag_part = ksp_prep.imag
         kspace_final = torch.stack([real_part, imag_part], dim=0).float()
 
-        kspace_final = torch.flip(kspace_final, dims=[-1])
+        if self.flip_kspace:
+            kspace_final = torch.flip(kspace_final, dims=[-1])
 
-        csmap_tensor = torch.from_numpy(csmap)
-        csmap_tensor = torch.rot90(csmap_tensor, k=2, dims=[-2, -1])
-        csmap = csmap_tensor.numpy()
+            csmap_tensor = torch.from_numpy(csmap)
+            csmap_tensor = torch.rot90(csmap_tensor, k=2, dims=[-2, -1])
+            csmap = csmap_tensor.numpy()
 
         return kspace_final, csmap, N_samples, spokes_per_frame, N_time
 

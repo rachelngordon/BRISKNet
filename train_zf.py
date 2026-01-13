@@ -3,6 +3,7 @@ import json
 import os
 import matplotlib.pyplot as plt
 import torch
+import warnings
 import yaml
 from dataloader import ZFSliceDataset, SimulatedDataset, SimulatedSPFDataset
 from einops import rearrange
@@ -29,6 +30,7 @@ import h5py
 import signal
 from torch.utils.tensorboard import SummaryWriter
 from cluster_paths import apply_cluster_paths
+from contextlib import nullcontext
 
 
 def setup():
@@ -101,6 +103,7 @@ def main():
 
     # NOTE: need to change for running on Randi
     config_dir = '/net/projects2/annawoodard/rachelgordon/experiments'
+    # config_dir = 'output'
 
 
     # Load the configuration file
@@ -160,6 +163,23 @@ def main():
     else:
         global_rank = 0
         device = torch.device(config["training"]["device"])
+
+    # AMP/mixed precision config (optional)
+    amp_cfg = config.get("training", {}).get("amp", {})
+    amp_enabled = bool(amp_cfg.get("enabled", False)) and torch.cuda.is_available() and str(device).startswith("cuda")
+    amp_dtype_str = str(amp_cfg.get("dtype", "bf16")).lower()
+    amp_dtype = torch.bfloat16 if amp_dtype_str in ("bf16", "bfloat16") else torch.float16
+    use_scaler = bool(amp_cfg.get("use_grad_scaler", amp_dtype == torch.float16))
+    scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+    def amp_autocast():
+        return torch.amp.autocast(device_type="cuda", dtype=amp_dtype) if amp_enabled else nullcontext()
+
+    # Silence torchmetrics LPIPS FutureWarning about torch.load(weights_only=...)
+    warnings.filterwarnings(
+        "ignore",
+        message="You are using `torch.load` with `weights_only=False`.*",
+        category=FutureWarning,
+    )
 
     
     if global_rank == 0 or not config['training']['multigpu']:
@@ -291,7 +311,8 @@ def main():
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
 
     cluster = config["experiment"].get("cluster", "Randi")
-    
+
+    flip_kspace = config["data"].get("flip_kspace", True)
 
 
     if config["data"]["train_spokes_per_frame"] != "None":
@@ -357,7 +378,8 @@ def main():
             spokes_per_frame=train_spokes_per_frame,
             weight_accelerations=config['data']['weight_accelerations'],
             initial_spokes_range=initial_train_spokes_range,
-            cluster=cluster
+            cluster=cluster,
+            flip_kspace=flip_kspace,
         )
     else:
         train_dataset = ZFSliceDataset(
@@ -373,7 +395,8 @@ def main():
             spokes_per_frame=train_spokes_per_frame,
             weight_accelerations=config['data']['weight_accelerations'],
             initial_spokes_range=initial_train_spokes_range,
-            cluster=cluster
+            cluster=cluster,
+            flip_kspace=flip_kspace
         )
 
 
@@ -490,7 +513,10 @@ def main():
         model = ArtifactRemovalLSFPNet(lsfp_backbone, block_dir, channels=1).to(device)
 
     if config['training']['multigpu']:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        find_unused = config["training"].get("ddp_find_unused_parameters", True)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused)
+        if config["training"].get("ddp_set_static_graph", False):
+            model._set_static_graph()
 
     if global_rank == 0 or not config['training']['multigpu']:
         if run_state is not None and ("total_params" not in run_state or "trainable_params" not in run_state):
@@ -539,6 +565,9 @@ def main():
         ei_loss_metric = torch.nn.MSELoss()
 
     ei_no_grad = config['model']['losses']['ei_loss'].get("no_grad", False)
+    ei_checkpoint_model = config['model']['losses']['ei_loss'].get("checkpoint_model", False)
+    ei_checkpoint_mode = config['model']['losses']['ei_loss'].get("checkpoint_mode", "none")
+    ei_checkpoint_use_reentrant = config['model']['losses']['ei_loss'].get("checkpoint_use_reentrant", False)
 
 
     # define EI loss transformations
@@ -553,28 +582,28 @@ def main():
 
         if config['model']['losses']['ei_loss']['temporal_transform'] == "subsample":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(subsample, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss(subsample, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
-                ei_loss_fn = EILoss(subsample | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss(subsample | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(monophasic_warp, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss(monophasic_warp, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
-                ei_loss_fn = EILoss(monophasic_warp | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss(monophasic_warp | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "noise":
-            ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+            ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp_subsample":
-            ei_loss_fn = EILoss((subsample | monophasic_warp) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+            ei_loss_fn = EILoss((subsample | monophasic_warp) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "none":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "rotate":
-                ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             elif config['model']['losses']['ei_loss']['spatial_transform'] == "diffeo":
-                ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
-                ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['spatial_transform'] == "all":
             if config['model']['losses']['ei_loss']['temporal_transform'] == "all":
-                ei_loss_fn = EILoss((subsample | monophasic_warp | temp_noise) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad)
+                ei_loss_fn = EILoss((subsample | monophasic_warp | temp_noise) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         else:
             raise(ValueError, "Unsupported Temporal Transform.")
 
@@ -646,6 +675,18 @@ def main():
     raw_grasp_dc_mses = []
     raw_grasp_dc_maes = []
 
+    # Defaults so checkpointing works even if Step-0 validation is skipped
+    if not args.from_checkpoint:
+        avg_grasp_ssim = 0.0
+        avg_grasp_psnr = 0.0
+        avg_grasp_mse = 0.0
+        avg_grasp_lpips = 0.0
+        avg_grasp_dc_mse = 0.0
+        avg_grasp_dc_mae = 0.0
+        avg_grasp_curve_corr = 0.0
+        avg_grasp_raw_dc_mae = 0.0
+        avg_grasp_raw_dc_mse = 0.0
+
     lambda_Ls = []
     lambda_Ss = []
     lambda_spatial_Ls = []
@@ -656,6 +697,7 @@ def main():
     iteration_count = 0
 
     # Step 0: Evaluate the untrained model
+    step0_do_val = config.get("debugging", {}).get("calc_step_0_val", True)
     if args.from_checkpoint == False and config['debugging']['calc_step_0'] == True:
         model.eval()
         initial_train_mc_loss = 0.0
@@ -724,22 +766,23 @@ def main():
                 if config['model']['encode_time_index'] == False:
                     start_timepoint_index = None
 
-                x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                    measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
-                )
-
-                # calculate losses
-                initial_train_adj_loss += adj_loss.item()
-
-                mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
-                initial_train_mc_loss += mc_loss.item()
-
-                if use_ei_loss:
-                    ei_loss, t_img = ei_loss_fn(
-                        x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                with amp_autocast():
+                    x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
+                        measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
                     )
 
-                    initial_train_ei_loss += ei_loss.item()
+                    # calculate losses
+                    initial_train_adj_loss += adj_loss.item()
+
+                    mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
+                    initial_train_mc_loss += mc_loss.item()
+
+                    if use_ei_loss:
+                        ei_loss, t_img = ei_loss_fn(
+                            x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                        )
+
+                        initial_train_ei_loss += ei_loss.item()
 
                     
             # record losses
@@ -769,167 +812,173 @@ def main():
 
 
             # Evaluate on validation data
-            for dro_kspace, csmap, ground_truth, dro_grasp_img, mask, grasp_path, raw_kspace, raw_grasp_img, raw_csmaps in tqdm(val_dro_loader, desc="Step 0 Validation Evaluation"):
+            if step0_do_val:
+                for dro_kspace, csmap, ground_truth, dro_grasp_img, mask, grasp_path, raw_kspace, raw_grasp_img, raw_csmaps in tqdm(val_dro_loader, desc="Step 0 Validation Evaluation"):
+    
+                    csmap = csmap.squeeze(0).to(device)   # Remove batch dim
+                    ground_truth = ground_truth.to(device) # Shape: (1, 2, T, H, W)
+    
+                    dro_kspace = dro_kspace.squeeze(0).to(device) # Remove batch dim
+                    dro_grasp_img = dro_grasp_img.to(device) # Shape: (1, 2, H, T, W)
+    
+                    raw_kspace = raw_kspace.squeeze(0).to(device) # Remove batch dim
+                    raw_grasp_img = raw_grasp_img.to(device) # Shape: (1, 2, H, T, W)
+                    raw_csmaps = raw_csmaps.squeeze(0).to(device)   # Remove batch dim
+    
+    
+                    N_spokes = eval_ktraj.shape[1] / config['data']['samples']
+                    acceleration = torch.tensor([N_full / int(N_spokes)], dtype=torch.float, device=device)
+    
+                    if config['model']['encode_acceleration']:
+                        acceleration_encoding = acceleration
+                    else: 
+                        acceleration_encoding = None
+    
+                    if config['model']['encode_time_index'] == False:
+                        start_timepoint_index = None
+                    else:
+                        start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
+    
+                    # inference + losses
+                    with amp_autocast():
+                        if N_time_eval > eval_chunk_size:
+                            x_recon, adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, dro_kspace, csmap, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
+                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
+                        else:
+                            x_recon, adj_loss, *_ = model(
+                            dro_kspace.to(device), eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
+                            )
+                            raw_x_recon, *_ = model(
+                            raw_kspace.to(device), eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
+                            )
+                            adj_loss = adj_loss.item()
+    
+                        # fix orientation of raw k-space recon
+                        # raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
+    
+                        # compute losses
+                        initial_val_adj_loss += adj_loss
+                        
+                        mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics, csmap)
+                        initial_val_mc_loss += mc_loss.item()
+    
+                        if use_ei_loss:
+                            ei_loss, t_img = ei_loss_fn(
+                                x_recon, eval_physics, model, csmap, acceleration_encoding, start_timepoint_index
+                            )
+    
+                            initial_val_ei_loss += ei_loss.item()
+    
+    
+                    # calculate grasp metrics
+                    if global_rank == 0 or not config['training']['multigpu']:
+                        ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(dro_kspace, csmap, ground_truth, dro_grasp_img, eval_physics, device, eval_dir, dro_eval=True)
+                        grasp_ssims.append(ssim_grasp)
+                        grasp_psnrs.append(psnr_grasp)
+                        grasp_mses.append(mse_grasp)
+                        grasp_lpipses.append(lpips_grasp)
+                        grasp_dc_mses.append(dc_mse_grasp)
+                        grasp_dc_maes.append(dc_mae_grasp)
+    
+                        ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, _ = eval_sample(dro_kspace, csmap, ground_truth, x_recon, eval_physics, mask, dro_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=True, grasp_path=grasp_path, rescale=config['evaluation']['rescale'])
+                        initial_eval_ssims.append(ssim)
+                        initial_eval_psnrs.append(psnr)
+                        initial_eval_mses.append(mse)
+                        initial_eval_lpipses.append(lpips)
+                        initial_eval_dc_mses.append(dc_mse)
+                        initial_eval_dc_maes.append(dc_mae)
+    
+                        if recon_corr is not None:
+                            initial_eval_curve_corrs.append(recon_corr)
+                            grasp_curve_corrs.append(grasp_corr)
+    
+                        # raw k-space eval
+                        print("performing non-DRO eval...")
+                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, dro_eval=False)
+                        dc_mse_raw, dc_mae_raw, _ = eval_sample(raw_kspace, raw_csmaps, ground_truth, raw_x_recon, eval_physics, mask, raw_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
+    
+                        raw_grasp_dc_mses.append(dc_mse_raw_grasp)
+                        raw_grasp_dc_maes.append(dc_mae_raw_grasp)
+                        initial_eval_raw_dc_mses.append(dc_mse_raw)
+                        initial_eval_raw_dc_maes.append(dc_mae_raw)
+    
+    
+            if step0_do_val:
+                step0_val_mc_loss = initial_val_mc_loss / len(val_dro_loader)
+                val_mc_losses.append(step0_val_mc_loss)
 
-                csmap = csmap.squeeze(0).to(device)   # Remove batch dim
-                ground_truth = ground_truth.to(device) # Shape: (1, 2, T, H, W)
+                step0_val_ei_loss = initial_val_ei_loss / len(val_dro_loader)
+                val_ei_losses.append(step0_val_ei_loss)
 
-                dro_kspace = dro_kspace.squeeze(0).to(device) # Remove batch dim
-                dro_grasp_img = dro_grasp_img.to(device) # Shape: (1, 2, H, T, W)
-
-                raw_kspace = raw_kspace.squeeze(0).to(device) # Remove batch dim
-                raw_grasp_img = raw_grasp_img.to(device) # Shape: (1, 2, H, T, W)
-                raw_csmaps = raw_csmaps.squeeze(0).to(device)   # Remove batch dim
+                step0_val_adj_loss = initial_val_adj_loss / len(val_dro_loader)
+                val_adj_losses.append(step0_val_adj_loss)
 
 
-                N_spokes = eval_ktraj.shape[1] / config['data']['samples']
-                acceleration = torch.tensor([N_full / int(N_spokes)], dtype=torch.float, device=device)
-
-                if config['model']['encode_acceleration']:
-                    acceleration_encoding = acceleration
-                else: 
-                    acceleration_encoding = None
-
-                if config['model']['encode_time_index'] == False:
-                    start_timepoint_index = None
-                else:
-                    start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
-
-                # inference
-                if N_time_eval > eval_chunk_size:
-                    x_recon, adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, dro_kspace, csmap, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
-                    raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
-                else:
-                    x_recon, adj_loss, *_ = model(
-                    dro_kspace.to(device), eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
-                    )
-                    raw_x_recon, *_ = model(
-                    raw_kspace.to(device), eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
-                    )
-                    adj_loss = adj_loss.item()
-
-                # fix orientation of raw k-space recon
-                # raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
-                
-
-                # compute losses
-                initial_val_adj_loss += adj_loss
-                
-                mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics, csmap)
-                initial_val_mc_loss += mc_loss.item()
-
-                if use_ei_loss:
-                    ei_loss, t_img = ei_loss_fn(
-                        x_recon, eval_physics, model, csmap, acceleration_encoding, start_timepoint_index
-                    )
-
-                    initial_val_ei_loss += ei_loss.item()
-
-
-                # calculate grasp metrics
                 if global_rank == 0 or not config['training']['multigpu']:
-                    ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(dro_kspace, csmap, ground_truth, dro_grasp_img, eval_physics, device, eval_dir, dro_eval=True)
-                    grasp_ssims.append(ssim_grasp)
-                    grasp_psnrs.append(psnr_grasp)
-                    grasp_mses.append(mse_grasp)
-                    grasp_lpipses.append(lpips_grasp)
-                    grasp_dc_mses.append(dc_mse_grasp)
-                    grasp_dc_maes.append(dc_mae_grasp)
-
-                    ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr = eval_sample(dro_kspace, csmap, ground_truth, x_recon, eval_physics, mask, dro_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=True, grasp_path=grasp_path, rescale=config['evaluation']['rescale'])
-                    initial_eval_ssims.append(ssim)
-                    initial_eval_psnrs.append(psnr)
-                    initial_eval_mses.append(mse)
-                    initial_eval_lpipses.append(lpips)
-                    initial_eval_dc_mses.append(dc_mse)
-                    initial_eval_dc_maes.append(dc_mae)
-
-                    if recon_corr is not None:
-                        initial_eval_curve_corrs.append(recon_corr)
-                        grasp_curve_corrs.append(grasp_corr)
-
-                    # raw k-space eval
-                    print("performing non-DRO eval...")
-                    dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, dro_eval=False)
-                    dc_mse_raw, dc_mae_raw = eval_sample(raw_kspace, raw_csmaps, ground_truth, raw_x_recon, eval_physics, mask, raw_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
-
-                    raw_grasp_dc_mses.append(dc_mse_raw_grasp)
-                    raw_grasp_dc_maes.append(dc_mae_raw_grasp)
-                    initial_eval_raw_dc_mses.append(dc_mse_raw)
-                    initial_eval_raw_dc_maes.append(dc_mae_raw)
+                    writer.add_scalar('Loss/Val_MC', step0_val_mc_loss, 0)
+                    writer.add_scalar('Loss/Val_EI', step0_val_ei_loss, 0)
+                    writer.add_scalar('Loss/Val_Adj', step0_val_adj_loss, 0)
 
 
-            step0_val_mc_loss = initial_val_mc_loss / len(val_dro_loader)
-            val_mc_losses.append(step0_val_mc_loss)
+                # Calculate and store average validation evaluation metrics
+                initial_eval_ssim = np.mean(initial_eval_ssims)
+                initial_eval_psnr = np.mean(initial_eval_psnrs)
+                initial_eval_mse = np.mean(initial_eval_mses)
+                initial_eval_lpips = np.mean(initial_eval_lpipses)
+                initial_eval_dc_mse = np.mean(initial_eval_dc_mses)
+                initial_eval_dc_mae = np.mean(initial_eval_dc_maes)
+                initial_eval_curve_corr = np.mean(initial_eval_curve_corrs)
+                initial_eval_raw_dc_mse = np.mean(initial_eval_raw_dc_mses)
+                initial_eval_raw_dc_mae = np.mean(initial_eval_raw_dc_maes)
 
-            step0_val_ei_loss = initial_val_ei_loss / len(val_dro_loader)
-            val_ei_losses.append(step0_val_ei_loss)
+                eval_ssims.append(initial_eval_ssim)
+                eval_psnrs.append(initial_eval_psnr)
+                eval_mses.append(initial_eval_mse)
+                eval_lpipses.append(initial_eval_lpips)
+                eval_dc_mses.append(initial_eval_dc_mse) 
+                eval_dc_maes.append(initial_eval_dc_mae) 
+                eval_raw_dc_mses.append(initial_eval_raw_dc_mse) 
+                eval_raw_dc_maes.append(initial_eval_raw_dc_mae) 
+                eval_curve_corrs.append(initial_eval_curve_corr)
 
-            step0_val_adj_loss = initial_val_adj_loss / len(val_dro_loader)
-            val_adj_losses.append(step0_val_adj_loss)
+                spf_key = int(N_spokes_eval)
+                if spf_key in eval_spf_curves:
+                    eval_spf_curves[spf_key]["epochs"].append(0)
+                    eval_spf_curves[spf_key]["eval_ssims"].append(initial_eval_ssim)
+                    eval_spf_curves[spf_key]["eval_psnrs"].append(initial_eval_psnr)
+                    eval_spf_curves[spf_key]["eval_mses"].append(initial_eval_mse)
+                    eval_spf_curves[spf_key]["eval_lpipses"].append(initial_eval_lpips)
+                    eval_spf_curves[spf_key]["eval_raw_dc_maes"].append(initial_eval_raw_dc_mae)
+                    eval_spf_curves[spf_key]["eval_curve_corrs"].append(initial_eval_curve_corr)
 
-
-            if global_rank == 0 or not config['training']['multigpu']:
-                writer.add_scalar('Loss/Val_MC', step0_val_mc_loss, 0)
-                writer.add_scalar('Loss/Val_EI', step0_val_ei_loss, 0)
-                writer.add_scalar('Loss/Val_Adj', step0_val_adj_loss, 0)
-
-
-            # Calculate and store average validation evaluation metrics
-            initial_eval_ssim = np.mean(initial_eval_ssims)
-            initial_eval_psnr = np.mean(initial_eval_psnrs)
-            initial_eval_mse = np.mean(initial_eval_mses)
-            initial_eval_lpips = np.mean(initial_eval_lpipses)
-            initial_eval_dc_mse = np.mean(initial_eval_dc_mses)
-            initial_eval_dc_mae = np.mean(initial_eval_dc_maes)
-            initial_eval_curve_corr = np.mean(initial_eval_curve_corrs)
-            initial_eval_raw_dc_mse = np.mean(initial_eval_raw_dc_mses)
-            initial_eval_raw_dc_mae = np.mean(initial_eval_raw_dc_maes)
-
-            eval_ssims.append(initial_eval_ssim)
-            eval_psnrs.append(initial_eval_psnr)
-            eval_mses.append(initial_eval_mse)
-            eval_lpipses.append(initial_eval_lpips)
-            eval_dc_mses.append(initial_eval_dc_mse) 
-            eval_dc_maes.append(initial_eval_dc_mae) 
-            eval_raw_dc_mses.append(initial_eval_raw_dc_mse) 
-            eval_raw_dc_maes.append(initial_eval_raw_dc_mae) 
-            eval_curve_corrs.append(initial_eval_curve_corr)
-
-            spf_key = int(N_spokes_eval)
-            if spf_key in eval_spf_curves:
-                eval_spf_curves[spf_key]["epochs"].append(0)
-                eval_spf_curves[spf_key]["eval_ssims"].append(initial_eval_ssim)
-                eval_spf_curves[spf_key]["eval_psnrs"].append(initial_eval_psnr)
-                eval_spf_curves[spf_key]["eval_mses"].append(initial_eval_mse)
-                eval_spf_curves[spf_key]["eval_lpipses"].append(initial_eval_lpips)
-                eval_spf_curves[spf_key]["eval_raw_dc_maes"].append(initial_eval_raw_dc_mae)
-                eval_spf_curves[spf_key]["eval_curve_corrs"].append(initial_eval_curve_corr)
-
-            if global_rank == 0 or not config['training']['multigpu']:
-                writer.add_scalar('Metric/SSIM', initial_eval_ssim, 0)
-                writer.add_scalar('Metric/PSNR', initial_eval_psnr, 0)
-                writer.add_scalar('Metric/MSE', initial_eval_mse, 0)
-                writer.add_scalar('Metric/LPIPS', initial_eval_lpips, 0)
-                writer.add_scalar('Metric/DC_MSE', initial_eval_dc_mse, 0)
-                writer.add_scalar('Metric/DC_MAE', initial_eval_dc_mae, 0)
-                writer.add_scalar('Metric/RAW_DC_MSE', initial_eval_raw_dc_mse, 0)
-                writer.add_scalar('Metric/RAW_DC_MAE', initial_eval_raw_dc_mae, 0)
-                writer.add_scalar('Metric/EC_Corr', initial_eval_curve_corr, 0)
+                if global_rank == 0 or not config['training']['multigpu']:
+                    writer.add_scalar('Metric/SSIM', initial_eval_ssim, 0)
+                    writer.add_scalar('Metric/PSNR', initial_eval_psnr, 0)
+                    writer.add_scalar('Metric/MSE', initial_eval_mse, 0)
+                    writer.add_scalar('Metric/LPIPS', initial_eval_lpips, 0)
+                    writer.add_scalar('Metric/DC_MSE', initial_eval_dc_mse, 0)
+                    writer.add_scalar('Metric/DC_MAE', initial_eval_dc_mae, 0)
+                    writer.add_scalar('Metric/RAW_DC_MSE', initial_eval_raw_dc_mse, 0)
+                    writer.add_scalar('Metric/RAW_DC_MAE', initial_eval_raw_dc_mae, 0)
+                    writer.add_scalar('Metric/EC_Corr', initial_eval_curve_corr, 0)
 
         print(f"Step 0 Train Losses: MC: {step0_train_mc_loss}, EI: {step0_train_ei_loss}, Adj: {step0_train_adj_loss}")
-        print(f"Step 0 Val Losses: MC: {step0_val_mc_loss}, EI: {step0_val_ei_loss}, Adj: {step0_val_adj_loss}")
+        if step0_do_val:
+            print(f"Step 0 Val Losses: MC: {step0_val_mc_loss}, EI: {step0_val_ei_loss}, Adj: {step0_val_adj_loss}")
+        else:
+            print("Step 0 Val Losses: skipped (calc_step_0_val: false)")
 
-        # calculate average GRASP metrics
-        avg_grasp_ssim = np.mean(grasp_ssims)
-        avg_grasp_psnr = np.mean(grasp_psnrs)
-        avg_grasp_mse = np.mean(grasp_mses)
-        avg_grasp_lpips = np.mean(grasp_lpipses)
-        avg_grasp_dc_mse = np.mean(grasp_dc_mses)
-        avg_grasp_dc_mae = np.mean(grasp_dc_maes)
-        avg_grasp_curve_corr = np.mean(grasp_curve_corrs)
-        avg_grasp_raw_dc_mae = np.mean(raw_grasp_dc_maes)
-        avg_grasp_raw_dc_mse = np.mean(raw_grasp_dc_mses)
+        if step0_do_val:
+            # calculate average GRASP metrics
+            avg_grasp_ssim = np.mean(grasp_ssims)
+            avg_grasp_psnr = np.mean(grasp_psnrs)
+            avg_grasp_mse = np.mean(grasp_mses)
+            avg_grasp_lpips = np.mean(grasp_lpipses)
+            avg_grasp_dc_mse = np.mean(grasp_dc_mses)
+            avg_grasp_dc_mae = np.mean(grasp_dc_maes)
+            avg_grasp_curve_corr = np.mean(grasp_curve_corrs)
+            avg_grasp_raw_dc_mae = np.mean(raw_grasp_dc_maes)
+            avg_grasp_raw_dc_mse = np.mean(raw_grasp_dc_mses)
 
 
 
@@ -1084,39 +1133,40 @@ def main():
                 # print("Time encoding: ", start_timepoint_index.item())
 
                 try:
-                    x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                        measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
-                    )
-
-                    # compute losses
-                    running_adj_loss += adj_loss.item()
-
-                    mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
-                    running_mc_loss += mc_loss.item()
-
-                    if use_ei_loss:
-                        ei_loss, t_img = ei_loss_fn(
-                            x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                    with amp_autocast():
+                        x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
+                            measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
                         )
 
+                        # compute losses
+                        running_adj_loss += adj_loss.item()
 
-                        ei_loss_weight = get_cosine_ei_weight(
-                            current_epoch=epoch,
-                            warmup_epochs=warmup,
-                            schedule_duration=duration,
-                            target_weight=target_w_ei
-                        )
+                        mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
+                        running_mc_loss += mc_loss.item()
+
+                        if use_ei_loss:
+                            ei_loss, t_img = ei_loss_fn(
+                                x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                            )
 
 
-                        running_ei_loss += ei_loss.item()
-                        total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                        train_loader_tqdm.set_postfix(
-                            mc_loss=mc_loss.item(), ei_loss=ei_loss.item()
-                        )
+                            ei_loss_weight = get_cosine_ei_weight(
+                                current_epoch=epoch,
+                                warmup_epochs=warmup,
+                                schedule_duration=duration,
+                                target_weight=target_w_ei
+                            )
 
-                    else:
-                        total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                        train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
+
+                            running_ei_loss += ei_loss.item()
+                            total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
+                            train_loader_tqdm.set_postfix(
+                                mc_loss=mc_loss.item(), ei_loss=ei_loss.item()
+                            )
+
+                        else:
+                            total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
+                            train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
 
                     if torch.isnan(total_loss):
                         print(
@@ -1124,8 +1174,11 @@ def main():
                         )
                         raise RuntimeError("total_loss is NaN")
 
-
-                    total_loss.backward()
+                    if use_scaler:
+                        scaler.scale(total_loss).backward()
+                        scaler.unscale_(optimizer)
+                    else:
+                        total_loss.backward()
 
 
                     if config["debugging"]["enable_gradient_monitoring"] == True and iteration_count % config["debugging"]["monitoring_interval"] == 0:
@@ -1147,7 +1200,11 @@ def main():
 
 
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    optimizer.step()
+                    if use_scaler:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
 
                     # cosine LR with 5-epoch warmup
                     total = epochs; warm = 5
@@ -1279,46 +1336,44 @@ def main():
                             start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
                             
                         try:
-                            if N_time_eval > eval_chunk_size:
-                                val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device)  
-                                val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
-                            else:
-                                val_x_recon, val_adj_loss, *_ = model(
-                                val_dro_kspace_batch.to(device), eval_physics, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
-                                )
-                                val_raw_x_recon, *_ = model(
-                                val_raw_kspace.to(device), eval_physics, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
-                                )
-                                val_adj_loss = val_adj_loss.item()
+                            with amp_autocast():
+                                if N_time_eval > eval_chunk_size:
+                                    val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device)  
+                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device)  
+                                else:
+                                    val_x_recon, val_adj_loss, *_ = model(
+                                    val_dro_kspace_batch.to(device), eval_physics, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
+                                    )
+                                    val_raw_x_recon, *_ = model(
+                                    val_raw_kspace.to(device), eval_physics, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
+                                    )
+                                    val_adj_loss = val_adj_loss.item()
 
-                            # fix orientation of raw k-space recon
-                            # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
+                                # fix orientation of raw k-space recon
+                                # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
 
+                                # compute losses
+                                val_running_adj_loss += val_adj_loss
 
-                            
+                                val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
+                                val_running_mc_loss += val_mc_loss.item()
 
-                            # compute losses
-                            val_running_adj_loss += val_adj_loss
+                                if use_ei_loss:
+                                    val_ei_loss, val_t_img = ei_loss_fn(
+                                        val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
+                                    )
 
-                            val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
-                            val_running_mc_loss += val_mc_loss.item()
-
-                            if use_ei_loss:
-                                val_ei_loss, val_t_img = ei_loss_fn(
-                                    val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
-                                )
-
-                                val_running_ei_loss += val_ei_loss.item()
-                                val_loader_tqdm.set_postfix(
-                                    val_mc_loss=val_mc_loss.item(), val_ei_loss=val_ei_loss.item()
-                                )
-                            else:
-                                val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item())
+                                    val_running_ei_loss += val_ei_loss.item()
+                                    val_loader_tqdm.set_postfix(
+                                        val_mc_loss=val_mc_loss.item(), val_ei_loss=val_ei_loss.item()
+                                    )
+                                else:
+                                    val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item())
 
 
                             ## Evaluation
                             if global_rank == 0 or not config['training']['multigpu']:
-                                ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, _ = eval_sample(val_dro_kspace_batch, val_csmap, val_ground_truth, val_x_recon, eval_physics, val_mask, val_dro_grasp_img, acceleration, int(N_spokes), eval_dir, f'epoch{epoch}', device, cluster=cluster, dro_eval=True, grasp_path=grasp_path, rescale=config['evaluation']['rescale'])
+                                ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, _, _ = eval_sample(val_dro_kspace_batch, val_csmap, val_ground_truth, val_x_recon, eval_physics, val_mask, val_dro_grasp_img, acceleration, int(N_spokes), eval_dir, f'epoch{epoch}', device, cluster=cluster, dro_eval=True, grasp_path=grasp_path, rescale=config['evaluation']['rescale'])
                                 epoch_eval_ssims.append(ssim)
                                 epoch_eval_psnrs.append(psnr)
                                 epoch_eval_mses.append(mse)
@@ -1330,7 +1385,7 @@ def main():
                                     epoch_eval_curve_corrs.append(recon_corr)
 
                                 # raw k-space eval
-                                dc_mse_raw, dc_mae_raw = eval_sample(val_raw_kspace, val_raw_csmaps, val_ground_truth, val_raw_x_recon, eval_physics, val_mask, val_raw_grasp_img, acceleration, int(N_spokes), eval_dir, label=f'epoch{epoch}', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
+                                dc_mse_raw, dc_mae_raw, _ = eval_sample(val_raw_kspace, val_raw_csmaps, val_ground_truth, val_raw_x_recon, eval_physics, val_mask, val_raw_grasp_img, acceleration, int(N_spokes), eval_dir, label=f'epoch{epoch}', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
 
                                 epoch_eval_raw_dc_mses.append(dc_mse_raw)
                                 epoch_eval_raw_dc_maes.append(dc_mae_raw)
@@ -2062,7 +2117,7 @@ def main():
 
 
                     ## Evaluation
-                    ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr = eval_sample(
+                    ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, _ = eval_sample(
                         kspace,
                         csmap,
                         ground_truth,
@@ -2104,7 +2159,7 @@ def main():
 
                     # raw k-space
                     dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, physics, device, eval_dir, dro_eval=False)
-                    dc_mse_raw, dc_mae_raw = eval_sample(
+                    dc_mse_raw, dc_mae_raw, _ = eval_sample(
                         raw_kspace,
                         raw_csmaps,
                         ground_truth,

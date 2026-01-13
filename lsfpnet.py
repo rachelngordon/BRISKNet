@@ -225,7 +225,8 @@ class BasicBlock(nn.Module):
         L = L - self.gamma * gradient - self.gamma * pt_L - self.gamma * pb_L
 
         # adjoint loss: adjloss_L = psi * x * y - psi_t * y * x
-        adjloss_L = temp_y_L_output * p_L - pb_L_output * temp_y_L_input
+        # Reduce immediately to avoid keeping full per-layer adjloss tensors alive.
+        adjloss_L = (temp_y_L_output * p_L - pb_L_output * temp_y_L_input).mean()
 
         # pb_S
         pb_S = F.conv3d(p_S, self.conv1_backward_s, padding=self.padding_S)
@@ -272,7 +273,8 @@ class BasicBlock(nn.Module):
         S = S - self.gamma * gradient - self.gamma * Wtxs(pt_S) - self.gamma * pb_S
 
         # adjoint loss: adjloss_S = psi * x * y - psi_t * y * x
-        adjloss_S = temp_y_S_output * p_S - pb_S_output * temp_y_S_input
+        # Reduce immediately to avoid keeping full per-layer adjloss tensors alive.
+        adjloss_S = (temp_y_S_output * p_S - pb_S_output * temp_y_S_input).mean()
 
         return [L, S, adjloss_L, adjloss_S, pt_L, pt_S, p_L, p_S, self.lambda_L, self.lambda_S, self.lambda_spatial_L, self.lambda_spatial_S, self.gamma, self.lambda_step]
 

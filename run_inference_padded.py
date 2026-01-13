@@ -6,6 +6,7 @@ import statistics
 import time
 from typing import Tuple
 
+import numpy as np
 import torch
 import yaml
 from torch.utils.data import DataLoader
@@ -482,7 +483,7 @@ def main():
                 dro_eval=True,
             )
 
-            raw_dc_mse, raw_dc_mae = eval_sample(
+            raw_dc_mse, raw_dc_mae, _ = eval_sample(
                 raw_kspace,
                 raw_csmaps,
                 ground_truth,
@@ -501,8 +502,18 @@ def main():
                 raw_slice_idx=raw_grasp_slice_idx,
                 rescale=rescale,
             )
+            raw_grasp_dc_mse, raw_grasp_dc_mae = eval_grasp(
+                raw_kspace,
+                raw_csmaps,
+                ground_truth,
+                raw_grasp_img,
+                eval_physics,
+                device,
+                sample_dir,
+                dro_eval=False,
+            )
 
-            ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr = dro_metrics
+            ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = dro_metrics
             grasp_ssim, grasp_psnr, grasp_mse, grasp_lpips, grasp_dc_mse, grasp_dc_mae = grasp_metrics
 
             results.append(
@@ -516,6 +527,7 @@ def main():
                     dc_mae=dc_mae,
                     recon_corr=recon_corr,
                     grasp_corr=grasp_corr,
+                    **(temporal_metrics or {}),
                 )
             )
             grasp_results.append(
@@ -529,7 +541,15 @@ def main():
                     dc_mae=grasp_dc_mae,
                 )
             )
-            raw_results.append(dict(sample=label, raw_dc_mse=raw_dc_mse, raw_dc_mae=raw_dc_mae))
+            raw_results.append(
+                dict(
+                    sample=label,
+                    raw_dc_mse=raw_dc_mse,
+                    raw_dc_mae=raw_dc_mae,
+                    raw_grasp_dc_mse=raw_grasp_dc_mse,
+                    raw_grasp_dc_mae=raw_grasp_dc_mae,
+                )
+            )
 
     # Save metrics.
     metrics_path = os.path.join(inference_dir, "metrics.csv")
@@ -552,6 +572,8 @@ def main():
             "grasp_dc_mae",
             "raw_dc_mse",
             "raw_dc_mae",
+            "raw_grasp_dc_mse",
+            "raw_grasp_dc_mae",
         ]
         f.write(",".join(headers) + "\n")
         for dro_row, grasp_row, raw_row in zip(results, grasp_results, raw_results):
@@ -573,11 +595,46 @@ def main():
                 f"{grasp_row['dc_mae']:.6f}",
                 f"{raw_row['raw_dc_mse']:.6f}",
                 f"{raw_row['raw_dc_mae']:.6f}",
+                f"{raw_row['raw_grasp_dc_mse']:.6f}",
+                f"{raw_row['raw_grasp_dc_mae']:.6f}",
             ]
             f.write(",".join(row) + "\n")
 
+    metric_names = [
+        "curve_corr",
+        "curve_mae",
+        "early_corr",
+        "early_mae",
+        "ttae_sec",
+        "wash_in_slope_err",
+        "iauc10_err",
+        "peak_err",
+        "ttpeak_err_sec",
+    ]
+    for label, prefix in (("malignant", ""), ("benign", "benign_")):
+        for subset in ("all", "top10", "top20"):
+            keys = [
+                f"{prefix}{model}_{subset}_{metric}"
+                for model in ("dl", "grasp")
+                for metric in metric_names
+            ]
+            temporal_metrics_path = os.path.join(
+                inference_dir, f"metrics_temporal_{label}_{subset}.csv"
+            )
+            with open(temporal_metrics_path, "w") as f:
+                f.write(",".join(["sample"] + keys) + "\n")
+                for dro_row in results:
+                    row = [dro_row["sample"]]
+                    for key in keys:
+                        value = dro_row.get(key, np.nan)
+                        if value is None or (isinstance(value, float) and np.isnan(value)):
+                            row.append("")
+                        else:
+                            row.append(f"{value:.6f}")
+                    f.write(",".join(row) + "\n")
+
     def _mean_std(values, key):
-        vals = [v[key] for v in values if v[key] is not None]
+        vals = [v.get(key) for v in values if v.get(key) is not None and np.isfinite(v.get(key))]
         if not vals:
             return None, None
         mean = sum(vals) / len(vals)
@@ -609,18 +666,29 @@ def main():
             return ""
         return f"{mean:.4f} ± {std:.4f}"
 
+    def _format_mean_std_precise(mean, std):
+        if mean is None:
+            return ""
+        return f"{mean:.4e} ± {std:.4e}"
+
     recon_corr_str = _format_mean_std(*dl_summary["recon_corr"])
     grasp_corr_str = _format_mean_std(*dl_summary["grasp_corr"])
 
+    raw_summary = {
+        "raw_dc_mse": _mean_std(raw_results, "raw_dc_mse"),
+        "raw_dc_mae": _mean_std(raw_results, "raw_dc_mae"),
+        "raw_grasp_dc_mse": _mean_std(raw_results, "raw_grasp_dc_mse"),
+        "raw_grasp_dc_mae": _mean_std(raw_results, "raw_grasp_dc_mae"),
+    }
+
     print("=== Inference Summary (averaged over samples) ===")
+    print("Image Metrics")
     print(
         "DL   -> "
         f"SSIM: {_format_mean_std(*dl_summary['ssim'])}, "
         f"PSNR: {_format_mean_std(*dl_summary['psnr'])}, "
         f"MSE: {_format_mean_std(*dl_summary['mse'])}, "
         f"LPIPS: {_format_mean_std(*dl_summary['lpips'])}, "
-        f"DC_MSE: {_format_mean_std(*dl_summary['dc_mse'])}, "
-        f"DC_MAE: {_format_mean_std(*dl_summary['dc_mae'])}, "
         f"EC Corr (DL): {recon_corr_str}, "
         f"EC Corr (GRASP): {grasp_corr_str}"
     )
@@ -629,10 +697,53 @@ def main():
         f"SSIM: {_format_mean_std(*grasp_summary['ssim'])}, "
         f"PSNR: {_format_mean_std(*grasp_summary['psnr'])}, "
         f"MSE: {_format_mean_std(*grasp_summary['mse'])}, "
-        f"LPIPS: {_format_mean_std(*grasp_summary['lpips'])}, "
-        f"DC_MSE: {_format_mean_std(*grasp_summary['dc_mse'])}, "
-        f"DC_MAE: {_format_mean_std(*grasp_summary['dc_mae'])}"
+        f"LPIPS: {_format_mean_std(*grasp_summary['lpips'])}"
     )
+    print("K-space Metrics")
+    print(
+        "DRO  -> "
+        f"DL DC_MSE: {_format_mean_std(*dl_summary['dc_mse'])}, "
+        f"DL DC_MAE: {_format_mean_std(*dl_summary['dc_mae'])}, "
+        f"GRASP DC_MSE: {_format_mean_std(*grasp_summary['dc_mse'])}, "
+        f"GRASP DC_MAE: {_format_mean_std(*grasp_summary['dc_mae'])}"
+    )
+    print(
+        "RAW  -> "
+        f"DL DC_MSE: {_format_mean_std_precise(*raw_summary['raw_dc_mse'])}, "
+        f"DL DC_MAE: {_format_mean_std_precise(*raw_summary['raw_dc_mae'])}, "
+        f"GRASP DC_MSE: {_format_mean_std_precise(*raw_summary['raw_grasp_dc_mse'])}, "
+        f"GRASP DC_MAE: {_format_mean_std_precise(*raw_summary['raw_grasp_dc_mae'])}"
+    )
+    def _has_any_metric(keys):
+        return any(
+            v.get(key) is not None and np.isfinite(v.get(key))
+            for v in results
+            for key in keys
+        )
+
+    def _print_temporal_table(label, prefix):
+        if not _has_any_metric([
+            f"{prefix}{model}_{subset}_{metric}"
+            for model in ("dl", "grasp")
+            for subset in ("all", "top10", "top20")
+            for metric in metric_names
+        ]):
+            return
+        print(label)
+        header = f"{'Subset':<8} {'Metric':<22} {'DL':<16} {'GRASP':<16}"
+        print(header)
+        print("-" * len(header))
+        for subset in ("all", "top10", "top20"):
+            for metric in metric_names:
+                dl_key = f"{prefix}dl_{subset}_{metric}"
+                grasp_key = f"{prefix}grasp_{subset}_{metric}"
+                dl_val = _format_mean_std(*_mean_std(results, dl_key))
+                grasp_val = _format_mean_std(*_mean_std(results, grasp_key))
+                print(f"{subset:<8} {metric:<22} {dl_val:<16} {grasp_val:<16}")
+
+    print("----- Temporal Fidelity Metrics (mean ± std) -----")
+    _print_temporal_table("Malignant", prefix="")
+    _print_temporal_table("Benign", prefix="benign_")
     print(f"Inference complete. Results saved to {inference_dir}")
 
 

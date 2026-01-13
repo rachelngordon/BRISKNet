@@ -1,0 +1,21 @@
+# Pip-only deps for recon_mri (see env_min.yaml for conda deps)
+
+torchkbnufft
+torchmetrics
+tensorboard
+wandb
+torchio
+pytorch-msssim
+mirtorch
+opencv-python
+openpyxl
+wget
+git-filter-repo
+sigpy
+lpips
+libcpab
+
+# Pinned git deps
+deepinv @ git+https://github.com/deepinv/deepinv.git@6cc66b6b85ace803fae4cf3be1c25b54eb1ace91
+-e git+https://github.com/soumickmj/pytorch-complex.git@f5d0c3511a3f3c7cb7f138ee7f42a699d3f8209a#egg=pytorch_complex
+-e git+https://github.com/jinh0park/pytorch-ssim-3D.git@ada88564a754cd857730d649c511384dd41f9b4e#egg=pytorch_ssim

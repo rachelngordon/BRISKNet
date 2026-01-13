@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_warp_2spf_54fpg_checkpointing_sample_edges"
-    config_path = 'configs/config_ei_2spf_54fpg_checkpointing.yaml'
+    job_name = "ei_warp_36spf"
+    config_path = 'configs/config_ei_36spf.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -64,7 +64,7 @@ def main():
         nodes=1,
         tasks_per_node=1,
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
-        slurm_gres=f"gpu:h200:{num_gpus}",     # 4× H200 on a single node
+        slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
         timeout_min=700,
 
         # IMPORTANT: no cpu_bind here anymore, this only affects sbatch
@@ -76,7 +76,7 @@ def main():
     )
 
     # --- Job Submission ---
-    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus, from_checkpoint=False)
+    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus, from_checkpoint=True)
     job = executor.submit(initial_trainer)
 
     print(f"Submitted job with ID: {job.job_id}")

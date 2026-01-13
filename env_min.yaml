@@ -1,7 +1,8 @@
 name: recon_mri
 channels:
-  - conda-forge
   - pytorch
+  - nvidia
+  - conda-forge
 dependencies:
   - python=3.11
   - pytorch
@@ -11,13 +12,20 @@ dependencies:
   - cupy
   - cutensor
   - nccl
-  - ipykernel
-  - nibabel
-  - tmux
   - numpy<2.0
-  # you can add these here instead of a separate install step if you want:
   - scipy
   - numba
   - pywavelets
+  - h5py
+  - matplotlib
+  - pandas
+  - pydicom
+  - seaborn
+  - scikit-image
+  - nibabel
+  - submitit
+  - pyyaml
+  - einops
+  - ipykernel
   - tqdm
   - pip

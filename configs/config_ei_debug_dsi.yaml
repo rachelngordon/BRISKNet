@@ -12,13 +12,14 @@ data:
   coils: 16
   eval_timeframes: 12
   eval_spokes: 24
-  spf_aug: True
+  spf_aug: false
   weight_accelerations: false
-  fpg: 36
+  fpg: 12
   train_spokes_per_frame: 24
   slices: 192
   slices_to_eval: 1
   eval_frequency: 1
+  flip_kspace: False
 
 # Experiment settings
 experiment:
@@ -58,10 +59,10 @@ model:
   lambda_spatial_S: 0.05
   gamma: 0.5
   lambda_step: 0.1
-  encode_acceleration: false
-  encode_time_index: false
+  encode_acceleration: true
+  encode_time_index: true
   kernel_size_L: [3, 3, 5]
-  kernel_size_S: [3, 3, 3]
+  kernel_size_S: [3, 3, 1]
   activation_checkpointing: false
   checkpoint_use_reentrant: false
   optimizer:
@@ -96,12 +97,16 @@ model:
 
 # Training settings
 training:
-  epochs: 4
+  epochs: 3
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: False
-  edge_time_index_sampling: false
+  amp:
+    enabled: False
+    dtype: "bf16"
+    use_grad_scaler: False
+  edge_time_index_sampling: true
   curriculum_learning:
     enabled: false
     phases:
@@ -124,11 +129,12 @@ training:
 evaluation:
   num_samples: 15
   simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
-  chunk_size: 16
+  chunk_size: 12
   chunk_overlap: 8
   rescale: False
 
 debugging:
   calc_step_0: True
+  calc_step_0_val: False
   enable_gradient_monitoring: true
   monitoring_interval: 1

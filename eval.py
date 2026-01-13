@@ -28,6 +28,8 @@ from cluster_paths import _swap_base
 
 
 TUMOR_SEG_ROOT = os.environ.get("TUMOR_SEG_ROOT", "/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations_lcr")
+TUMOR_SEG_WARN = os.environ.get("TUMOR_SEG_WARN", "1") not in ("0", "false", "False")
+_MISSING_TUMOR_SEGS = set()
 SLICE_MAP_PATH = Path(__file__).resolve().parent / "data" / "largest_tumor_slices.csv"
 
 # Plot styling 
@@ -185,7 +187,9 @@ def _load_tumor_mask(cluster: str, patient_id: str, slice_idx: int = None, seg_r
 
     seg_path = os.path.join(seg_root, f"{patient_id}.nii.gz")
     if not os.path.exists(seg_path):
-        print(f"Tumor segmentation not found at {seg_path}")
+        if TUMOR_SEG_WARN and seg_path not in _MISSING_TUMOR_SEGS:
+            print(f"Tumor segmentation not found at {seg_path}")
+            _MISSING_TUMOR_SEGS.add(seg_path)
         return None
 
     seg_vol = nib.load(seg_path).get_fdata()
@@ -547,6 +551,63 @@ def plot_temporal_curves(
     return region_corrs
 
 
+def plot_temporal_curves_normalized(
+    gt_img_stack: np.ndarray,
+    recon_img_stack: np.ndarray,
+    grasp_img_stack: np.ndarray,
+    masks: dict,
+    time_points: np.ndarray,
+    filename: str,
+    acceleration: float,
+    spokes_per_frame: int,
+):
+    """
+    Plots baseline-subtracted mean signal vs. time for different tissue regions.
+    """
+    regions = [r for r in ['malignant', 'glandular', 'muscle'] if r in masks and masks[r].any()]
+
+    if not regions:
+        print("No relevant regions found in mask to plot normalized temporal curves.")
+        return
+
+    num_frames = gt_img_stack.shape[2]
+    n_baseline = int(np.clip(round(0.1 * num_frames), 4, 10))
+
+    fig, axes = plt.subplots(1, len(regions), figsize=(7 * len(regions), 5))
+    if len(regions) == 1:
+        axes = [axes]
+    fig.suptitle(
+        f"Baseline-Subtracted Signal vs. Time (AF = {acceleration}, SPF = {spokes_per_frame})",
+        fontsize=PLOT_FONT_SIZES["suptitle"],
+    )
+
+    for i, region in enumerate(regions):
+        mask = masks[region]
+
+        gt_curve = np.array([gt_img_stack[:, :, t][mask].mean() for t in range(num_frames)])
+        recon_curve = np.array([recon_img_stack[:, :, t][mask].mean() for t in range(num_frames)])
+        grasp_curve = np.array([grasp_img_stack[:, :, t][mask].mean() for t in range(num_frames)])
+
+        # Baseline-subtracted enhancement curves.
+        gt_curve = gt_curve - np.nanmean(gt_curve[:n_baseline])
+        recon_curve = recon_curve - np.nanmean(recon_curve[:n_baseline])
+        grasp_curve = grasp_curve - np.nanmean(grasp_curve[:n_baseline])
+
+        axes[i].plot(time_points, gt_curve, 'k-', label='Ground Truth', linewidth=2, marker='o')
+        axes[i].plot(time_points, recon_curve, 'r--', label='DL Recon', marker='o')
+        axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
+        axes[i].set_title(f"{region.capitalize()}", fontsize=PLOT_FONT_SIZES["title"])
+        axes[i].set_xlabel("Time (s)", fontsize=PLOT_FONT_SIZES["label"])
+        axes[i].tick_params(axis='both', which='major', labelsize=PLOT_FONT_SIZES["tick"])
+        axes[i].grid(True)
+        axes[i].legend(fontsize=PLOT_FONT_SIZES["legend"])
+
+    axes[0].set_ylabel("Baseline-Subtracted Signal", fontsize=PLOT_FONT_SIZES["label"])
+    plt.tight_layout(rect=[0, 0.02, 1, 0.94], **PLOT_LAYOUT)
+    plt.savefig(filename, bbox_inches='tight', pad_inches=0.02)
+    plt.close()
+
+
 
 def plot_single_temporal_curve(
     img_stack: np.ndarray,
@@ -583,8 +644,194 @@ def plot_single_temporal_curve(
     region_key = 'malignant'
     if region_key not in masks or not masks[region_key].any():
         print(f"'{region_key}' mask not found or is empty. Skipping plot generation.")
-        return
+    return
 
+
+
+def compute_temporal_metrics(
+    gt_mag_np: np.ndarray,
+    recon_mag_np: np.ndarray,
+    tumor_mask: np.ndarray,
+    time_points: np.ndarray,
+) -> Dict[str, float]:
+    if tumor_mask is None or not tumor_mask.any():
+        return {}
+
+    num_frames = gt_mag_np.shape[2]
+    n_baseline = int(np.clip(round(0.1 * num_frames), 4, 10))
+    dt = float(time_points[1] - time_points[0]) if num_frames > 1 else 1.0
+    n_early = int(np.clip(np.ceil(35.0 / dt), 4, 8))
+
+    gt_flat = gt_mag_np[tumor_mask].reshape(-1, num_frames)
+    recon_flat = recon_mag_np[tumor_mask].reshape(-1, num_frames)
+
+    if gt_flat.size == 0:
+        return {}
+
+    def normalize_baseline(curves: np.ndarray, n_base: int) -> np.ndarray:
+        # Baseline-subtracted enhancement to focus metrics on temporal dynamics.
+        if curves.size == 0 or n_base <= 0:
+            return curves
+        baseline = np.nanmean(curves[:, :n_base], axis=1, keepdims=True)
+        baseline = np.nan_to_num(baseline, nan=0.0)
+        return curves - baseline
+
+    baseline_gt = gt_flat[:, :n_baseline].mean(axis=1)
+
+    peak_gt = gt_flat.max(axis=1)
+    peak_enh = peak_gt - baseline_gt
+
+    valid_mask = peak_enh > 0
+    metric_names = [
+        "curve_corr",
+        "curve_mae",
+        "early_corr",
+        "early_mae",
+        "ttae_sec",
+        "wash_in_slope_err",
+        "iauc10_err",
+        "peak_err",
+        "ttpeak_err_sec",
+    ]
+    if not np.any(valid_mask):
+        return {f"{subset}_{metric}": np.nan for subset in ("all", "top10", "top20") for metric in metric_names}
+
+    valid_indices = np.where(valid_mask)[0]
+    sorted_indices = valid_indices[np.argsort(peak_enh[valid_mask])[::-1]]
+
+    def subset_indices(frac: float) -> np.ndarray:
+        if sorted_indices.size == 0:
+            return np.array([], dtype=int)
+        count = max(1, int(np.ceil(frac * sorted_indices.size)))
+        return sorted_indices[:count]
+
+    subsets = {
+        "all": sorted_indices,
+        "top10": subset_indices(0.10),
+        "top20": subset_indices(0.20),
+    }
+
+    mean_curve = gt_flat.mean(axis=0)
+    smoothed = mean_curve.copy()
+    if num_frames >= 3:
+        smoothed[1:-1] = (mean_curve[:-2] + mean_curve[1:-1] + mean_curve[2:]) / 3.0
+
+    mu0 = smoothed[:n_baseline].mean()
+    sigma0 = smoothed[:n_baseline].std()
+    thr0 = mu0 + 3.0 * sigma0
+    above0 = smoothed > thr0
+    consecutive0 = above0[:-1] & above0[1:]
+    t_arr_idx = int(np.argmax(consecutive0)) if np.any(consecutive0) else 0
+    t_peak_idx = int(np.argmax(mean_curve))
+
+    early_start = t_arr_idx
+    early_end = min(t_arr_idx + n_early, t_peak_idx)
+    if early_end < early_start:
+        early_end = early_start
+    if (early_end - early_start + 1) < 3 and num_frames >= 3:
+        early_end = min(early_start + 2, num_frames - 1)
+    early_slice = slice(early_start, early_end + 1)
+
+    def mean_pearson(a: np.ndarray, b: np.ndarray) -> float:
+        a_mean = a.mean(axis=1, keepdims=True)
+        b_mean = b.mean(axis=1, keepdims=True)
+        a_diff = a - a_mean
+        b_diff = b - b_mean
+        num = np.sum(a_diff * b_diff, axis=1)
+        den = np.sqrt(np.sum(a_diff ** 2, axis=1) * np.sum(b_diff ** 2, axis=1))
+        corr = np.divide(num, den, out=np.full_like(num, np.nan, dtype=np.float64), where=den > 0)
+        return float(np.nanmean(corr)) if corr.size else np.nan
+
+    def arrival_indices(curves: np.ndarray, baseline_mu: np.ndarray, baseline_sigma: np.ndarray) -> np.ndarray:
+        thr = baseline_mu + 3.0 * baseline_sigma
+        above = curves > thr[:, None]
+        consecutive = above[:, :-1] & above[:, 1:]
+        has_arrival = np.any(consecutive, axis=1)
+        idx = np.argmax(consecutive, axis=1)
+        return np.where(has_arrival, idx, -1)
+
+    def compute_iauc10(curves: np.ndarray, baseline: np.ndarray, arrivals: np.ndarray) -> np.ndarray:
+        areas = np.full(curves.shape[0], np.nan, dtype=float)
+        for i, t_idx in enumerate(arrivals):
+            if t_idx < 0:
+                continue
+            t_arr_time = time_points[t_idx]
+            t_end = t_arr_time + 10.0
+            end_idx = np.searchsorted(time_points, t_end, side="right") - 1
+            end_idx = int(min(max(end_idx, t_idx), num_frames - 1))
+            if end_idx <= t_idx:
+                continue
+            y = curves[i, t_idx:end_idx + 1] - baseline[i]
+            areas[i] = float(np.trapz(y, time_points[t_idx:end_idx + 1]))
+        return areas
+
+    metrics = {}
+    for subset_name, idx in subsets.items():
+        if idx.size == 0:
+            for metric_name in metric_names:
+                metrics[f"{subset_name}_{metric_name}"] = np.nan
+            continue
+
+        gt_curves = gt_flat[idx]
+        recon_curves = recon_flat[idx]
+
+        gt_norm = normalize_baseline(gt_curves, n_baseline)
+        recon_norm = normalize_baseline(recon_curves, n_baseline)
+
+        metrics[f"{subset_name}_curve_corr"] = mean_pearson(recon_norm, gt_norm)
+        metrics[f"{subset_name}_curve_mae"] = float(np.mean(np.abs(recon_norm - gt_norm)))
+        metrics[f"{subset_name}_early_corr"] = mean_pearson(recon_norm[:, early_slice], gt_norm[:, early_slice])
+        metrics[f"{subset_name}_early_mae"] = float(np.mean(np.abs(recon_norm[:, early_slice] - gt_norm[:, early_slice])))
+
+        gt_baseline_mu = gt_curves[:, :n_baseline].mean(axis=1)
+        gt_baseline_sigma = gt_curves[:, :n_baseline].std(axis=1)
+        recon_baseline_mu = recon_curves[:, :n_baseline].mean(axis=1)
+        recon_baseline_sigma = recon_curves[:, :n_baseline].std(axis=1)
+
+        gt_arr = arrival_indices(gt_curves, gt_baseline_mu, gt_baseline_sigma)
+        recon_arr = arrival_indices(recon_curves, recon_baseline_mu, recon_baseline_sigma)
+
+        valid_arr = (gt_arr >= 0) & (recon_arr >= 0)
+        if np.any(valid_arr):
+            gt_arr_time = time_points[gt_arr[valid_arr]]
+            recon_arr_time = time_points[recon_arr[valid_arr]]
+            metrics[f"{subset_name}_ttae_sec"] = float(np.mean(np.abs(recon_arr_time - gt_arr_time)))
+        else:
+            metrics[f"{subset_name}_ttae_sec"] = np.nan
+
+        gt_peak_idx = np.argmax(gt_curves, axis=1)
+        recon_peak_idx = np.argmax(recon_curves, axis=1)
+
+        valid_slope = (gt_arr >= 0) & (recon_arr >= 0)
+        if np.any(valid_slope):
+            gt_valid = valid_slope & (gt_peak_idx > gt_arr)
+            recon_valid = valid_slope & (recon_peak_idx > recon_arr)
+            valid = gt_valid & recon_valid
+            if np.any(valid):
+                gt_time_delta = time_points[gt_peak_idx[valid]] - time_points[gt_arr[valid]]
+                recon_time_delta = time_points[recon_peak_idx[valid]] - time_points[recon_arr[valid]]
+                gt_slope = (gt_norm[valid, gt_peak_idx[valid]] - gt_norm[valid, gt_arr[valid]]) / gt_time_delta
+                recon_slope = (recon_norm[valid, recon_peak_idx[valid]] - recon_norm[valid, recon_arr[valid]]) / recon_time_delta
+                metrics[f"{subset_name}_wash_in_slope_err"] = float(np.mean(np.abs(recon_slope - gt_slope)))
+            else:
+                metrics[f"{subset_name}_wash_in_slope_err"] = np.nan
+        else:
+            metrics[f"{subset_name}_wash_in_slope_err"] = np.nan
+
+        gt_iauc = compute_iauc10(gt_norm, np.zeros_like(gt_baseline_mu), gt_arr)
+        recon_iauc = compute_iauc10(recon_norm, np.zeros_like(recon_baseline_mu), recon_arr)
+        valid_iauc = np.isfinite(gt_iauc) & np.isfinite(recon_iauc)
+        metrics[f"{subset_name}_iauc10_err"] = float(np.mean(np.abs(recon_iauc[valid_iauc] - gt_iauc[valid_iauc]))) if np.any(valid_iauc) else np.nan
+
+        gt_peak_val = gt_norm.max(axis=1)
+        recon_peak_val = recon_norm.max(axis=1)
+        metrics[f"{subset_name}_peak_err"] = float(np.mean(np.abs(recon_peak_val - gt_peak_val)))
+
+        gt_peak_time = time_points[gt_peak_idx]
+        recon_peak_time = time_points[recon_peak_idx]
+        metrics[f"{subset_name}_ttpeak_err_sec"] = float(np.mean(np.abs(recon_peak_time - gt_peak_time)))
+
+    return metrics
     tumor_mask = masks[region_key]
 
     if frames_to_show is None:
@@ -872,6 +1119,18 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
 
         aif_time_points = np.linspace(0, 150, num_frames)
 
+        temporal_metrics = {}
+        if 'malignant' in masks_np and masks_np['malignant'].any():
+            dl_metrics = compute_temporal_metrics(gt_mag_np, recon_mag_np, masks_np['malignant'], aif_time_points)
+            grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['malignant'], aif_time_points)
+            temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
+            temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
+        if 'benign' in masks_np and masks_np['benign'].any():
+            dl_metrics = compute_temporal_metrics(gt_mag_np, recon_mag_np, masks_np['benign'], aif_time_points)
+            grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['benign'], aif_time_points)
+            temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
+            temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
+
         if 'malignant' in mask and mask['malignant'].any() and plot_label is not None:
             
             # --- Plot Spatial Quality at a Peak Enhancement Frame ---
@@ -904,6 +1163,16 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=True
             )
+            plot_temporal_curves_normalized(
+                gt_img_stack=gt_mag_np,
+                recon_img_stack=recon_mag_np,
+                grasp_img_stack=grasp_mag_np,
+                masks=masks_np,
+                time_points=aif_time_points,
+                filename=os.path.join(output_dir, f"temporal_curves_normalized_{plot_label}{suffix}.png"),
+                acceleration=acceleration,
+                spokes_per_frame=spokes_per_frame,
+            )
 
             plot_single_temporal_curve(
                 img_stack=recon_mag_np,
@@ -928,7 +1197,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
         else:
             region_corrs = {'malignant': {'DL': None, 'GRASP': None}}
         
-        return ssim, psnr, mse, lpips, dc_mse, dc_mae, region_corrs['malignant']['DL'], region_corrs['malignant']['GRASP']
+        return ssim, psnr, mse, lpips, dc_mse, dc_mae, region_corrs['malignant']['DL'], region_corrs['malignant']['GRASP'], temporal_metrics
     
 
     else:
@@ -972,6 +1241,18 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
 
         aif_time_points = np.linspace(0, 150, num_frames)
 
+        temporal_metrics = {}
+        if 'malignant' in masks_np and masks_np['malignant'].any():
+            dl_metrics = compute_temporal_metrics(gt_mag_np, recon_mag_np, masks_np['malignant'], aif_time_points)
+            grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['malignant'], aif_time_points)
+            temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
+            temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
+        if 'benign' in masks_np and masks_np['benign'].any():
+            dl_metrics = compute_temporal_metrics(gt_mag_np, recon_mag_np, masks_np['benign'], aif_time_points)
+            grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['benign'], aif_time_points)
+            temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
+            temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
+
         if 'malignant' in mask and mask['malignant'].any() and plot_label is not None:
             
             # --- Plot Spatial Quality at a Peak Enhancement Frame ---
@@ -1004,6 +1285,16 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=False
             )
+            plot_temporal_curves_normalized(
+                gt_img_stack=gt_mag_np,
+                recon_img_stack=recon_mag_np,
+                grasp_img_stack=grasp_mag_np,
+                masks=masks_np,
+                time_points=aif_time_points,
+                filename=os.path.join(output_dir, f"non_dro_temporal_curves_normalized_{plot_label}{suffix}.png"),
+                acceleration=acceleration,
+                spokes_per_frame=spokes_per_frame,
+            )
 
             plot_single_temporal_curve(
                 img_stack=recon_mag_np,
@@ -1026,7 +1317,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
             print("Diagnostic plots saved.")
 
 
-        return dc_mse, dc_mae
+        return dc_mse, dc_mae, temporal_metrics
 
 
 

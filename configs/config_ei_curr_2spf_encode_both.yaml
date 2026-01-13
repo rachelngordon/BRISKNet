@@ -91,17 +91,21 @@ model:
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
       no_grad: false
+      checkpoint_model: false
+      checkpoint_mode: "inner"
+      checkpoint_use_reentrant: false
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 500
+  epochs: 600
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: True
-  edge_time_index_sampling: false
+  ddp_find_unused_parameters: true
+  ddp_set_static_graph: false
   curriculum_learning:
     enabled: True
     phases:
@@ -135,5 +139,6 @@ evaluation:
 
 debugging:
   calc_step_0: True
+  calc_step_0_val: True
   enable_gradient_monitoring: true
   monitoring_interval: 5

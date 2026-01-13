@@ -8,10 +8,8 @@ def Project_inf(x, c, to_complex=True):
     # torch.cuda.synchronize()
     # start1 = time()
     # x_max = torch.maximum((abs(x)/c), torch.ones(x.shape).to(x.device))
-    x_max = torch.maximum((abs(x) / c), torch.tensor(1))
-
-    if to_complex:
-        x_max = x_max.to(dtype)
+    # Keep scale real to avoid duplicating complex tensor in memory.
+    x_max = (abs(x) / c).clamp_min_(1.0)
     s = torch.div(x, x_max)
 
     # torch.cuda.synchronize()
