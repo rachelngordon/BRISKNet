@@ -19,6 +19,7 @@ data:
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
+  flip_kspace: False
 
 # Experiment settings
 experiment:
@@ -131,7 +132,7 @@ training:
 
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
+  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset_frontpad"
   chunk_size: 144
   chunk_overlap: 72
   rescale: False

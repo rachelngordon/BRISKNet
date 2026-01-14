@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 8
+  timeframes: 36
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 8
-  eval_spokes: 36
+  eval_timeframes: 36
+  eval_spokes: 8
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 36
+  train_spokes_per_frame: 8
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -105,6 +105,7 @@ training:
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: True
+  edge_time_index_sampling: false
   ddp_find_unused_parameters: true
   ddp_set_static_graph: false
   amp:
@@ -132,7 +133,7 @@ training:
 
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
+  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset_frontpad"
   chunk_size: 36
   chunk_overlap: 18
   rescale: False

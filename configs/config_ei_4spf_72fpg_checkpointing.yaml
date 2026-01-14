@@ -19,6 +19,7 @@ data:
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
+  flip_kspace: True
 
 # Experiment settings
 experiment:

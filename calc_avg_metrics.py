@@ -2,7 +2,7 @@ import pandas as pd
 from pathlib import Path
 
 # Path to your CSV
-csv_path = Path("output/ei_warp_large_Lkernel/inference_20260113_142855/metrics.csv")
+csv_path = Path("/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_warp_large_Lkernel/inference_20260113_163934/metrics_temporal_malignant_all.csv")
 
 # Load CSV
 df = pd.read_csv(csv_path)
