@@ -102,6 +102,7 @@ def parse_args():
     parser.add_argument("--eval_spokes", type=int, help="Override spokes per frame for inference.")
     parser.add_argument("--eval_frames", type=int, help="Override number of frames for inference.")
     parser.add_argument("--phase_index", type=int, help="Curriculum phase index to use for eval params (default: last).")
+    parser.add_argument("--disable_ssdu", action="store_true", help="Skip SSDU NMSE computation to speed up inference.")
     parser.add_argument("--seed", type=int, default=12, help="Random seed.")
     return parser.parse_args()
 
@@ -181,6 +182,10 @@ def main():
 
     eval_chunk_size = config.get("evaluation", {}).get("chunk_size", N_time_eval)
     eval_chunk_overlap = config.get("evaluation", {}).get("chunk_overlap", 0)
+    compute_ssdu = config.get("evaluation", {}).get("compute_ssdu", True)
+    if args.disable_ssdu:
+        compute_ssdu = False
+
     ssdu_k_folds = config.get("evaluation", {}).get("ssdu_k_folds", 4)
     ssdu_grasp_k_folds = config.get("evaluation", {}).get("ssdu_grasp_k_folds", ssdu_k_folds)
     ssdu_weighting = config.get("evaluation", {}).get("ssdu_weighting", "sqrt_dcomp")
@@ -274,46 +279,49 @@ def main():
             os.makedirs(sample_dir, exist_ok=True)
             label = f"sample{idx:02d}"
 
-            ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
-            ssdu_result = compute_ssdu_kspace_nmse(
-                model,
-                raw_kspace,
-                raw_csmaps,
-                eval_ktraj,
-                eval_dcomp,
-                eval_nufft_ob,
-                eval_adjnufft_ob,
-                spokes_per_frame=int(N_spokes_eval),
-                K_folds=ssdu_k_folds,
-                baseline_weighting=ssdu_weighting,
-                device=device,
-                acceleration_encoding=acceleration_encoding,
-                start_timepoint_index=start_timepoint_index,
-                norm=config["model"]["norm"],
-                epoch="inference",
-                chunk_size=ssdu_chunk_size,
-                chunk_overlap=eval_chunk_overlap,
-            )
-            ssdu_grasp_result = compute_ssdu_kspace_nmse_grasp(
-                lambda y_used, ktraj_used, dcomp_used, csmap, samples_per_spoke: GRASPRecon_from_ktraj(
-                    csmap,
-                    y_used,
-                    ktraj_used,
-                    samples_per_spoke,
-                    device=None,
-                ),
-                raw_kspace,
-                raw_csmaps,
-                eval_ktraj,
-                eval_dcomp,
-                eval_nufft_ob,
-                eval_adjnufft_ob,
-                spokes_per_frame=int(N_spokes_eval),
-                K_folds=ssdu_grasp_k_folds,
-                orientation_transform="raw_grasp",
-                baseline_weighting=ssdu_weighting,
-                device=device,
-            )
+            ssdu_result = {}
+            ssdu_grasp_result = {}
+            if compute_ssdu:
+                ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
+                ssdu_result = compute_ssdu_kspace_nmse(
+                    model,
+                    raw_kspace,
+                    raw_csmaps,
+                    eval_ktraj,
+                    eval_dcomp,
+                    eval_nufft_ob,
+                    eval_adjnufft_ob,
+                    spokes_per_frame=int(N_spokes_eval),
+                    K_folds=ssdu_k_folds,
+                    baseline_weighting=ssdu_weighting,
+                    device=device,
+                    acceleration_encoding=acceleration_encoding,
+                    start_timepoint_index=start_timepoint_index,
+                    norm=config["model"]["norm"],
+                    epoch="inference",
+                    chunk_size=ssdu_chunk_size,
+                    chunk_overlap=eval_chunk_overlap,
+                )
+                ssdu_grasp_result = compute_ssdu_kspace_nmse_grasp(
+                    lambda y_used, ktraj_used, dcomp_used, csmap, samples_per_spoke: GRASPRecon_from_ktraj(
+                        csmap,
+                        y_used,
+                        ktraj_used,
+                        samples_per_spoke,
+                        device=None,
+                    ),
+                    raw_kspace,
+                    raw_csmaps,
+                    eval_ktraj,
+                    eval_dcomp,
+                    eval_nufft_ob,
+                    eval_adjnufft_ob,
+                    spokes_per_frame=int(N_spokes_eval),
+                    K_folds=ssdu_grasp_k_folds,
+                    orientation_transform="raw_grasp",
+                    baseline_weighting=ssdu_weighting,
+                    device=device,
+                )
 
             dro_metrics = eval_sample(
                 dro_kspace,

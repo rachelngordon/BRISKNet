@@ -523,11 +523,11 @@ class SliceDataset(Dataset):
         imag_part = kspace_slice.imag
         kspace_final = torch.stack([real_part, imag_part], dim=0).float()
 
-        kspace_final = torch.flip(kspace_final, dims=[-1])
+        # kspace_final = torch.flip(kspace_final, dims=[-1])
 
-        csmap = torch.from_numpy(csmap)
-        csmap_tensor = torch.rot90(csmap, k=2, dims=[-2, -1])
-        csmap = csmap_tensor.numpy()
+        # csmap = torch.from_numpy(csmap)
+        # csmap_tensor = torch.rot90(csmap, k=2, dims=[-2, -1])
+        # csmap = csmap_tensor.numpy()
 
         return kspace_final, csmap, N_samples, spokes_per_frame, N_time
     
@@ -853,7 +853,7 @@ class SimulatedSPFDataset(Dataset):
         raw_grasp_recon = torch.stack([raw_grasp_recon.real, raw_grasp_recon.imag], dim=0)
 
         raw_grasp_recon = torch.flip(raw_grasp_recon, dims=[-3])
-        raw_grasp_recon = torch.rot90(raw_grasp_recon, k=1, dims=[-3,-1])
+        raw_grasp_recon = torch.rot90(raw_grasp_recon, k=3, dims=[-3,-1])
 
 
         with h5py.File(raw_kspace_path, "r") as f:

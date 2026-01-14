@@ -864,6 +864,7 @@ def plot_temporal_curves(
         time_points (np.ndarray): The time vector for the x-axis.
         filename (str): The path to save the output plot.
     """
+
     regions = [r for r in ['malignant', 'glandular', 'muscle'] if r in masks and masks[r].any()]
 
     if not regions:
@@ -1304,6 +1305,7 @@ def plot_time_series(
         grasp_img_stack (np.ndarray): Time series of GRASP images (H, W, T).
         filename (str): The path to save the output plot.
     """
+
     num_frames = recon_img_stack.shape[2]
     
     # Select 5 time points: start, 1/4, 1/2, 3/4, end
