@@ -13,6 +13,49 @@ from radial_lsfp import MCNUFFT
 import random
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+
+def save_csmap_png(csmap, output_dir, tag, max_coils=16, cmap="viridis"):
+    os.makedirs(output_dir, exist_ok=True)
+
+    if isinstance(csmap, torch.Tensor):
+        data = csmap.detach().cpu()
+        if data.dim() >= 4:
+            data = data[0]
+        if data.dim() == 2:
+            data = data.unsqueeze(0)
+        if data.dim() == 3 and data.shape[0] > 64 and data.shape[-1] <= 32:
+            data = data.movedim(-1, 0)
+        mag = torch.abs(data) if data.is_complex() else torch.abs(data)
+        mag = mag.numpy()
+    else:
+        data = np.asarray(csmap)
+        if data.ndim >= 4:
+            data = data[0]
+        if data.ndim == 2:
+            data = data[None, ...]
+        if data.ndim == 3 and data.shape[0] > 64 and data.shape[-1] <= 32:
+            data = np.moveaxis(data, -1, 0)
+        mag = np.abs(data)
+
+    num_coils = min(mag.shape[0], max_coils)
+    ncols = int(np.ceil(np.sqrt(num_coils)))
+    nrows = int(np.ceil(num_coils / ncols))
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3 * ncols, 3 * nrows), squeeze=False)
+    vmax = np.max(mag[:num_coils]) if num_coils > 0 else 1.0
+
+    for idx in range(nrows * ncols):
+        ax = axes[idx // ncols][idx % ncols]
+        if idx < num_coils:
+            ax.imshow(mag[idx], cmap=cmap, vmin=0.0, vmax=vmax)
+            ax.set_title(f"Coil {idx + 1}")
+        ax.axis("off")
+
+    fig.suptitle(f"{tag} CSMaps (|S|)")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"{tag}_csmaps.png"), dpi=150)
+    plt.close(fig)
+
 def log_gradient_stats(model, epoch, iteration, output_dir, log_filename="gradient_stats.csv"):
     """
     Computes, prints, and logs the L2 norm of gradients for each parameter and the total gradient norm.

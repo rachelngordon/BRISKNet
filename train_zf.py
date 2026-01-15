@@ -15,7 +15,7 @@ from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
 from radial_lsfp import MCNUFFT
-from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed
+from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
 from eval import eval_grasp, eval_sample
 import csv
 import math
@@ -480,6 +480,31 @@ def main():
         num_workers=config["dataloader"]["num_workers"],
         pin_memory=True,
     )
+
+    save_csmaps = config.get("debugging", {}).get("save_csmap_pngs", False)
+    if save_csmaps and (global_rank == 0 or not config['training']['multigpu']):
+        csmap_dir = os.path.join(output_dir, "csmap_checks")
+        max_coils = config.get("debugging", {}).get("csmap_plot_max_coils", 16)
+        try:
+            train_batch = next(iter(train_loader))
+            train_csmap = train_batch[1]
+            save_csmap_png(train_csmap, csmap_dir, "train_raw", max_coils=max_coils)
+
+            train_csmap_rot = torch.rot90(train_csmap, k=2, dims=[-2, -1])
+            save_csmap_png(train_csmap_rot, csmap_dir, "train_rot", max_coils=max_coils)
+
+        except Exception as exc:
+            print(f"CSMap plot skipped for train_raw: {exc}")
+
+        try:
+            val_batch = next(iter(val_dro_loader))
+            _, val_csmap, _, _, _, _, _, _, val_raw_csmaps = val_batch
+
+            save_csmap_png(val_csmap.squeeze(0), csmap_dir, "val_dro", max_coils=max_coils)
+            save_csmap_png(val_raw_csmaps.squeeze(0), csmap_dir, "val_raw", max_coils=max_coils)
+            
+        except Exception as exc:
+            print(f"CSMap plot skipped for val data: {exc}")
 
 
 

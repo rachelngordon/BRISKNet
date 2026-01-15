@@ -138,3 +138,5 @@ debugging:
   calc_step_0_val: False
   enable_gradient_monitoring: true
   monitoring_interval: 1
+  save_csmap_pngs: true
+  csmap_plot_max_coils: 16
