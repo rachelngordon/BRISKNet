@@ -496,15 +496,71 @@ def main():
         except Exception as exc:
             print(f"CSMap plot skipped for train_raw: {exc}")
 
-        try:
-            val_batch = next(iter(val_dro_loader))
-            _, val_csmap, _, _, _, _, _, _, val_raw_csmaps = val_batch
+        # try:
+        val_batch = next(iter(val_dro_loader))
+        _, val_csmap, _, _, _, _, _, _, val_raw_csmaps = val_batch
 
-            save_csmap_png(val_csmap.squeeze(0), csmap_dir, "val_dro", max_coils=max_coils)
-            save_csmap_png(val_raw_csmaps.squeeze(0), csmap_dir, "val_raw", max_coils=max_coils)
+        print("val_csmap shape: ", val_csmap.shape)
+        print("val_raw_csmaps shape: ", val_raw_csmaps.shape)
+        print("val_csmap dtype: ", val_csmap.dtype)
+        print("val_raw_csmaps dtype: ", val_raw_csmaps.dtype)
+        # print("val_csmap norm check: ", np.sum(np.abs(val_csmap[:, :, :, 100, 100])**2))
+        # print("val_raw_csmaps norm check: ", np.sum(np.abs(val_raw_csmaps[:, :, :, 100, 100])**2))
+
+        save_csmap_png(val_csmap.squeeze(0), csmap_dir, "val_dro", max_coils=max_coils)
+        save_csmap_png(val_raw_csmaps.squeeze(0), csmap_dir, "val_raw", max_coils=max_coils)
+
+
+        # --- ensure S has shape (C, H, W) ---
+        S_dro = val_csmap.squeeze()         # (C,H,W) if val_csmap was (1,C,H,W)
+        S_raw = val_raw_csmaps.squeeze()    # (C,H,W) if val_raw_csmaps was (1,C,H,W)
+
+        # --- 1) Sum of magnitudes across coils: abs(S).sum(axis=0) ---
+        dro_sumabs = np.abs(S_dro).sum(axis=0)   # (H,W)
+        raw_sumabs = np.abs(S_raw).sum(axis=0)   # (H,W)
+
+        # --- 2) (Optional but very useful) RSS magnitude across coils: sqrt(sum |S|^2) ---
+        dro_rss = np.sqrt((np.abs(S_dro) ** 2).sum(axis=0))
+        raw_rss = np.sqrt((np.abs(S_raw) ** 2).sum(axis=0))
+
+        # --- Plot & save ---
+        os.makedirs(csmap_dir, exist_ok=True)
+
+        plt.figure(figsize=(6, 6))
+        plt.title("DRO: sum |S| across coils")
+        plt.imshow(dro_sumabs, cmap="gray")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(os.path.join(csmap_dir, "val_dro_sumabs.png"), dpi=200)
+        plt.close()
+
+        plt.figure(figsize=(6, 6))
+        plt.title("Raw: sum |S| across coils")
+        plt.imshow(raw_sumabs, cmap="gray")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(os.path.join(csmap_dir, "val_raw_sumabs.png"), dpi=200)
+        plt.close()
+
+        # Optional RSS saves (recommended)
+        plt.figure(figsize=(6, 6))
+        plt.title("DRO: RSS = sqrt(sum |S|^2)")
+        plt.imshow(dro_rss, cmap="gray")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(os.path.join(csmap_dir, "val_dro_rss.png"), dpi=200)
+        plt.close()
+
+        plt.figure(figsize=(6, 6))
+        plt.title("Raw: RSS = sqrt(sum |S|^2)")
+        plt.imshow(raw_rss, cmap="gray")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.savefig(os.path.join(csmap_dir, "val_raw_rss.png"), dpi=200)
+        plt.close()
             
-        except Exception as exc:
-            print(f"CSMap plot skipped for val data: {exc}")
+        # except Exception as exc:
+        #     print(f"CSMap plot skipped for val data: {exc}")
 
 
 
