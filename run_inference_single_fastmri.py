@@ -31,6 +31,10 @@ from utils import (
 )
 
 
+## COMMANDS
+# downsample: python run_inference_single_fastmri.py --exp_dir output/ei_warp_large_Lkernel --fastmri_id 141 --use_downsampled_csmaps --disable_ssdu
+# raw: python run_inference_single_fastmri.py --exp_dir output/ei_warp_large_Lkernel --fastmri_id 141 --raw_csmap_path /net/scratch2/rachelgordon/zf_data_192_slices/cs_maps/fastMRI_breast_141_2_cs_maps/cs_map_slice_125.npy --disable_ssdu
+
 def _resolve_eval_params(config: dict, spokes: int, frames: int, phase_idx: int) -> Tuple[int, int]:
     """Pick evaluation spokes/frame and num_frames using overrides or curriculum."""
     if spokes and frames:
@@ -266,6 +270,14 @@ def parse_args():
         help="Path to raw csmap .npy to use for DRO reconstruction.",
     )
     parser.add_argument(
+        "--use_downsampled_csmaps",
+        action="store_true",
+        help=(
+            "Use fastmri_csmaps_for_inference.npy from the current working "
+            "directory instead of raw csmap paths."
+        ),
+    )
+    parser.add_argument(
         "--raw_csmap_dir",
         help="Directory containing per-patient cs_maps/<patient>_cs_maps/ for optional construction.",
     )
@@ -356,7 +368,13 @@ def main():
         raw_grasp_slice_idx,
     )
 
-    if args.raw_csmap_path:
+    if args.use_downsampled_csmaps:
+        dro_csmap_path = os.path.join(os.getcwd(), "fastmri_csmaps_for_inference.npy")
+        if not os.path.exists(dro_csmap_path):
+            raise FileNotFoundError(
+                f"Downsampled csmaps not found at {dro_csmap_path}."
+            )
+    elif args.raw_csmap_path:
         dro_csmap_path = args.raw_csmap_path
     elif args.raw_csmap_dir and args.raw_csmap_slice is not None:
         patient_id = f"fastMRI_breast_{args.fastmri_id:03d}_2"
@@ -467,6 +485,9 @@ def main():
                 device=device,
             )
         else:
+
+            print("dro_kspace: ", dro_kspace.shape)
+            print("dro_csmaps_override: ", dro_csmaps_override.shape)
             x_recon, *_ = model(
                 dro_kspace,
                 eval_physics,
