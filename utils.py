@@ -897,6 +897,7 @@ def sliding_window_inference(
     acceleration_encoding,
     start_timepoint_index,  # ignored here; recomputed per chunk if time-encoding is enabled
     model, epoch, device,
+    norm: str = "both",
     window_kind: str = "hann"
 ):
     """
@@ -940,7 +941,7 @@ def sliding_window_inference(
             acceleration_encoding,
             sti,
             epoch=epoch,
-            norm="both",
+            norm=norm,
             total_frames=N_frames,
         )
         # x_recon_chunk: (1, 2, H, W, T_chunk)

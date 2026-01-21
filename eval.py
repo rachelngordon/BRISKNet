@@ -20,6 +20,7 @@ from scipy.stats import mannwhitneyu
 from skimage.metrics import structural_similarity as ssim_map_func
 import matplotlib.gridspec as gridspec
 from skimage.measure import find_contours
+from matplotlib.colors import TwoSlopeNorm
 from typing import List, Dict, Optional, Tuple, Callable
 from scipy.stats import pearsonr
 import nibabel as nib
@@ -66,6 +67,24 @@ def robust_window(img, p_low=1, p_high=99):
     return lo, hi
 
 
+def robust_window_multi(images, p_low=1, p_high=99.5):
+    """Compute a shared display window across multiple images."""
+    flat = []
+    for img in images:
+        if img is None:
+            continue
+        arr = np.asarray(img).ravel()
+        if arr.size:
+            flat.append(arr)
+    if not flat:
+        return 0.0, 1.0
+    stacked = np.concatenate(flat)
+    lo, hi = np.percentile(stacked, [p_low, p_high])
+    if hi <= lo:
+        hi = lo + 1e-6
+    return lo, hi
+
+
 def normalize_for_lpips(image, data_range):
     """Normalizes an image tensor to the [-1, 1] range for LPIPS."""
     min_val, max_val = data_range
@@ -74,6 +93,16 @@ def normalize_for_lpips(image, data_range):
     # Scale to [-1, 1]
     image_minus1_1 = 2 * image_0_1 - 1
     return image_minus1_1
+
+
+def high_signal_selector(gt_img, q=70):
+    x = gt_img.astype(np.float32)
+    nz = x[x > 0]
+    if nz.size < 100:
+        thr = np.percentile(x, q)
+    else:
+        thr = np.percentile(nz, q)
+    return x >= thr
 
 
 def calc_image_metrics(input, reference, data_range, device):
@@ -355,6 +384,7 @@ def compute_ssdu_kspace_nmse(
                 model,
                 epoch=epoch,
                 device=device,
+                norm=norm,
             )
         else:
             x_hat, *_ = model(
@@ -624,10 +654,11 @@ def plot_spatial_quality(
     time_frame_index: int,
     filename: str,
     grasp_comparison_filename: str,
-    data_range: float, 
+    data_range: float,
     acceleration: float,
-    spokes_per_frame: int, 
+    spokes_per_frame: int,
     plot_dro: bool = True,
+    tumor_mask: np.ndarray | None = None,
 ):
     """
     Generates a comparison plot for a single time frame in a 2x4 grid.
@@ -640,6 +671,26 @@ def plot_spatial_quality(
         time_frame_index (int): The index of the time frame for titling.
         filename (str): The path to save the output plot.
     """
+
+    contours = None
+    if tumor_mask is not None and np.any(tumor_mask):
+        contours = find_contours(tumor_mask, 0.5)
+
+    def _overlay_contours(ax):
+        if not contours:
+            return
+        for contour in contours:
+            ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
+
+    tissue_sel = high_signal_selector(gt_img, q=70)
+    if not np.any(tissue_sel):
+        tissue_sel = np.ones_like(gt_img, dtype=bool)
+
+    vmin_window, vmax_window = robust_window_multi(
+        [gt_img, recon_img, grasp_img],
+        p_low=1,
+        p_high=99.5,
+    )
 
     if plot_dro:
         # Calculate error maps
@@ -679,23 +730,30 @@ def plot_spatial_quality(
             y=0.95,
         )
 
-        # --- Top Row: DL Reconstruction Comparison ---
-        vmin_window, vmax_window = robust_window(gt_img, 1, 99.5)
+        # --- Top Row: BRISKNet Comparison ---
 
         axes[0, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        _overlay_contours(axes[0, 0])
         axes[0, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
 
         axes[0, 1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
-        axes[0, 1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+        _overlay_contours(axes[0, 1])
+        axes[0, 1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
-        im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-        axes[0, 2].set_title("DL Error Map", fontsize=PLOT_FONT_SIZES["title"])
+        err_vals = error_map_dl[tissue_sel]
+        v = np.percentile(np.abs(err_vals), 99)
+        err_norm = TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
+        im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', norm=err_norm)
+        axes[0, 2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
         cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
         cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
-        im_ssim_dl = axes[0, 3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
+        ssim_vals = ssim_map_dl[tissue_sel]
+        ssim_vmin = np.percentile(ssim_vals, 1)
+        ssim_vmax = np.percentile(ssim_vals, 99)
+        im_ssim_dl = axes[0, 3].imshow(ssim_map_dl, cmap='viridis', vmin=ssim_vmin, vmax=ssim_vmax)
         axes[0, 3].set_title(
-            f"DL SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
             fontsize=PLOT_FONT_SIZES["title"],
         )
         cb_ssim_dl = fig.colorbar(im_ssim_dl, cax=cax_ssim_dl)
@@ -703,17 +761,25 @@ def plot_spatial_quality(
 
         # --- Bottom Row: GRASP Reconstruction Comparison ---
         axes[1, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        _overlay_contours(axes[1, 0])
         axes[1, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
 
         axes[1, 1].imshow(grasp_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        _overlay_contours(axes[1, 1])
         axes[1, 1].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
-        im_err_grasp = axes[1, 2].imshow(error_map_grasp, cmap='coolwarm', vmin=-0.5, vmax=0.5)
+        err_vals_grasp = error_map_grasp[tissue_sel]
+        v_grasp = np.percentile(np.abs(err_vals_grasp), 99)
+        err_norm_grasp = TwoSlopeNorm(vmin=-v_grasp, vcenter=0.0, vmax=v_grasp)
+        im_err_grasp = axes[1, 2].imshow(error_map_grasp, cmap='coolwarm', norm=err_norm_grasp)
         axes[1, 2].set_title("GRASP Error Map", fontsize=PLOT_FONT_SIZES["title"])
         cb_err_grasp = fig.colorbar(im_err_grasp, cax=cax_err_grasp)
         cb_err_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
-        im_ssim_grasp = axes[1, 3].imshow(ssim_map_grasp, cmap='viridis', vmin=0, vmax=1)
+        ssim_vals_grasp = ssim_map_grasp[tissue_sel]
+        ssim_vmin_grasp = np.percentile(ssim_vals_grasp, 1)
+        ssim_vmax_grasp = np.percentile(ssim_vals_grasp, 99)
+        im_ssim_grasp = axes[1, 3].imshow(ssim_map_grasp, cmap='viridis', vmin=ssim_vmin_grasp, vmax=ssim_vmax_grasp)
         axes[1, 3].set_title(
             f"GRASP SSIM Map (SSIM: {round(ssim_grasp, 3)})",
             fontsize=PLOT_FONT_SIZES["title"],
@@ -746,16 +812,18 @@ def plot_spatial_quality(
         top_cax_ssim = top_fig.add_subplot(top_gs[0, 5])
 
         top_axes[0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        _overlay_contours(top_axes[0])
         top_axes[0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
         top_axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
-        top_axes[1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
-        top_axes[2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-        top_axes[2].set_title("DL Error Map", fontsize=PLOT_FONT_SIZES["title"])
+        _overlay_contours(top_axes[1])
+        top_axes[1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+        top_axes[2].imshow(error_map_dl, cmap='coolwarm', norm=err_norm)
+        top_axes[2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
         top_cb_err = top_fig.colorbar(top_axes[2].images[0], cax=top_cax_err)
         top_cb_err.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
-        top_axes[3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
+        top_axes[3].imshow(ssim_map_dl, cmap='viridis', vmin=ssim_vmin, vmax=ssim_vmax)
         top_axes[3].set_title(
-            f"DL SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
             fontsize=PLOT_FONT_SIZES["title"],
         )
         top_cb_ssim = top_fig.colorbar(top_axes[3].images[0], cax=top_cax_ssim)
@@ -772,7 +840,7 @@ def plot_spatial_quality(
         plt.close()
 
 
-    # Plot the Difference Between GRASP and DL Recon
+    # Plot the Difference Between GRASP and BRISKNet
 
     # Calculate error map
     error_map = recon_img - grasp_img
@@ -803,25 +871,33 @@ def plot_spatial_quality(
     axes[3] = fig.add_subplot(gs[0, 4])
     cax_ssim_dl = fig.add_subplot(gs[0, 5])
     fig.suptitle(
-        f"DL vs GRASP Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}",
+        f"BRISKNet vs GRASP Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}",
         fontsize=PLOT_FONT_SIZES["suptitle"],
         y=0.995,
     )
 
-    # --- Top Row: DL Reconstruction Comparison ---
+    # --- Top Row: BRISKNet Comparison ---
 
-    axes[0].imshow(grasp_img, cmap='gray')
+    axes[0].imshow(grasp_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+    _overlay_contours(axes[0])
     axes[0].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
-    axes[1].imshow(recon_img, cmap='gray')
-    axes[1].set_title("DL Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+    axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+    _overlay_contours(axes[1])
+    axes[1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
-    im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', vmin=vmin, vmax=vmax)
+    err_vals = error_map[tissue_sel]
+    v = np.percentile(np.abs(err_vals), 99)
+    err_norm = TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
+    im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', norm=err_norm)
     axes[2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
     cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
     cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
-    im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=vmin_ssim, vmax=vmax_ssim)
+    ssim_vals = ssim_map[tissue_sel]
+    ssim_vmin = np.percentile(ssim_vals, 1)
+    ssim_vmax = np.percentile(ssim_vals, 99)
+    im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=ssim_vmin, vmax=ssim_vmax)
     axes[3].set_title(
         f"SSIM Map (SSIM: {round(ssim, 3)})",
         fontsize=PLOT_FONT_SIZES["title"],
@@ -907,12 +983,12 @@ def plot_temporal_curves(
         if plot_dro:
             axes[i].plot(time_points, gt_curve, 'k-', label='Ground Truth', linewidth=2, marker='o')
 
-        axes[i].plot(time_points, recon_curve, 'r--', label='DL Recon', marker='o')
+        axes[i].plot(time_points, recon_curve, 'r--', label='BRISKNet', marker='o')
         axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
         
         if plot_dro:
             axes[i].set_title(
-                f"{region.capitalize()} (DL: {recon_correlation:.2f}, GRASP: {grasp_correlation:.2f})",
+                f"{region.capitalize()} (BRISKNet: {recon_correlation:.2f}, GRASP: {grasp_correlation:.2f})",
                 fontsize=PLOT_FONT_SIZES["title"],
             )
         else: 
@@ -973,7 +1049,7 @@ def plot_temporal_curves_normalized(
         grasp_curve = grasp_curve - np.nanmean(grasp_curve[:n_baseline])
 
         axes[i].plot(time_points, gt_curve, 'k-', label='Ground Truth', linewidth=2, marker='o')
-        axes[i].plot(time_points, recon_curve, 'r--', label='DL Recon', marker='o')
+        axes[i].plot(time_points, recon_curve, 'r--', label='BRISKNet', marker='o')
         axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
         axes[i].set_title(f"{region.capitalize()}", fontsize=PLOT_FONT_SIZES["title"])
         axes[i].set_xlabel("Time (s)", fontsize=PLOT_FONT_SIZES["label"])
@@ -1023,7 +1099,63 @@ def plot_single_temporal_curve(
     region_key = 'malignant'
     if region_key not in masks or not masks[region_key].any():
         print(f"'{region_key}' mask not found or is empty. Skipping plot generation.")
-    return
+        return
+
+    tumor_mask = masks[region_key]
+
+    if frames_to_show is None:
+        interval = round(num_frames / 4)
+        frames_to_show = [0, interval, 2 * interval, num_frames - 1]
+    if len(frames_to_show) != 4:
+        raise ValueError(f"This function is designed to show exactly 4 frames, but {len(frames_to_show)} were provided.")
+
+    # --- 1. Setup Figure and Layout ---
+    fig = plt.figure(figsize=(20, 8.5))
+    fig.suptitle(
+        f"Tumor Enhancement Over Time (AF = {acceleration}, SPF = {spokes_per_frame})",
+        fontsize=PLOT_FONT_SIZES["suptitle"],
+        y=0.985,
+    )
+    gs = gridspec.GridSpec(2, 4, figure=fig, hspace=0.16, wspace=0.16)
+
+    ax_curve = fig.add_subplot(gs[:, 0:2])
+    ax_imgs = [
+        fig.add_subplot(gs[0, 2]), fig.add_subplot(gs[0, 3]),
+        fig.add_subplot(gs[1, 2]), fig.add_subplot(gs[1, 3])
+    ]
+
+    # --- 2. Plot Tumor Enhancement Curve (Left Panel) ---
+    mean_curve = [img_stack[:, :, t][tumor_mask].mean() for t in range(img_stack.shape[2])]
+    ax_curve.plot(time_points, mean_curve, 'o-', label='Mean Tumor Signal', linewidth=2, markersize=6)
+
+    highlight_times = [time_points[i] for i in frames_to_show]
+    highlight_vals = [mean_curve[i] for i in frames_to_show]
+    ax_curve.plot(highlight_times, highlight_vals, 'r*', markersize=18, zorder=10)
+
+    ax_curve.set_title("Tumor Contrast Enhancement Curve (CEC)", fontsize=PLOT_FONT_SIZES["title"], pad=8)
+    ax_curve.set_xlabel("Time Frame", fontsize=PLOT_FONT_SIZES["label"])
+    ax_curve.set_ylabel("Mean Signal Intensity", fontsize=PLOT_FONT_SIZES["label"])
+    ax_curve.legend(fontsize=PLOT_FONT_SIZES["legend"])
+    ax_curve.grid(True, linestyle='--')
+    ax_curve.tick_params(axis='both', which='major', labelsize=PLOT_FONT_SIZES["tick"])
+
+    # --- 3. Plot Image Frames with ROI (Right Panel) ---
+    contours = find_contours(tumor_mask, 0.5)
+    vmin_window, vmax_window = robust_window(img_stack, 1, 99.5)
+
+    for i, frame_idx in enumerate(frames_to_show):
+        ax = ax_imgs[i]
+        image = img_stack[:, :, frame_idx]
+        ax.imshow(image, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        for contour in contours:
+            ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
+        ax.set_title(f"Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
+        ax.axis('off')
+
+    # --- 4. Finalize and Save ---
+    plt.tight_layout(rect=[0, 0, 1, 0.9], **PLOT_LAYOUT)
+    plt.savefig(filename, bbox_inches='tight', pad_inches=0.02, dpi=150)
+    plt.close(fig)
 
 
 
@@ -1211,81 +1343,6 @@ def compute_temporal_metrics(
         metrics[f"{subset_name}_ttpeak_err_sec"] = float(np.mean(np.abs(recon_peak_time - gt_peak_time)))
 
     return metrics
-    tumor_mask = masks[region_key]
-
-    if frames_to_show is None:
-        # frames_to_show = [0, 6, 20, 21] # Default frames from the example
-        interval = round(num_frames / 4)
-        frames_to_show = [0, interval, 2*interval, num_frames-1]
-        # frames_to_show = [0, 6, 13, 20] # Default frames from the example
-    if len(frames_to_show) != 4:
-        raise ValueError(f"This function is designed to show exactly 4 frames, but {len(frames_to_show)} were provided.")
-
-    # --- 1. Setup Figure and Layout ---
-    fig = plt.figure(figsize=(20, 8.5))
-    fig.suptitle(
-        f"Tumor Enhancement Over Time (AF = {acceleration}, SPF = {spokes_per_frame})",
-        fontsize=PLOT_FONT_SIZES["suptitle"],
-        y=0.985,
-    )
-    gs = gridspec.GridSpec(2, 4, figure=fig, hspace=0.16, wspace=0.16)
-
-    ax_curve = fig.add_subplot(gs[:, 0:2])
-    ax_imgs = [
-        fig.add_subplot(gs[0, 2]), fig.add_subplot(gs[0, 3]),
-        fig.add_subplot(gs[1, 2]), fig.add_subplot(gs[1, 3])
-    ]
-
-    # fig.suptitle(f"Enhancement Curve", fontsize=22, y=0.98)
-
-    # --- 2. Plot Tumor Enhancement Curve (Left Panel) ---
-    mean_curve = [img_stack[:, :, t][tumor_mask].mean() for t in range(img_stack.shape[2])]
-
-    # Plot the full curve with markers
-    ax_curve.plot(time_points, mean_curve, 'o-', label='Mean Tumor Signal', linewidth=2, markersize=6)
-
-    # Highlight specific points on the curve with red stars
-    highlight_times = [time_points[i] for i in frames_to_show]
-    highlight_vals = [mean_curve[i] for i in frames_to_show]
-    ax_curve.plot(highlight_times, highlight_vals, 'r*', markersize=18, zorder=10) # zorder to ensure stars are on top
-
-    # Formatting the curve plot
-    ax_curve.set_title("Tumor Contrast Enhancement Curve (CEC)", fontsize=PLOT_FONT_SIZES["title"], pad=8)
-    ax_curve.set_xlabel("Time Frame", fontsize=PLOT_FONT_SIZES["label"])
-    ax_curve.set_ylabel("Mean Signal Intensity", fontsize=PLOT_FONT_SIZES["label"])
-    ax_curve.legend(fontsize=PLOT_FONT_SIZES["legend"])
-    ax_curve.grid(True, linestyle='--')
-    ax_curve.tick_params(axis='both', which='major', labelsize=PLOT_FONT_SIZES["tick"])
-
-    # --- 3. Plot Image Frames with ROI (Right Panel) ---
-    # Find contours of the tumor mask to draw an outline
-    contours = find_contours(tumor_mask, 0.5)
-
-    vmin_window, vmax_window = robust_window(img_stack, 1, 99.5)
-
-    # Use consistent intensity scaling for all image frames
-    # vmin, vmax = np.percentile(img_stack, [1, 99.5])
-
-    for i, frame_idx in enumerate(frames_to_show):
-        ax = ax_imgs[i]
-        image = img_stack[:, :, frame_idx]
-
-        # Display the image
-        ax.imshow(image, cmap='gray', vmin=vmin_window, vmax=vmax_window)
-
-        # Overlay the tumor ROI outline
-        for contour in contours:
-            # contour is (row, col), plot needs (x, y)
-            ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
-
-        # Formatting for each image subplot
-        ax.set_title(f"Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
-        ax.axis('off')
-
-    # --- 4. Finalize and Save ---
-    plt.tight_layout(rect=[0, 0, 1, 0.9], **PLOT_LAYOUT)
-    plt.savefig(filename, bbox_inches='tight', pad_inches=0.02, dpi=150)
-    plt.close(fig)
 
 
 
@@ -1295,9 +1352,10 @@ def plot_time_series(
     filename: str,
     acceleration: float,
     spokes_per_frame: int, 
+    tumor_mask: np.ndarray | None = None,
 ):
     """
-    Plots the middle 5 time points for Ground Truth, DL Recon, and GRASP.
+    Plots the middle 5 time points for Ground Truth, BRISKNet, and GRASP.
 
     Args:
         gt_img_stack (np.ndarray): Time series of ground truth images (H, W, T).
@@ -1318,7 +1376,11 @@ def plot_time_series(
         y=0.995,
     )
 
-    vmin_window, vmax_window = robust_window(recon_img_stack, 1, 99.5)
+    vmin_window, vmax_window = robust_window_multi(
+        [recon_img_stack, grasp_img_stack],
+        p_low=1,
+        p_high=99.5,
+    )
 
     # --- Row 1: Ground Truth ---
     # for i, frame_idx in enumerate(indices):
@@ -1327,17 +1389,29 @@ def plot_time_series(
     #     axes[0, i].set_title(f"GT: Frame {frame_idx}")
     #     axes[0, i].axis('off')
 
-    # --- Row 2: DL Reconstruction ---
+    contours = None
+    if tumor_mask is not None and np.any(tumor_mask):
+        contours = find_contours(tumor_mask, 0.5)
+
+    def _overlay_contours(ax):
+        if not contours:
+            return
+        for contour in contours:
+            ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
+
+    # --- Row 2: BRISKNet ---
     for i, frame_idx in enumerate(indices):
         img = recon_img_stack[:, :, frame_idx]
         axes[0, i].imshow(img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
-        axes[0, i].set_title(f"DL: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
+        _overlay_contours(axes[0, i])
+        axes[0, i].set_title(f"BRISKNet: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[0, i].axis('off')
 
     # --- Row 3: GRASP Reconstruction ---
     for i, frame_idx in enumerate(indices):
         img = grasp_img_stack[:, :, frame_idx]
         axes[1, i].imshow(img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        _overlay_contours(axes[1, i])
         axes[1, i].set_title(f"GRASP: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[1, i].axis('off')
 
@@ -1513,9 +1587,8 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
 
         if 'malignant' in mask and mask['malignant'].any() and plot_label is not None:
             
-            # --- Plot Spatial Quality at a Peak Enhancement Frame ---
-            # Find a frame around peak enhancement (e.g., 1/3 of the way through)
-            peak_frame = num_frames // 3
+            # --- Plot Spatial Quality at the central timepoint ---
+            peak_frame = num_frames // 2
             data_range = gt_mag_np[:, :, peak_frame].max() - gt_mag_np[:, :, peak_frame].min()
             plot_spatial_quality(
                 recon_img=recon_mag_np[:, :, peak_frame],
@@ -1528,6 +1601,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=True,
+                tumor_mask=masks_np.get("malignant"),
             )
 
             # --- Plot Temporal Curves for Key Regions ---
@@ -1570,6 +1644,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 filename=os.path.join(output_dir, f"time_points_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
+                tumor_mask=masks_np.get("malignant"),
             )
 
             print("Diagnostic plots saved.")
@@ -1635,9 +1710,8 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
 
         if 'malignant' in mask and mask['malignant'].any() and plot_label is not None:
             
-            # --- Plot Spatial Quality at a Peak Enhancement Frame ---
-            # Find a frame around peak enhancement (e.g., 1/3 of the way through)
-            peak_frame = num_frames // 3
+            # --- Plot Spatial Quality at the central timepoint ---
+            peak_frame = num_frames // 2
             data_range = gt_mag_np[:, :, peak_frame].max() - gt_mag_np[:, :, peak_frame].min()
             plot_spatial_quality(
                 recon_img=recon_mag_np[:, :, peak_frame],
@@ -1650,6 +1724,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=False,
+                tumor_mask=masks_np.get("malignant"),
             )
 
             # --- Plot Temporal Curves for Key Regions ---
@@ -1692,6 +1767,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 filename=os.path.join(output_dir, f"non_dro_time_points_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
+                tumor_mask=masks_np.get("malignant"),
             )
 
             print("Diagnostic plots saved.")
@@ -1816,9 +1892,8 @@ def eval_sample_no_grasp(kspace, csmap, ground_truth, x_recon, physics, mask, ac
     print("\nGenerating diagnostic plots...")
     if 'malignant' in mask and mask['malignant'].any() and label is not None:
         
-        # --- Plot Spatial Quality at a Peak Enhancement Frame ---
-        # Find a frame around peak enhancement (e.g., 1/3 of the way through)
-        peak_frame = num_frames // 3
+        # --- Plot Spatial Quality at the central timepoint ---
+        peak_frame = num_frames // 2
         data_range = gt_mag_np[:, :, peak_frame].max() - gt_mag_np[:, :, peak_frame].min()
 
         plot_single_temporal_curve(

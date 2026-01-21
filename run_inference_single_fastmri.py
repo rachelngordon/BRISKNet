@@ -465,6 +465,7 @@ def main():
                 model,
                 epoch="inference",
                 device=device,
+                norm=config["model"]["norm"],
             )
             raw_x_recon, _ = sliding_window_inference(
                 H,
@@ -483,6 +484,7 @@ def main():
                 model,
                 epoch="inference",
                 device=device,
+                norm=config["model"]["norm"],
             )
         else:
 

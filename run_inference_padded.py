@@ -85,6 +85,7 @@ def sliding_window_inference_padded(
     acceleration_encoding,
     start_timepoint_index,
     model, epoch, device,
+    norm: str = "both",
     pad_size: int = 0,
     pad_mode: str = "reflect",
     window_kind: str = "hann",
@@ -133,7 +134,7 @@ def sliding_window_inference_padded(
             sti = torch.tensor([sti_val], dtype=torch.float32, device=device)
 
         x_recon_chunk, adj_loss, *_ = model(
-            kspace_chunk, physics_chunk, csmap, acceleration_encoding, sti, epoch=epoch, norm="both"
+            kspace_chunk, physics_chunk, csmap, acceleration_encoding, sti, epoch=epoch, norm=norm
         )
         adj_losses.append(adj_loss.item())
 
@@ -379,6 +380,7 @@ def main():
                     model,
                     epoch="inference",
                     device=device,
+                    norm=config["model"]["norm"],
                     pad_size=eval_pad_size,
                     pad_mode=args.pad_mode,
                 )
@@ -399,6 +401,7 @@ def main():
                     model,
                     epoch="inference",
                     device=device,
+                    norm=config["model"]["norm"],
                     pad_size=eval_pad_size,
                     pad_mode=args.pad_mode,
                 )
@@ -420,6 +423,7 @@ def main():
                         model,
                         epoch="inference",
                         device=device,
+                        norm=config["model"]["norm"],
                         pad_size=eval_pad_size,
                         pad_mode=args.pad_mode,
                         offset=eval_offset,
@@ -441,6 +445,7 @@ def main():
                         model,
                         epoch="inference",
                         device=device,
+                        norm=config["model"]["norm"],
                         pad_size=eval_pad_size,
                         pad_mode=args.pad_mode,
                         offset=eval_offset,

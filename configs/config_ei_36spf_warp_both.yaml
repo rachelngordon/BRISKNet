@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 36
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 36
-  eval_spokes: 8
+  eval_timeframes: 8
+  eval_spokes: 36
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 8
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -75,7 +75,7 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: False
+    use_ei_loss: true
     mc_loss:
       weight: 10
       metric: "MAE"
@@ -84,25 +84,33 @@ model:
       temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
-      weight: 0
+      weight: 40000
       warmup: 25
       duration: 10000
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
-      warp_ratio_min: 0.6
-      warp_ratio_max: 0.95
+      warp_ratio_min: 0.8
+      warp_ratio_max: 1.2
       no_grad: false
+      checkpoint_model: false
+      checkpoint_mode: "inner"
+      checkpoint_use_reentrant: false
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 200
+  epochs: 50
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: True
-  edge_time_index_sampling: false
+  ddp_find_unused_parameters: true
+  ddp_set_static_graph: false
+  amp:
+    enabled: False
+    dtype: "bf16"
+    use_grad_scaler: False
   curriculum_learning:
     enabled: False
     phases:

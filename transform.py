@@ -404,13 +404,35 @@ class MonophasicTimeWarp(Transform):
     :param tuple[float, float] warp_ratio_range: The min/max ratio for
         compressing/stretching the enhancement phase. e.g., (0.7, 1.3).
         Values < 1 compress time, values > 1 stretch time.
+    :param str pre_contrast_baseline: Baseline strategy for the pre-contrast frame.
+        "first_frame" keeps t=0; "n_frames" uses the mean of the first
+        round(0.1*T) frames, clamped to [4, 10]; "m_seconds" uses the mean
+        of the first round(m / (150 / T)) frames.
+    :param float baseline_seconds: Baseline window in seconds used when
+        pre_contrast_baseline="m_seconds".
+    :param int buffer_frames: Number of frames to freeze immediately after the
+        pre-contrast frame (k=0 disables the buffer).
     """
-    def __init__(self, *args, warp_ratio_range: tuple[float, float] = (0.7, 1.3), **kwargs):
+    def __init__(
+        self,
+        *args,
+        warp_ratio_range: tuple[float, float] = (0.7, 1.3),
+        pre_contrast_baseline: str = "first_frame",
+        warp_baseline: str | None = None,
+        baseline_seconds: float = 20.0,
+        buffer_frames: int = 0,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.flatten_video_input = False
         min_r, max_r = warp_ratio_range
         assert 0.0 < min_r <= max_r, "warp_ratio_range must be a valid positive range."
         self.warp_ratio_range = warp_ratio_range
+        if warp_baseline is not None:
+            pre_contrast_baseline = warp_baseline
+        self.pre_contrast_baseline = pre_contrast_baseline
+        self.baseline_seconds = float(baseline_seconds)
+        self.buffer_frames = max(0, int(buffer_frames))
 
     def _get_params(self, x: torch.Tensor) -> dict:
         """
@@ -430,15 +452,30 @@ class MonophasicTimeWarp(Transform):
 
         output_list = []
         for ratio in ratios:
-            # 1. Isolate the pre-contrast frame (t=0) and the enhancement phase (t=1 onwards)
-            pre_contrast_frame = x[:, :, :1, :, :]
-            enhancement_phase = x[:, :, 1:, :, :]
+            # 1. Isolate the pre-contrast frame and the enhancement phase
+            if self.pre_contrast_baseline == "n_frames":
+                T = x.shape[2]
+                n_base = int(round(0.1 * T))
+                n_base = max(4, min(10, n_base))
+                n_base = min(n_base, T)
+                pre_contrast_frame = x[:, :, :n_base, :, :].mean(dim=2, keepdim=True)
+            elif self.pre_contrast_baseline == "m_seconds":
+                T = x.shape[2]
+                seconds_per_frame = 150.0 / max(T, 1)
+                n_base = int(round(self.baseline_seconds / seconds_per_frame))
+                n_base = max(1, min(n_base, T))
+                pre_contrast_frame = x[:, :, :n_base, :, :].mean(dim=2, keepdim=True)
+            else:
+                pre_contrast_frame = x[:, :, :1, :, :]
+            buffer_len = min(self.buffer_frames, max(0, x.shape[2] - 1))
+            buffer_frames = x[:, :, 1:1 + buffer_len, :, :]
+            enhancement_phase = x[:, :, 1 + buffer_len:, :, :]
 
             # 2. Warp the enhancement phase
             warped_enhancement_phase = self._warp_phase(enhancement_phase, ratio)
 
             # 3. Reassemble the video
-            new_x = torch.cat([pre_contrast_frame, warped_enhancement_phase], dim=2)
+            new_x = torch.cat([pre_contrast_frame, buffer_frames, warped_enhancement_phase], dim=2)
             output_list.append(new_x)
 
         return torch.cat(output_list, dim=0)
@@ -470,6 +507,100 @@ class MonophasicTimeWarp(Transform):
         warped_phase = rearrange(resized_flat, "b (c h w) t -> b c t h w", c=C, h=H, w=W)
         return warped_phase
 
+
+class TemporalShiftJitterAfterBaseline(Transform):
+    r"""
+    Applies a discrete temporal shift to the enhancement phase only, keeping the
+    pre-contrast baseline fixed. The enhancement phase is edge-padded by repeating
+    the first/last enhancement frame to preserve length and intensity scale.
+
+    :param int max_shift: Maximum absolute frame shift (in frames). The shift is
+        sampled uniformly from [-max_shift, max_shift].
+    :param str pre_contrast_baseline: Baseline strategy for the pre-contrast frame.
+        "first_frame" keeps t=0; "n_frames" uses the mean of the first
+        round(0.1*T) frames, clamped to [4, 10]; "m_seconds" uses the mean
+        of the first round(m / (150 / T)) frames.
+    :param float baseline_seconds: Baseline window in seconds used when
+        pre_contrast_baseline="m_seconds".
+    :param int buffer_frames: Number of frames to freeze immediately after the
+        pre-contrast frame (k=0 disables the buffer).
+    """
+    def __init__(
+        self,
+        *args,
+        max_shift: int = 2,
+        pre_contrast_baseline: str = "first_frame",
+        baseline_seconds: float = 20.0,
+        buffer_frames: int = 0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.flatten_video_input = False
+        self.max_shift = max(0, int(max_shift))
+        self.pre_contrast_baseline = pre_contrast_baseline
+        self.baseline_seconds = float(baseline_seconds)
+        self.buffer_frames = max(0, int(buffer_frames))
+
+    def _get_params(self, x: torch.Tensor) -> dict:
+        if self.max_shift == 0:
+            shifts = [torch.tensor(0, device=x.device) for _ in range(self.n_trans)]
+        else:
+            shifts = [
+                torch.randint(
+                    low=-self.max_shift,
+                    high=self.max_shift + 1,
+                    size=(1,),
+                    generator=self.rng,
+                    device="cpu",
+                )[0].to(x.device)
+                for _ in range(self.n_trans)
+            ]
+        return {"shifts": shifts}
+
+    def _transform(self, x: torch.Tensor, shifts: list[torch.Tensor], **kwargs) -> torch.Tensor:
+        assert x.shape[0] == 1, "This transform assumes a batch size of 1 for the input."
+        if x.shape[2] <= 1:
+            return x.repeat(self.n_trans, 1, 1, 1, 1)
+
+        T = x.shape[2]
+        if self.pre_contrast_baseline == "n_frames":
+            n_base = int(round(0.1 * T))
+            n_base = max(4, min(10, n_base))
+            n_base = min(n_base, T)
+        elif self.pre_contrast_baseline == "m_seconds":
+            seconds_per_frame = 150.0 / max(T, 1)
+            n_base = int(round(self.baseline_seconds / seconds_per_frame))
+            n_base = max(1, min(n_base, T))
+        else:
+            n_base = 1
+
+        if T - n_base <= 1:
+            return x.repeat(self.n_trans, 1, 1, 1, 1)
+
+        buffer_len = min(self.buffer_frames, max(0, T - n_base))
+        baseline = x[:, :, :n_base, :, :]
+        buffer_frames = x[:, :, n_base:n_base + buffer_len, :, :]
+        enh = x[:, :, n_base + buffer_len:, :, :]
+
+        if enh.shape[2] <= 1:
+            return x.repeat(self.n_trans, 1, 1, 1, 1)
+
+        output_list = []
+        for shift in shifts:
+            shift_val = int(shift.item())
+            if shift_val > 0:
+                tail = enh[:, :, -1:, :, :].repeat(1, 1, shift_val, 1, 1)
+                enh_shifted = torch.cat([enh[:, :, shift_val:, :, :], tail], dim=2)
+            elif shift_val < 0:
+                pad = enh[:, :, :1, :, :].repeat(1, 1, -shift_val, 1, 1)
+                enh_shifted = torch.cat([pad, enh[:, :, :shift_val, :, :]], dim=2)
+            else:
+                enh_shifted = enh
+
+            new_x = torch.cat([baseline, buffer_frames, enh_shifted], dim=2)
+            output_list.append(new_x)
+
+        return torch.cat(output_list, dim=0)
 
 
 class TemporalNoise(Transform):

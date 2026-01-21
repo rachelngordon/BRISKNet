@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "mc_baseline_8spf_no_flip"
-    config_path = 'configs/config_mc.yaml'
+    job_name = "ei_warp_36spf_Lkernel337"
+    config_path = 'configs/config_ei_36spf_larger_kernel.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
