@@ -20,7 +20,6 @@ from scipy.stats import mannwhitneyu
 from skimage.metrics import structural_similarity as ssim_map_func
 import matplotlib.gridspec as gridspec
 from skimage.measure import find_contours
-from matplotlib.colors import TwoSlopeNorm
 from typing import List, Dict, Optional, Tuple, Callable
 from scipy.stats import pearsonr
 import nibabel as nib
@@ -93,16 +92,6 @@ def normalize_for_lpips(image, data_range):
     # Scale to [-1, 1]
     image_minus1_1 = 2 * image_0_1 - 1
     return image_minus1_1
-
-
-def high_signal_selector(gt_img, q=70):
-    x = gt_img.astype(np.float32)
-    nz = x[x > 0]
-    if nz.size < 100:
-        thr = np.percentile(x, q)
-    else:
-        thr = np.percentile(nz, q)
-    return x >= thr
 
 
 def calc_image_metrics(input, reference, data_range, device):
@@ -682,10 +671,6 @@ def plot_spatial_quality(
         for contour in contours:
             ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
 
-    tissue_sel = high_signal_selector(gt_img, q=70)
-    if not np.any(tissue_sel):
-        tissue_sel = np.ones_like(gt_img, dtype=bool)
-
     vmin_window, vmax_window = robust_window_multi(
         [gt_img, recon_img, grasp_img],
         p_low=1,
@@ -740,18 +725,12 @@ def plot_spatial_quality(
         _overlay_contours(axes[0, 1])
         axes[0, 1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
-        err_vals = error_map_dl[tissue_sel]
-        v = np.percentile(np.abs(err_vals), 99)
-        err_norm = TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
-        im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', norm=err_norm)
+        im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
         axes[0, 2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
         cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
         cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
-        ssim_vals = ssim_map_dl[tissue_sel]
-        ssim_vmin = np.percentile(ssim_vals, 1)
-        ssim_vmax = np.percentile(ssim_vals, 99)
-        im_ssim_dl = axes[0, 3].imshow(ssim_map_dl, cmap='viridis', vmin=ssim_vmin, vmax=ssim_vmax)
+        im_ssim_dl = axes[0, 3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
         axes[0, 3].set_title(
             f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
             fontsize=PLOT_FONT_SIZES["title"],
@@ -768,18 +747,12 @@ def plot_spatial_quality(
         _overlay_contours(axes[1, 1])
         axes[1, 1].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
-        err_vals_grasp = error_map_grasp[tissue_sel]
-        v_grasp = np.percentile(np.abs(err_vals_grasp), 99)
-        err_norm_grasp = TwoSlopeNorm(vmin=-v_grasp, vcenter=0.0, vmax=v_grasp)
-        im_err_grasp = axes[1, 2].imshow(error_map_grasp, cmap='coolwarm', norm=err_norm_grasp)
+        im_err_grasp = axes[1, 2].imshow(error_map_grasp, cmap='coolwarm', vmin=-0.5, vmax=0.5)
         axes[1, 2].set_title("GRASP Error Map", fontsize=PLOT_FONT_SIZES["title"])
         cb_err_grasp = fig.colorbar(im_err_grasp, cax=cax_err_grasp)
         cb_err_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
-        ssim_vals_grasp = ssim_map_grasp[tissue_sel]
-        ssim_vmin_grasp = np.percentile(ssim_vals_grasp, 1)
-        ssim_vmax_grasp = np.percentile(ssim_vals_grasp, 99)
-        im_ssim_grasp = axes[1, 3].imshow(ssim_map_grasp, cmap='viridis', vmin=ssim_vmin_grasp, vmax=ssim_vmax_grasp)
+        im_ssim_grasp = axes[1, 3].imshow(ssim_map_grasp, cmap='viridis', vmin=0, vmax=1)
         axes[1, 3].set_title(
             f"GRASP SSIM Map (SSIM: {round(ssim_grasp, 3)})",
             fontsize=PLOT_FONT_SIZES["title"],
@@ -817,11 +790,11 @@ def plot_spatial_quality(
         top_axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         _overlay_contours(top_axes[1])
         top_axes[1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
-        top_axes[2].imshow(error_map_dl, cmap='coolwarm', norm=err_norm)
+        top_axes[2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
         top_axes[2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
         top_cb_err = top_fig.colorbar(top_axes[2].images[0], cax=top_cax_err)
         top_cb_err.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
-        top_axes[3].imshow(ssim_map_dl, cmap='viridis', vmin=ssim_vmin, vmax=ssim_vmax)
+        top_axes[3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
         top_axes[3].set_title(
             f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
             fontsize=PLOT_FONT_SIZES["title"],
@@ -886,18 +859,12 @@ def plot_spatial_quality(
     _overlay_contours(axes[1])
     axes[1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
 
-    err_vals = error_map[tissue_sel]
-    v = np.percentile(np.abs(err_vals), 99)
-    err_norm = TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
-    im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', norm=err_norm)
+    im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', vmin=vmin, vmax=vmax)
     axes[2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
     cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
     cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
-    ssim_vals = ssim_map[tissue_sel]
-    ssim_vmin = np.percentile(ssim_vals, 1)
-    ssim_vmax = np.percentile(ssim_vals, 99)
-    im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=ssim_vmin, vmax=ssim_vmax)
+    im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=vmin_ssim, vmax=vmax_ssim)
     axes[3].set_title(
         f"SSIM Map (SSIM: {round(ssim, 3)})",
         fontsize=PLOT_FONT_SIZES["title"],
