@@ -730,6 +730,8 @@ class LSFPNet(nn.Module):
 
     
     def plot_block_output(self, M0, L, S, iter, epoch, output_dir):
+        if not output_dir:
+            return
 
         time_frame_index = 3
 

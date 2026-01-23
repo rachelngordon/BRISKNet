@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 8
+  timeframes: 18
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 8
-  eval_spokes: 36
+  eval_timeframes: 18
+  eval_spokes: 16
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 36
+  train_spokes_per_frame: 16
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -81,9 +81,9 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "shift_jitter"
-      spatial_transform: "all"
-      rotate_range: 20
+      temporal_transform: "none"
+      spatial_transform: "rotate"
+      rotate_range: 60
       weight: 40000
       warmup: 25
       duration: 10000
@@ -91,10 +91,6 @@ model:
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
-      pre_contrast_baseline: "m_seconds"
-      baseline_seconds: 20
-      buffer_frames: 0
-      shift_jitter_max_shift: 2
       no_grad: false
       checkpoint_model: false
       checkpoint_mode: "inner"
@@ -104,7 +100,7 @@ model:
 
 # Training settings
 training:
-  epochs: 100
+  epochs: 250
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

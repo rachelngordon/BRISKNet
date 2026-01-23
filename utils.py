@@ -593,6 +593,11 @@ def load_checkpoint(model, optimizer, filename):
         "eval_raw_dc_mses": ckpt.get("eval_raw_dc_mses", []),
         "eval_raw_dc_maes": ckpt.get("eval_raw_dc_maes", []),
         "eval_curve_corrs": ckpt.get("eval_curve_corrs", []),
+        "eval_temporal_epochs": ckpt.get("eval_temporal_epochs", []),
+        "eval_curve_maes": ckpt.get("eval_curve_maes", []),
+        "eval_ttae_secs": ckpt.get("eval_ttae_secs", []),
+        "eval_iauc10_errs": ckpt.get("eval_iauc10_errs", []),
+        "eval_peak_errs": ckpt.get("eval_peak_errs", []),
         "eval_spf_curves": ckpt.get("eval_spf_curves", {}),
     }
 

@@ -26,6 +26,8 @@ import nibabel as nib
 import pandas as pd
 from functools import lru_cache
 from cluster_paths import _swap_base
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 
 
 TUMOR_SEG_ROOT = os.environ.get("TUMOR_SEG_ROOT", "/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations_lcr")
@@ -671,8 +673,13 @@ def plot_spatial_quality(
         for contour in contours:
             ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
 
+    if plot_dro:
+        window_images = [gt_img, recon_img, grasp_img]
+    else:
+        window_images = [recon_img, grasp_img]
+
     vmin_window, vmax_window = robust_window_multi(
-        [gt_img, recon_img, grasp_img],
+        window_images,
         p_low=1,
         p_high=99.5,
     )
@@ -700,15 +707,15 @@ def plot_spatial_quality(
         axes[0, 0] = fig.add_subplot(gs[0, 0])
         axes[0, 1] = fig.add_subplot(gs[0, 1])
         axes[0, 2] = fig.add_subplot(gs[0, 2])
-        cax_err_dl = fig.add_subplot(gs[0, 3])
+        # cax_err_dl = fig.add_subplot(gs[0, 3])
         axes[0, 3] = fig.add_subplot(gs[0, 4])
-        cax_ssim_dl = fig.add_subplot(gs[0, 5])
+        # cax_ssim_dl = fig.add_subplot(gs[0, 5])
         axes[1, 0] = fig.add_subplot(gs[1, 0])
         axes[1, 1] = fig.add_subplot(gs[1, 1])
         axes[1, 2] = fig.add_subplot(gs[1, 2])
-        cax_err_grasp = fig.add_subplot(gs[1, 3])
+        # cax_err_grasp = fig.add_subplot(gs[1, 3])
         axes[1, 3] = fig.add_subplot(gs[1, 4])
-        cax_ssim_grasp = fig.add_subplot(gs[1, 5])
+        # cax_ssim_grasp = fig.add_subplot(gs[1, 5])
         fig.suptitle(
             f"Spatial Quality Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}",
             fontsize=PLOT_FONT_SIZES["suptitle"],
@@ -719,46 +726,87 @@ def plot_spatial_quality(
 
         axes[0, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         _overlay_contours(axes[0, 0])
-        axes[0, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
+        axes[0, 0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
 
         axes[0, 1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         _overlay_contours(axes[0, 1])
-        axes[0, 1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+        axes[0, 1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
 
         im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-        axes[0, 2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
-        cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
-        cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        axes[0, 2].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
+
+        div = make_axes_locatable(axes[0, 2])
+        cax_err = div.append_axes("right", size="4%", pad=0.04)
+        cb_err = fig.colorbar(im_err_dl, cax=cax_err)
+        cb_err.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        cb_err.set_label(r"$|\mathrm{BRISKNet}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["tick"])
+
+
+        # cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
+        # cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        # cb_err_dl.set_label(
+        #     r"$|\mathrm{BRISKNet}| - |\mathrm{DRO}|$",
+        #     fontsize=PLOT_FONT_SIZES["tick"]
+        # )
+
 
         im_ssim_dl = axes[0, 3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
         axes[0, 3].set_title(
-            f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            # f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            r"$\mathrm{SSIM}_{\mathrm{BRISKNet}}$",
             fontsize=PLOT_FONT_SIZES["title"],
         )
-        cb_ssim_dl = fig.colorbar(im_ssim_dl, cax=cax_ssim_dl)
-        cb_ssim_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+
+        div = make_axes_locatable(axes[0, 3])
+        cax_ssim = div.append_axes("right", size="4%", pad=0.04)
+        cb_ssim = fig.colorbar(im_ssim_dl, cax=cax_ssim)
+        cb_ssim.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        cb_ssim.set_label(r"$\mathrm{SSIM}$", fontsize=PLOT_FONT_SIZES["tick"])
+
+        # cb_ssim_dl = fig.colorbar(im_ssim_dl, cax=cax_ssim_dl)
+        # cb_ssim_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        # cb_ssim_dl.set_label(
+        #     r"$\mathrm{SSIM}$",
+        #     fontsize=PLOT_FONT_SIZES["tick"]
+        # )
+
 
         # --- Bottom Row: GRASP Reconstruction Comparison ---
         axes[1, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         _overlay_contours(axes[1, 0])
-        axes[1, 0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
+        axes[1, 0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
 
         axes[1, 1].imshow(grasp_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         _overlay_contours(axes[1, 1])
-        axes[1, 1].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+        axes[1, 1].set_title(r"$|\mathrm{GRASP}|$", fontsize=PLOT_FONT_SIZES["title"])
 
         im_err_grasp = axes[1, 2].imshow(error_map_grasp, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-        axes[1, 2].set_title("GRASP Error Map", fontsize=PLOT_FONT_SIZES["title"])
+        axes[1, 2].set_title(r"$|\mathrm{GRASP}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
+
+        div = make_axes_locatable(axes[1, 2])
+        cax_err_grasp = div.append_axes("right", size="4%", pad=0.04)
         cb_err_grasp = fig.colorbar(im_err_grasp, cax=cax_err_grasp)
         cb_err_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        cb_err_grasp.set_label(r"$|\mathrm{GRASP}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["tick"])
+
+        # cb_err_grasp = fig.colorbar(im_err_grasp, cax=cax_err_grasp)
+        # cb_err_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
 
         im_ssim_grasp = axes[1, 3].imshow(ssim_map_grasp, cmap='viridis', vmin=0, vmax=1)
         axes[1, 3].set_title(
-            f"GRASP SSIM Map (SSIM: {round(ssim_grasp, 3)})",
+            # f"GRASP SSIM Map (SSIM: {round(ssim_grasp, 3)})",
+            r"$\mathrm{SSIM}_{\mathrm{GRASP}}$",
             fontsize=PLOT_FONT_SIZES["title"],
         )
+
+        div = make_axes_locatable(axes[1, 3])
+        cax_ssim_grasp = div.append_axes("right", size="4%", pad=0.04)
         cb_ssim_grasp = fig.colorbar(im_ssim_grasp, cax=cax_ssim_grasp)
         cb_ssim_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        cb_ssim_grasp.set_label(r"$\mathrm{SSIM}$", fontsize=PLOT_FONT_SIZES["tick"])
+
+        # cb_ssim_grasp = fig.colorbar(im_ssim_grasp, cax=cax_ssim_grasp)
+        # cb_ssim_grasp.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
         
         # Turn off axes for all plots
         for ax in axes.flat:
@@ -771,36 +819,41 @@ def plot_spatial_quality(
         top_fig = plt.figure(figsize=(24, 6))
         top_gs = gridspec.GridSpec(
             1,
-            6,
+            4,
             figure=top_fig,
-            width_ratios=[1, 1, 1, 0.07, 1, 0.07],
+            width_ratios=[1, 1, 1, 1],
             wspace=0.24,
         )
         top_axes = np.empty(4, dtype=object)
         top_axes[0] = top_fig.add_subplot(top_gs[0, 0])
         top_axes[1] = top_fig.add_subplot(top_gs[0, 1])
         top_axes[2] = top_fig.add_subplot(top_gs[0, 2])
-        top_cax_err = top_fig.add_subplot(top_gs[0, 3])
-        top_axes[3] = top_fig.add_subplot(top_gs[0, 4])
-        top_cax_ssim = top_fig.add_subplot(top_gs[0, 5])
+        top_axes[3] = top_fig.add_subplot(top_gs[0, 3])
 
         top_axes[0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         _overlay_contours(top_axes[0])
-        top_axes[0].set_title("Ground Truth", fontsize=PLOT_FONT_SIZES["title"])
+        top_axes[0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
         top_axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
         _overlay_contours(top_axes[1])
-        top_axes[1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+        top_axes[1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
         top_axes[2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
-        top_axes[2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
+        top_axes[2].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
+        div = make_axes_locatable(top_axes[2])
+        top_cax_err = div.append_axes("right", size="4%", pad=0.04)
         top_cb_err = top_fig.colorbar(top_axes[2].images[0], cax=top_cax_err)
         top_cb_err.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        top_cb_err.set_label(r"$|\mathrm{BRISKNet}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["tick"])
         top_axes[3].imshow(ssim_map_dl, cmap='viridis', vmin=0, vmax=1)
         top_axes[3].set_title(
-            f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            # f"SSIM Map (SSIM: {round(ssim_dl, 3)})",
+            r"$|\mathrm{SSIM}_{\mathrm{BRISKNet}}|$",
             fontsize=PLOT_FONT_SIZES["title"],
         )
+        div = make_axes_locatable(top_axes[3])
+        top_cax_ssim = div.append_axes("right", size="4%", pad=0.04)
         top_cb_ssim = top_fig.colorbar(top_axes[3].images[0], cax=top_cax_ssim)
         top_cb_ssim.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        top_cb_ssim.set_label(r"$\mathrm{SSIM}$", fontsize=PLOT_FONT_SIZES["tick"])
 
         for ax in top_axes.flat:
             ax.axis('off')
@@ -831,18 +884,16 @@ def plot_spatial_quality(
     fig = plt.figure(figsize=(24, 6))
     gs = gridspec.GridSpec(
         1,
-        6,
+        4,
         figure=fig,
-        width_ratios=[1, 1, 1, 0.05, 1, 0.05],
+        width_ratios=[1, 1, 1, 1],
         wspace=0.16,
     )
     axes = np.empty(4, dtype=object)
     axes[0] = fig.add_subplot(gs[0, 0])
     axes[1] = fig.add_subplot(gs[0, 1])
     axes[2] = fig.add_subplot(gs[0, 2])
-    cax_err_dl = fig.add_subplot(gs[0, 3])
-    axes[3] = fig.add_subplot(gs[0, 4])
-    cax_ssim_dl = fig.add_subplot(gs[0, 5])
+    axes[3] = fig.add_subplot(gs[0, 3])
     fig.suptitle(
         f"BRISKNet vs GRASP Comparison at Time Frame {time_frame_index} with AF {acceleration} and SPF {spokes_per_frame}",
         fontsize=PLOT_FONT_SIZES["suptitle"],
@@ -853,24 +904,31 @@ def plot_spatial_quality(
 
     axes[0].imshow(grasp_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
     _overlay_contours(axes[0])
-    axes[0].set_title("GRASP Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+    axes[0].set_title(r"$|\mathrm{GRASP}|$", fontsize=PLOT_FONT_SIZES["title"])
 
     axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
     _overlay_contours(axes[1])
-    axes[1].set_title("BRISKNet Reconstruction", fontsize=PLOT_FONT_SIZES["title"])
+    axes[1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
 
     im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', vmin=vmin, vmax=vmax)
-    axes[2].set_title("Error Map", fontsize=PLOT_FONT_SIZES["title"])
+    axes[2].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}| - |\mathrm{GRASP}|$", fontsize=PLOT_FONT_SIZES["title"])
+    div = make_axes_locatable(axes[2])
+    cax_err_dl = div.append_axes("right", size="4%", pad=0.04)
     cb_err_dl = fig.colorbar(im_err_dl, cax=cax_err_dl)
     cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+    # cb_err_dl.set_label(r"$|\mathrm{BRISKNet}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["tick"])
 
     im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=vmin_ssim, vmax=vmax_ssim)
     axes[3].set_title(
-        f"SSIM Map (SSIM: {round(ssim, 3)})",
+        # f"SSIM Map (SSIM: {round(ssim, 3)})",
+        r"$|\mathrm{SSIM}_{\mathrm{BRISKNet}}|$",
         fontsize=PLOT_FONT_SIZES["title"],
     )
+    div = make_axes_locatable(axes[3])
+    cax_ssim_dl = div.append_axes("right", size="4%", pad=0.04)
     cb_ssim_dl = fig.colorbar(im_ssim_dl, cax=cax_ssim_dl)
     cb_ssim_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+    # cb_ssim_dl.set_label(r"$\mathrm{SSIM}$", fontsize=PLOT_FONT_SIZES["tick"])
     
     # Turn off axes for all plots
     for ax in axes.flat:
@@ -948,7 +1006,7 @@ def plot_temporal_curves(
 
         # Plot
         if plot_dro:
-            axes[i].plot(time_points, gt_curve, 'k-', label='Ground Truth', linewidth=2, marker='o')
+            axes[i].plot(time_points, gt_curve, 'k-', label='DRO', linewidth=2, marker='o')
 
         axes[i].plot(time_points, recon_curve, 'r--', label='BRISKNet', marker='o')
         axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
@@ -982,6 +1040,7 @@ def plot_temporal_curves_normalized(
     filename: str,
     acceleration: float,
     spokes_per_frame: int,
+    plot_dro: bool = True,
 ):
     """
     Plots baseline-subtracted mean signal vs. time for different tissue regions.
@@ -1015,7 +1074,8 @@ def plot_temporal_curves_normalized(
         recon_curve = recon_curve - np.nanmean(recon_curve[:n_baseline])
         grasp_curve = grasp_curve - np.nanmean(grasp_curve[:n_baseline])
 
-        axes[i].plot(time_points, gt_curve, 'k-', label='Ground Truth', linewidth=2, marker='o')
+        if plot_dro:
+            axes[i].plot(time_points, gt_curve, 'k-', label='DRO', linewidth=2, marker='o')
         axes[i].plot(time_points, recon_curve, 'r--', label='BRISKNet', marker='o')
         axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
         axes[i].set_title(f"{region.capitalize()}", fontsize=PLOT_FONT_SIZES["title"])
@@ -1716,6 +1776,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 filename=os.path.join(output_dir, f"non_dro_temporal_curves_normalized_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
+                plot_dro=False,
             )
 
             plot_single_temporal_curve(

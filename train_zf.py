@@ -38,7 +38,8 @@ def setup():
     dist.init_process_group("nccl")
 
 def cleanup():
-    dist.destroy_process_group()
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
 
 def _load_run_state(run_state_path):
     if not os.path.exists(run_state_path):
@@ -130,8 +131,10 @@ def main():
     # create output directories
     output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
     eval_dir = os.path.join(output_dir, "eval_results")
-    block_dir = os.path.join(output_dir, "block_outputs")
-    ec_dir = os.path.join(output_dir, 'enhancement_curves')
+    save_block_outputs = config.get("debugging", {}).get("save_block_outputs", False)
+    save_enhancement_curves = config.get("debugging", {}).get("save_enhancement_curve_pngs", False)
+    block_dir = os.path.join(output_dir, "block_outputs") if save_block_outputs else None
+    ec_dir = os.path.join(output_dir, "enhancement_curves") if save_enhancement_curves else None
 
     attempt_start_time = time.time()
     attempt_peak_mem_gb = 0.0
@@ -194,8 +197,10 @@ def main():
         
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(eval_dir, exist_ok=True)
-        os.makedirs(block_dir, exist_ok=True)
-        os.makedirs(ec_dir, exist_ok=True)
+        if block_dir is not None:
+            os.makedirs(block_dir, exist_ok=True)
+        if ec_dir is not None:
+            os.makedirs(ec_dir, exist_ok=True)
 
         run_state = _load_run_state(run_state_path)
         attempt_idx = run_state.get("attempt_count", 0) + 1
@@ -500,10 +505,6 @@ def main():
         val_batch = next(iter(val_dro_loader))
         _, val_csmap, _, _, _, _, _, _, val_raw_csmaps = val_batch
 
-        print("val_csmap shape: ", val_csmap.shape)
-        print("val_raw_csmaps shape: ", val_raw_csmaps.shape)
-        print("val_csmap dtype: ", val_csmap.dtype)
-        print("val_raw_csmaps dtype: ", val_raw_csmaps.dtype)
         # print("val_csmap norm check: ", np.sum(np.abs(val_csmap[:, :, :, 100, 100])**2))
         # print("val_raw_csmaps norm check: ", np.sum(np.abs(val_raw_csmaps[:, :, :, 100, 100])**2))
 
@@ -730,6 +731,11 @@ def main():
         eval_raw_dc_mses = eval_curves.get("eval_raw_dc_mses", [])
         eval_raw_dc_maes = eval_curves.get("eval_raw_dc_maes", [])
         eval_curve_corrs = eval_curves["eval_curve_corrs"]
+        eval_temporal_epochs = eval_curves.get("eval_temporal_epochs", [])
+        eval_curve_maes = eval_curves.get("eval_curve_maes", [])
+        eval_ttae_secs = eval_curves.get("eval_ttae_secs", [])
+        eval_iauc10_errs = eval_curves.get("eval_iauc10_errs", [])
+        eval_peak_errs = eval_curves.get("eval_peak_errs", [])
     else:
         train_mc_losses = []
         val_mc_losses = []
@@ -749,6 +755,11 @@ def main():
         eval_raw_dc_mses = []
         eval_raw_dc_maes = []
         eval_curve_corrs = []
+        eval_temporal_epochs = []
+        eval_curve_maes = []
+        eval_ttae_secs = []
+        eval_iauc10_errs = []
+        eval_peak_errs = []
 
 
     eval_spf_curves = {}
@@ -817,6 +828,10 @@ def main():
         initial_eval_curve_corrs = []
         initial_eval_raw_dc_mses = []
         initial_eval_raw_dc_maes = []
+        initial_eval_curve_maes = []
+        initial_eval_ttae_secs = []
+        initial_eval_iauc10_errs = []
+        initial_eval_peak_errs = []
 
 
         with torch.no_grad():
@@ -982,7 +997,24 @@ def main():
                         grasp_dc_mses.append(dc_mse_grasp)
                         grasp_dc_maes.append(dc_mae_grasp)
     
-                        ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, _ = eval_sample(dro_kspace, csmap, ground_truth, x_recon, eval_physics, mask, dro_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=True, grasp_path=grasp_path, rescale=config['evaluation']['rescale'])
+                        ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = eval_sample(
+                            dro_kspace,
+                            csmap,
+                            ground_truth,
+                            x_recon,
+                            eval_physics,
+                            mask,
+                            dro_grasp_img,
+                            acceleration,
+                            int(N_spokes),
+                            eval_dir,
+                            label='val0',
+                            device=device,
+                            cluster=cluster,
+                            dro_eval=True,
+                            grasp_path=grasp_path,
+                            rescale=config['evaluation']['rescale'],
+                        )
                         initial_eval_ssims.append(ssim)
                         initial_eval_psnrs.append(psnr)
                         initial_eval_mses.append(mse)
@@ -993,6 +1025,19 @@ def main():
                         if recon_corr is not None:
                             initial_eval_curve_corrs.append(recon_corr)
                             grasp_curve_corrs.append(grasp_corr)
+                        if temporal_metrics:
+                            curve_mae = temporal_metrics.get("dl_all_curve_mae")
+                            ttae_sec = temporal_metrics.get("dl_all_ttae_sec")
+                            iauc10_err = temporal_metrics.get("dl_all_iauc10_err")
+                            peak_err = temporal_metrics.get("dl_all_peak_err")
+                            if curve_mae is not None and np.isfinite(curve_mae):
+                                initial_eval_curve_maes.append(curve_mae)
+                            if ttae_sec is not None and np.isfinite(ttae_sec):
+                                initial_eval_ttae_secs.append(ttae_sec)
+                            if iauc10_err is not None and np.isfinite(iauc10_err):
+                                initial_eval_iauc10_errs.append(iauc10_err)
+                            if peak_err is not None and np.isfinite(peak_err):
+                                initial_eval_peak_errs.append(peak_err)
     
                         # raw k-space eval
                         print("performing non-DRO eval...")
@@ -1032,6 +1077,10 @@ def main():
                 initial_eval_curve_corr = np.mean(initial_eval_curve_corrs)
                 initial_eval_raw_dc_mse = np.mean(initial_eval_raw_dc_mses)
                 initial_eval_raw_dc_mae = np.mean(initial_eval_raw_dc_maes)
+                initial_eval_curve_mae = np.mean(initial_eval_curve_maes) if initial_eval_curve_maes else np.nan
+                initial_eval_ttae_sec = np.mean(initial_eval_ttae_secs) if initial_eval_ttae_secs else np.nan
+                initial_eval_iauc10_err = np.mean(initial_eval_iauc10_errs) if initial_eval_iauc10_errs else np.nan
+                initial_eval_peak_err = np.mean(initial_eval_peak_errs) if initial_eval_peak_errs else np.nan
 
                 eval_ssims.append(initial_eval_ssim)
                 eval_psnrs.append(initial_eval_psnr)
@@ -1042,6 +1091,11 @@ def main():
                 eval_raw_dc_mses.append(initial_eval_raw_dc_mse) 
                 eval_raw_dc_maes.append(initial_eval_raw_dc_mae) 
                 eval_curve_corrs.append(initial_eval_curve_corr)
+                eval_temporal_epochs.append(0)
+                eval_curve_maes.append(initial_eval_curve_mae)
+                eval_ttae_secs.append(initial_eval_ttae_sec)
+                eval_iauc10_errs.append(initial_eval_iauc10_err)
+                eval_peak_errs.append(initial_eval_peak_err)
 
                 spf_key = int(N_spokes_eval)
                 if spf_key in eval_spf_curves:
@@ -1063,6 +1117,14 @@ def main():
                     writer.add_scalar('Metric/RAW_DC_MSE', initial_eval_raw_dc_mse, 0)
                     writer.add_scalar('Metric/RAW_DC_MAE', initial_eval_raw_dc_mae, 0)
                     writer.add_scalar('Metric/EC_Corr', initial_eval_curve_corr, 0)
+                    if np.isfinite(initial_eval_curve_mae):
+                        writer.add_scalar('Metric/Temporal_Curve_MAE', initial_eval_curve_mae, 0)
+                    if np.isfinite(initial_eval_ttae_sec):
+                        writer.add_scalar('Metric/Temporal_TTAE_sec', initial_eval_ttae_sec, 0)
+                    if np.isfinite(initial_eval_iauc10_err):
+                        writer.add_scalar('Metric/Temporal_IAUC10_err', initial_eval_iauc10_err, 0)
+                    if np.isfinite(initial_eval_peak_err):
+                        writer.add_scalar('Metric/Temporal_Peak_err', initial_eval_peak_err, 0)
 
         print(f"Step 0 Train Losses: MC: {step0_train_mc_loss}, EI: {step0_train_ei_loss}, Adj: {step0_train_adj_loss}")
         if step0_do_val:
@@ -1109,6 +1171,10 @@ def main():
             epoch_eval_curve_corrs = []
             epoch_eval_raw_dc_mses = []
             epoch_eval_raw_dc_maes = []
+            epoch_eval_curve_maes = []
+            epoch_eval_ttae_secs = []
+            epoch_eval_iauc10_errs = []
+            epoch_eval_peak_errs = []
 
 
             train_loader_tqdm = tqdm(
@@ -1349,9 +1415,13 @@ def main():
 
                     x_recon_reshaped = rearrange(x_recon, 'b c h w t -> b c t h w')
 
-                    plot_enhancement_curve(
-                        x_recon_reshaped,
-                        output_filename = os.path.join(output_dir, 'enhancement_curves', f'train_sample_enhancement_curve_epoch_{epoch}.png'))
+                    if ec_dir is not None:
+                        plot_enhancement_curve(
+                            x_recon_reshaped,
+                            output_filename=os.path.join(
+                                ec_dir, f"train_sample_enhancement_curve_epoch_{epoch}.png"
+                            ),
+                        )
                     
                     if use_ei_loss:
 
@@ -1475,16 +1545,46 @@ def main():
 
                             ## Evaluation
                             if global_rank == 0 or not config['training']['multigpu']:
-                                ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, _, _ = eval_sample(val_dro_kspace_batch, val_csmap, val_ground_truth, val_x_recon, eval_physics, val_mask, val_dro_grasp_img, acceleration, int(N_spokes), eval_dir, f'epoch{epoch}', device, cluster=cluster, dro_eval=True, grasp_path=grasp_path, rescale=config['evaluation']['rescale'])
+                                ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, _, temporal_metrics = eval_sample(
+                                    val_dro_kspace_batch,
+                                    val_csmap,
+                                    val_ground_truth,
+                                    val_x_recon,
+                                    eval_physics,
+                                    val_mask,
+                                    val_dro_grasp_img,
+                                    acceleration,
+                                    int(N_spokes),
+                                    eval_dir,
+                                    f'epoch{epoch}',
+                                    device,
+                                    cluster=cluster,
+                                    dro_eval=True,
+                                    grasp_path=grasp_path,
+                                    rescale=config['evaluation']['rescale'],
+                                )
                                 epoch_eval_ssims.append(ssim)
                                 epoch_eval_psnrs.append(psnr)
                                 epoch_eval_mses.append(mse)
                                 epoch_eval_lpipses.append(lpips)
                                 epoch_eval_dc_mses.append(dc_mse)
                                 epoch_eval_dc_maes.append(dc_mae)
-
+                                
                                 if recon_corr is not None:
                                     epoch_eval_curve_corrs.append(recon_corr)
+                                if temporal_metrics:
+                                    curve_mae = temporal_metrics.get("dl_all_curve_mae")
+                                    ttae_sec = temporal_metrics.get("dl_all_ttae_sec")
+                                    iauc10_err = temporal_metrics.get("dl_all_iauc10_err")
+                                    peak_err = temporal_metrics.get("dl_all_peak_err")
+                                    if curve_mae is not None and np.isfinite(curve_mae):
+                                        epoch_eval_curve_maes.append(curve_mae)
+                                    if ttae_sec is not None and np.isfinite(ttae_sec):
+                                        epoch_eval_ttae_secs.append(ttae_sec)
+                                    if iauc10_err is not None and np.isfinite(iauc10_err):
+                                        epoch_eval_iauc10_errs.append(iauc10_err)
+                                    if peak_err is not None and np.isfinite(peak_err):
+                                        epoch_eval_peak_errs.append(peak_err)
 
                                 # raw k-space eval
                                 dc_mse_raw, dc_mae_raw, _ = eval_sample(val_raw_kspace, val_raw_csmaps, val_ground_truth, val_raw_x_recon, eval_physics, val_mask, val_raw_grasp_img, acceleration, int(N_spokes), eval_dir, label=f'epoch{epoch}', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
@@ -1517,6 +1617,10 @@ def main():
                     epoch_eval_curve_corr = np.mean(epoch_eval_curve_corrs)
                     epoch_eval_raw_dc_mse = np.mean(epoch_eval_raw_dc_mses)
                     epoch_eval_raw_dc_mae = np.mean(epoch_eval_raw_dc_maes)
+                    epoch_eval_curve_mae = np.mean(epoch_eval_curve_maes) if epoch_eval_curve_maes else np.nan
+                    epoch_eval_ttae_sec = np.mean(epoch_eval_ttae_secs) if epoch_eval_ttae_secs else np.nan
+                    epoch_eval_iauc10_err = np.mean(epoch_eval_iauc10_errs) if epoch_eval_iauc10_errs else np.nan
+                    epoch_eval_peak_err = np.mean(epoch_eval_peak_errs) if epoch_eval_peak_errs else np.nan
 
                     eval_ssims.append(epoch_eval_ssim)
                     eval_psnrs.append(epoch_eval_psnr)
@@ -1527,6 +1631,11 @@ def main():
                     eval_raw_dc_mses.append(epoch_eval_raw_dc_mse) 
                     eval_raw_dc_maes.append(epoch_eval_raw_dc_mae)    
                     eval_curve_corrs.append(epoch_eval_curve_corr)  
+                    eval_temporal_epochs.append(epoch)
+                    eval_curve_maes.append(epoch_eval_curve_mae)
+                    eval_ttae_secs.append(epoch_eval_ttae_sec)
+                    eval_iauc10_errs.append(epoch_eval_iauc10_err)
+                    eval_peak_errs.append(epoch_eval_peak_err)
 
                     spf_key = int(N_spokes_eval)
                     if spf_key in eval_spf_curves:
@@ -1548,6 +1657,14 @@ def main():
                     writer.add_scalar('Metric/RAW_DC_MSE', epoch_eval_raw_dc_mse, epoch)
                     writer.add_scalar('Metric/RAW_DC_MAE', epoch_eval_raw_dc_mae, epoch)
                     writer.add_scalar('Metric/EC_Corr', epoch_eval_curve_corr, epoch)
+                    if np.isfinite(epoch_eval_curve_mae):
+                        writer.add_scalar('Metric/Temporal_Curve_MAE', epoch_eval_curve_mae, epoch)
+                    if np.isfinite(epoch_eval_ttae_sec):
+                        writer.add_scalar('Metric/Temporal_TTAE_sec', epoch_eval_ttae_sec, epoch)
+                    if np.isfinite(epoch_eval_iauc10_err):
+                        writer.add_scalar('Metric/Temporal_IAUC10_err', epoch_eval_iauc10_err, epoch)
+                    if np.isfinite(epoch_eval_peak_err):
+                        writer.add_scalar('Metric/Temporal_Peak_err', epoch_eval_peak_err, epoch)
 
 
                     
@@ -1565,13 +1682,21 @@ def main():
 
                         val_x_recon_reshaped = rearrange(val_x_recon, 'b c h w t -> b c t h w')
 
-                        plot_enhancement_curve(
-                            val_x_recon_reshaped,
-                            output_filename = os.path.join(output_dir, 'enhancement_curves', f'val_dro_sample_enhancement_curve_epoch_{epoch}.png'))
+                        if ec_dir is not None:
+                            plot_enhancement_curve(
+                                val_x_recon_reshaped,
+                                output_filename=os.path.join(
+                                    ec_dir, f"val_dro_sample_enhancement_curve_epoch_{epoch}.png"
+                                ),
+                            )
                         
-                        plot_enhancement_curve(
-                            val_dro_grasp_img,
-                            output_filename = os.path.join(output_dir, 'enhancement_curves', f'val_dro_grasp_sample_enhancement_curve_epoch_{epoch}.png'))
+                        if ec_dir is not None:
+                            plot_enhancement_curve(
+                                val_dro_grasp_img,
+                                output_filename=os.path.join(
+                                    ec_dir, f"val_dro_grasp_sample_enhancement_curve_epoch_{epoch}.png"
+                                ),
+                            )
 
 
                         if use_ei_loss:
@@ -1640,6 +1765,11 @@ def main():
                             eval_raw_dc_mses=eval_raw_dc_mses,
                             eval_raw_dc_maes=eval_raw_dc_maes,
                             eval_curve_corrs=eval_curve_corrs,
+                            eval_temporal_epochs=eval_temporal_epochs,
+                            eval_curve_maes=eval_curve_maes,
+                            eval_ttae_secs=eval_ttae_secs,
+                            eval_iauc10_errs=eval_iauc10_errs,
+                            eval_peak_errs=eval_peak_errs,
                             eval_spf_curves=eval_spf_curves,
                         )
                         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
@@ -1805,6 +1935,56 @@ def main():
                         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
                         plt.savefig(os.path.join(output_dir, "eval_metrics.png"))
                         plt.close()
+
+                        if eval_curve_maes or eval_ttae_secs or eval_iauc10_errs or eval_peak_errs:
+                            if eval_temporal_epochs and len(eval_temporal_epochs) == len(eval_curve_maes):
+                                temporal_epochs = eval_temporal_epochs
+                            else:
+                                temporal_epochs = list(range(0, len(eval_curve_maes) * eval_frequency, eval_frequency))
+
+                            min_len = min(
+                                len(temporal_epochs),
+                                len(eval_curve_maes),
+                                len(eval_ttae_secs),
+                                len(eval_iauc10_errs),
+                                len(eval_peak_errs),
+                            )
+                            if min_len > 0:
+                                temporal_epochs = temporal_epochs[:min_len]
+                                curve_maes_plot = eval_curve_maes[:min_len]
+                                ttae_plot = eval_ttae_secs[:min_len]
+                                iauc10_plot = eval_iauc10_errs[:min_len]
+                                peak_plot = eval_peak_errs[:min_len]
+
+                                fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+                                fig.suptitle(
+                                    f"Temporal Fidelity Metrics Over Epochs ({N_spokes_eval} spokes/frame)",
+                                    fontsize=20,
+                                )
+
+                                sns.lineplot(x=temporal_epochs, y=curve_maes_plot, ax=axes[0, 0])
+                                axes[0, 0].set_title("Curve MAE")
+                                axes[0, 0].set_xlabel("Epoch")
+                                axes[0, 0].set_ylabel("MAE")
+
+                                sns.lineplot(x=temporal_epochs, y=ttae_plot, ax=axes[0, 1])
+                                axes[0, 1].set_title("Time to Arrival Error")
+                                axes[0, 1].set_xlabel("Epoch")
+                                axes[0, 1].set_ylabel("Seconds")
+
+                                sns.lineplot(x=temporal_epochs, y=iauc10_plot, ax=axes[1, 0])
+                                axes[1, 0].set_title("IAUC10 Error")
+                                axes[1, 0].set_xlabel("Epoch")
+                                axes[1, 0].set_ylabel("Error")
+
+                                sns.lineplot(x=temporal_epochs, y=peak_plot, ax=axes[1, 1])
+                                axes[1, 1].set_title("Peak Enhancement Error")
+                                axes[1, 1].set_xlabel("Epoch")
+                                axes[1, 1].set_ylabel("Error")
+
+                                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                                plt.savefig(os.path.join(output_dir, "eval_temporal_metrics.png"))
+                                plt.close()
 
                         if curriculum_enabled and eval_spf_curves:
                             for spf in sorted(eval_spf_curves):
@@ -2000,6 +2180,11 @@ def main():
             eval_raw_dc_mses=eval_raw_dc_mses,
             eval_raw_dc_maes=eval_raw_dc_maes,
             eval_curve_corrs=eval_curve_corrs,
+            eval_temporal_epochs=eval_temporal_epochs,
+            eval_curve_maes=eval_curve_maes,
+            eval_ttae_secs=eval_ttae_secs,
+            eval_iauc10_errs=eval_iauc10_errs,
+            eval_peak_errs=eval_peak_errs,
             eval_spf_curves=eval_spf_curves,
         )
         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')

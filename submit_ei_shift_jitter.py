@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_36spf_shift_jitter"
-    config_path = 'configs/config_ei_36spf_shift_jitter.yaml'
+    job_name = "ei_16spf_shift_jitter"
+    config_path = 'configs/config_ei_shift_jitter.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
