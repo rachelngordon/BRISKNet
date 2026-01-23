@@ -1595,6 +1595,17 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
         gt_mag_np = np.abs(gt_complex_np)
         
         masks_np = {key: val.cpu().numpy().squeeze().astype(bool) for key, val in mask.items()}
+        roi_source = "malignant"
+        if "malignant" in masks_np and masks_np["malignant"].any():
+            pass
+        elif "benign" in masks_np and masks_np["benign"].any():
+            masks_np = {"malignant": masks_np["benign"]}
+            roi_source = "benign"
+            print(f"Using benign ROI for plots (no malignant mask) for {patient_id or plot_label}.")
+        else:
+            masks_np = {"malignant": np.ones(recon_mag_np.shape[:2], dtype=bool)}
+            roi_source = "full"
+            print(f"No ROI mask found; plotting whole-image mean curve for {patient_id or plot_label}.")
 
         num_frames = recon_mag_np.shape[2]
 
@@ -1606,13 +1617,14 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
             grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['malignant'], aif_time_points)
             temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
             temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
-        if 'benign' in masks_np and masks_np['benign'].any():
+        if 'benign' in masks_np and masks_np.get('benign', None) is not None and masks_np['benign'].any():
             dl_metrics = compute_temporal_metrics(gt_mag_np, recon_mag_np, masks_np['benign'], aif_time_points)
             grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['benign'], aif_time_points)
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
 
-        if 'malignant' in mask and mask['malignant'].any() and plot_label is not None:
+        tumor_mask_for_plot = None if roi_source == "full" else masks_np.get("malignant")
+        if 'malignant' in masks_np and masks_np['malignant'].any() and plot_label is not None:
             
             # --- Plot Spatial Quality at the central timepoint ---
             peak_frame = num_frames // 2
@@ -1628,7 +1640,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=True,
-                tumor_mask=masks_np.get("malignant"),
+                tumor_mask=tumor_mask_for_plot,
             )
 
             # --- Plot Temporal Curves for Key Regions ---
@@ -1671,7 +1683,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 filename=os.path.join(output_dir, f"time_points_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
-                tumor_mask=masks_np.get("malignant"),
+                tumor_mask=tumor_mask_for_plot,
             )
 
             print("Diagnostic plots saved.")
@@ -1717,7 +1729,18 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 print(f"Warning: malignant DRO label but empty/missing tumor mask for {patient_id} (slice {resolved_slice_idx}); skipping temporal plots.")
             mask = {}
 
-        masks_np = {key: val.cpu().numpy().squeeze().astype(bool) for key, val in mask.items() if key == 'malignant'}
+        masks_np = {key: val.cpu().numpy().squeeze().astype(bool) for key, val in mask.items() if key in ('malignant', 'benign')}
+        roi_source = "malignant"
+        if "malignant" in masks_np and masks_np["malignant"].any():
+            pass
+        elif "benign" in masks_np and masks_np["benign"].any():
+            masks_np = {"malignant": masks_np["benign"]}
+            roi_source = "benign"
+            print(f"Using benign ROI for plots (no malignant mask) for {patient_id or plot_label}.")
+        else:
+            masks_np = {"malignant": np.ones(recon_mag_np.shape[:2], dtype=bool)}
+            roi_source = "full"
+            print(f"No ROI mask found; plotting whole-image mean curve for {patient_id or plot_label}.")
 
         num_frames = recon_mag_np.shape[2]
 
@@ -1729,13 +1752,14 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
             grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['malignant'], aif_time_points)
             temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
             temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
-        if 'benign' in masks_np and masks_np['benign'].any():
+        if 'benign' in masks_np and masks_np.get('benign', None) is not None and masks_np['benign'].any():
             dl_metrics = compute_temporal_metrics(gt_mag_np, recon_mag_np, masks_np['benign'], aif_time_points)
             grasp_metrics = compute_temporal_metrics(gt_mag_np, grasp_mag_np, masks_np['benign'], aif_time_points)
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
 
-        if 'malignant' in mask and mask['malignant'].any() and plot_label is not None:
+        tumor_mask_for_plot = None if roi_source == "full" else masks_np.get("malignant")
+        if 'malignant' in masks_np and masks_np['malignant'].any() and plot_label is not None:
             
             # --- Plot Spatial Quality at the central timepoint ---
             peak_frame = num_frames // 2
@@ -1751,7 +1775,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=False,
-                tumor_mask=masks_np.get("malignant"),
+                tumor_mask=tumor_mask_for_plot,
             )
 
             # --- Plot Temporal Curves for Key Regions ---
@@ -1795,7 +1819,7 @@ def eval_sample(kspace, csmap, ground_truth, x_recon, physics, mask, grasp_img, 
                 filename=os.path.join(output_dir, f"non_dro_time_points_{plot_label}{suffix}.png"),
                 acceleration=acceleration,
                 spokes_per_frame=spokes_per_frame,
-                tumor_mask=masks_np.get("malignant"),
+                tumor_mask=tumor_mask_for_plot,
             )
 
             print("Diagnostic plots saved.")
