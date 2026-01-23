@@ -6,15 +6,28 @@ import statistics
 import time
 from typing import Tuple
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import yaml
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from einops import rearrange
+from radial_lsfp import from_torch_complex
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SimulatedDataset
-from eval import eval_grasp, eval_sample, compute_ssdu_kspace_nmse, compute_ssdu_kspace_nmse_grasp
+from eval import (
+    eval_grasp,
+    eval_sample,
+    compute_ssdu_kspace_nmse,
+    compute_ssdu_kspace_nmse_grasp,
+    _load_tumor_mask,
+    _load_slice_map,
+    _resolve_plot_label,
+)
 from lsfpnet_encoding import ArtifactRemovalLSFPNet, LSFPNet
 from radial_lsfp import MCNUFFT
 from utils import (
@@ -103,8 +116,214 @@ def parse_args():
     parser.add_argument("--eval_frames", type=int, help="Override number of frames for inference.")
     parser.add_argument("--phase_index", type=int, help="Curriculum phase index to use for eval params (default: last).")
     parser.add_argument("--disable_ssdu", action="store_true", help="Skip SSDU NMSE computation to speed up inference.")
+    parser.add_argument("--diagnostics", action="store_true", help="Enable diagnostic plots per sample.")
+    parser.add_argument("--diag_topk", type=int, default=16, help="Top-K pixels to plot in diagnostic curves.")
+    parser.add_argument("--diag_num_frames", type=int, default=6, help="Number of frames for heatmap diagnostics.")
+    parser.add_argument(
+        "--diag_ref",
+        default="gt",
+        choices=("gt", "grasp", "raw_grasp", "raw_recon"),
+        help="Reference image source for diagnostics.",
+    )
+    parser.add_argument(
+        "--diag_normalize",
+        action="store_true",
+        help="Normalize pixel curves by baseline (t=0) reference intensity.",
+    )
     parser.add_argument("--seed", type=int, default=12, help="Random seed.")
     return parser.parse_args()
+
+
+def _to_numpy_img(x: torch.Tensor) -> np.ndarray:
+    if isinstance(x, torch.Tensor):
+        x = x.detach().cpu()
+        if torch.is_complex(x):
+            x = torch.abs(x)
+        x = x.float().numpy()
+    else:
+        x = np.asarray(x)
+        if np.iscomplexobj(x):
+            x = np.abs(x)
+        x = x.astype(np.float32, copy=False)
+    if x.ndim == 4 and x.shape[0] == 1:
+        x = x[0]
+    if x.ndim == 2:
+        x = x[None, ...]
+    return x.astype(np.float32, copy=False)
+
+
+def _normalize_mask(mask, T: int, H: int, W: int):
+    if isinstance(mask, torch.Tensor):
+        mask_np = mask.detach().cpu().numpy()
+    else:
+        mask_np = np.asarray(mask)
+    if mask_np.ndim == 3 and mask_np.shape[0] == 1:
+        mask_np = mask_np[0]
+    if mask_np.ndim == 2:
+        mask_stack = np.broadcast_to(mask_np, (T, H, W))
+    elif mask_np.ndim == 3 and mask_np.shape[0] == T:
+        mask_stack = mask_np
+    else:
+        return None
+    return mask_stack > 0
+
+
+def _robust_limits(values: np.ndarray, low_q: float, high_q: float):
+    finite_vals = values[np.isfinite(values)]
+    if finite_vals.size == 0:
+        return 0.0, 1.0
+    return (float(np.percentile(finite_vals, low_q)), float(np.percentile(finite_vals, high_q)))
+
+
+def _select_timepoints(ref_roi_mean: np.ndarray, num_frames: int):
+    T = ref_roi_mean.shape[0]
+    if T == 0:
+        return []
+    num_frames = max(1, min(num_frames, T))
+    evenly = np.linspace(0, T - 1, num_frames).round().astype(int).tolist()
+    peak = int(np.nanargmax(ref_roi_mean)) if np.isfinite(ref_roi_mean).any() else 0
+    selected = sorted(set(evenly + [peak]))
+    return selected
+
+
+def _overlay_plot(background, overlay, mask, vmin, vmax, cmap, alpha, outpath, title, cbar_label=None):
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.imshow(background, cmap="gray")
+    overlay_masked = np.ma.array(overlay, mask=~mask)
+    im = ax.imshow(overlay_masked, cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    if cbar_label:
+        cbar.set_label(cbar_label, fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+    ax.set_title(title, fontsize=9)
+    ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+
+
+def _contour_mask(ax, mask):
+    ax.contour(mask.astype(float), levels=[0.5], colors="yellow", linewidths=0.8)
+
+
+def _mask_bbox(mask: np.ndarray, pad: int, H: int, W: int):
+    ys, xs = np.where(mask)
+    if ys.size == 0 or xs.size == 0:
+        return (0, H, 0, W)
+    y0 = max(int(ys.min()) - pad, 0)
+    y1 = min(int(ys.max()) + pad + 1, H)
+    x0 = max(int(xs.min()) - pad, 0)
+    x1 = min(int(xs.max()) + pad + 1, W)
+    return (y0, y1, x0, x1)
+
+
+def save_diagnostics(
+    sample_dir: str,
+    brisk,
+    reference,
+    mask,
+    args,
+    diag_subdir: str = "diagnostics",
+    ref_label: str | None = None,
+    brisk_label: str | None = None,
+):
+    diag_dir = os.path.join(sample_dir, diag_subdir)
+    os.makedirs(diag_dir, exist_ok=True)
+
+    brisk_np = _to_numpy_img(brisk).squeeze()
+    brisk_np = np.abs(brisk_np[0] + 1j * brisk_np[1])
+    brisk_np = rearrange(brisk_np, 'h w t -> t h w')
+
+    ref_np = _to_numpy_img(reference).squeeze()
+    ref_np = np.abs(ref_np[0] + 1j * ref_np[1])
+
+    if ref_np.shape[0] == 320:
+        ref_np = rearrange(ref_np, 'h t w -> t h w')
+
+    if brisk_np.shape != ref_np.shape:
+        raise ValueError(f"Diagnostics shape mismatch: brisk {brisk_np.shape} vs ref {ref_np.shape}")
+
+    T, H, W = ref_np.shape
+    mask_stack = _normalize_mask(mask, T, H, W)
+    if mask_stack is None:
+        raise ValueError(f"Diagnostics unsupported mask shape: {np.asarray(mask).shape}")
+
+    mask_union = np.any(mask_stack, axis=0)
+    if not np.any(mask_union):
+        raise ValueError("Diagnostics tumor mask is empty.")
+
+    ref_roi_mean = np.array(
+        [
+            np.nanmean(ref_np[t][mask_stack[t]])
+            if np.any(mask_stack[t]) else np.nan
+            for t in range(T)
+        ],
+        dtype=np.float32,
+    )
+    baseline_t = 0
+    if not np.isfinite(ref_roi_mean[baseline_t]):
+        baseline_t = int(np.nanargmax(ref_roi_mean)) if np.isfinite(ref_roi_mean).any() else 0
+
+    background = ref_np[baseline_t]
+    pad = max(4, int(0.05 * max(H, W)))
+    y0, y1, x0, x1 = _mask_bbox(mask_union, pad, H, W)
+
+    ref_vals = ref_np[mask_stack]
+    vmin_ref, vmax_ref = _robust_limits(ref_vals, 1, 99)
+
+    diff = brisk_np - ref_np
+    diff_vals = diff[mask_stack]
+    diff_abs = np.abs(diff_vals[np.isfinite(diff_vals)])
+    diff_lim = float(np.percentile(diff_abs, 99)) if diff_abs.size else 1.0
+    diff_lim = max(diff_lim, 1e-6)
+
+    timepoints = _select_timepoints(ref_roi_mean, args.diag_num_frames)
+    if ref_label is None:
+        ref_label = {
+            "gt": "Ground Truth",
+            "grasp": "GRASP",
+            "raw_grasp": "Raw GRASP",
+            "raw_recon": "Raw Recon",
+        }.get(args.diag_ref, "Reference")
+    if brisk_label is None:
+        brisk_label = "BRISKNet"
+    if not timepoints:
+        return
+    nrows = len(timepoints)
+    fig, axes = plt.subplots(nrows, 3, figsize=(12, 4 * nrows), squeeze=False)
+    for row_idx, t in enumerate(timepoints):
+        mask_t = mask_stack[t][y0:y1, x0:x1]
+        bg_crop = background[y0:y1, x0:x1]
+        ref_crop = ref_np[t][y0:y1, x0:x1]
+        brisk_crop = brisk_np[t][y0:y1, x0:x1]
+        diff_crop = diff[t][y0:y1, x0:x1]
+        overlays = (ref_crop, brisk_crop, diff_crop)
+        cmaps = ("magma", "magma", "coolwarm")
+        vmins = (vmin_ref, vmin_ref, -diff_lim)
+        vmaxs = (vmax_ref, vmax_ref, diff_lim)
+        titles = (
+            f"{ref_label} tumor intensity (t={t})",
+            f"{brisk_label} tumor intensity (t={t})",
+            f"{brisk_label} − {ref_label} (t={t})",
+        )
+        cbar_labels = (
+            f"{ref_label} intensity (a.u.)",
+            f"{brisk_label} intensity (a.u.)",
+            f"{brisk_label} − {ref_label} (a.u.)",
+        )
+        for col_idx in range(3):
+            ax = axes[row_idx][col_idx]
+            ax.imshow(bg_crop, cmap="gray")
+            overlay_masked = np.ma.array(overlays[col_idx], mask=~mask_t)
+            im = ax.imshow(overlay_masked, cmap=cmaps[col_idx], vmin=vmins[col_idx], vmax=vmaxs[col_idx], alpha=0.6)
+            ax.set_title(titles[col_idx], fontsize=9)
+            ax.axis("off")
+            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label(cbar_labels[col_idx], fontsize=8)
+            cbar.ax.tick_params(labelsize=7)
+    fig.tight_layout()
+    fig.savefig(os.path.join(diag_dir, "heatmaps_triptych_grid.png"), dpi=150)
+    plt.close(fig)
 
 
 def main():
@@ -280,6 +499,52 @@ def main():
             sample_dir = os.path.join(inference_dir, f"sample_{idx:02d}")
             os.makedirs(sample_dir, exist_ok=True)
             label = f"sample{idx:02d}"
+
+            if args.diagnostics:
+                ref_map = {
+                    "gt": ground_truth,
+                    "grasp": dro_grasp_img,
+                    "raw_grasp": raw_grasp_img,
+                    "raw_recon": raw_x_recon,
+                }
+                ref_choice = ref_map.get(args.diag_ref)
+                if ref_choice is None:
+                    raise ValueError(f"Unknown diag_ref '{args.diag_ref}'.")
+                diag_mask = None
+                if isinstance(mask, dict):
+                    if "malignant" in mask:
+                        diag_mask = mask["malignant"]
+                        mask_np = diag_mask.detach().cpu().numpy() if isinstance(diag_mask, torch.Tensor) else np.asarray(diag_mask)
+                        if not np.any(mask_np):
+                            diag_mask = None
+                else:
+                    diag_mask = mask
+                if diag_mask is not None:
+                    save_diagnostics(
+                        sample_dir=sample_dir,
+                        brisk=x_recon,
+                        reference=ref_choice,
+                        mask=diag_mask,
+                        args=args,
+                    )
+
+                _, patient_id = _resolve_plot_label(label, grasp_path)
+                slice_map = _load_slice_map()
+                resolved_slice_idx = slice_map.get(patient_id, raw_grasp_slice_idx)
+                raw_tumor_mask = None
+                if resolved_slice_idx is not None and resolved_slice_idx >= 0:
+                    raw_tumor_mask = _load_tumor_mask(cluster, patient_id, slice_idx=resolved_slice_idx)
+                if raw_tumor_mask is not None and np.any(raw_tumor_mask):
+                    save_diagnostics(
+                        sample_dir=sample_dir,
+                        brisk=raw_x_recon,
+                        reference=raw_grasp_img,
+                        mask=raw_tumor_mask,
+                        args=args,
+                        diag_subdir="diagnostics_raw",
+                        ref_label="Raw GRASP",
+                        brisk_label="BRISKNet (raw)",
+                    )
 
             ssdu_result = {}
             ssdu_grasp_result = {}

@@ -205,6 +205,39 @@ def plot_curve_with_box(img_stack, box, title, filename, frames_to_show=None):
     plt.savefig(filename)
 
 
+def plot_roi_enhancement_comparison(dl_stack, grasp_stack, box, title, filename):
+    x, y, size = box
+    x0 = max(0, int(x))
+    y0 = max(0, int(y))
+    x1 = min(dl_stack.shape[1], x0 + int(size))
+    y1 = min(dl_stack.shape[0], y0 + int(size))
+    if x1 <= x0 or y1 <= y0:
+        print(f'Invalid ROI box {box}; skipping enhancement comparison.')
+        return
+
+    num_frames = dl_stack.shape[2]
+    time_points = np.linspace(0, 150, num_frames)
+    dl_roi = dl_stack[y0:y1, x0:x1, :]
+    grasp_roi = grasp_stack[y0:y1, x0:x1, :]
+    dl_curve = np.array([dl_roi[:, :, t].mean() for t in range(num_frames)])
+    grasp_curve = np.array([grasp_roi[:, :, t].mean() for t in range(num_frames)])
+
+    dl_enh = dl_curve - dl_curve[0]
+    grasp_enh = grasp_curve - grasp_curve[0]
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    ax.plot(time_points, dl_enh, 'o-', linewidth=2, label='DL ROI enhancement')
+    ax.plot(time_points, grasp_enh, 's--', linewidth=2, label='GRASP ROI enhancement')
+    ax.set_title(title)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Enhancement (a.u.)')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close(fig)
+
+
 malignant_count = 0
 for sample_idx in range(len(dataset)):
     if malignant_count >= max_malignant_samples:
@@ -330,6 +363,13 @@ for sample_idx in range(len(dataset)):
             title=f'Raw GRASP reconstruction: ROI ({sample_label})',
             filename=os.path.join(output_dir, f'{sample_label}_raw_grasp_roi_recon_curve.png'),
             frames_to_show=frames_to_show,
+        )
+        plot_roi_enhancement_comparison(
+            raw_recon_mag,
+            raw_grasp_mag,
+            box,
+            title=f'ROI enhancement comparison ({sample_label})',
+            filename=os.path.join(output_dir, f'{sample_label}_roi_enhancement_comparison.png'),
         )
 
     malignant_count += 1
