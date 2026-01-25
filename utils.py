@@ -242,28 +242,73 @@ def get_traj(N_spokes=13, N_time=1, base_res=320, gind=1):
     return np.squeeze(traj)
     
 
+def _ktraj_and_dcomp_from_get_traj(Nsample, Nspokes, Ng, im_size):
+    base_res = int(Nsample // 2)
+
+    class _Args:
+        pass
+
+    args = _Args()
+    args.spokes_per_frame = Nspokes
+
+    from process_data.nifti.dce_recon import get_traj as get_traj_dce
+
+    traj = get_traj_dce(
+        args,
+        csmaps=False,
+        N_spokes=Nspokes,
+        N_time=Ng,
+        base_res=base_res,
+        gind=1,
+    )
+    traj = np.asarray(traj)
+    if traj.ndim == 3:
+        traj = traj[None, ...]
+
+    traj_flat = traj.reshape(Ng, Nspokes * Nsample, 2)
+    ktraj = np.transpose(traj_flat, (2, 1, 0))  # (2, M, T)
+    ktraj = torch.tensor(ktraj, dtype=torch.float)
+
+    ktraj = ktraj * (2 * np.pi / base_res)
+
+    dcomps = []
+    for t in range(Ng):
+        d = tkbn.calc_density_compensation_function(
+            ktraj=ktraj[:, :, t], im_size=im_size
+        ).squeeze()
+        dcomps.append(d)
+
+    dcomp = torch.stack(dcomps, dim=-1)  # (M, T)
+    dcomp = dcomp.to(torch.complex64)
+    return ktraj, dcomp
+
+
 ################### prepare NUFFT ################
-def prep_nufft(Nsample, Nspokes, Ng):
+def prep_nufft(Nsample, Nspokes, Ng, traj_method="trajGR"):
 
     overSmaple = 2
     im_size = (int(Nsample/overSmaple), int(Nsample/overSmaple))
     grid_size = (Nsample, Nsample)
 
-    ktraj = trajGR(Nsample, Nspokes * Ng)
+    if traj_method == "trajGR":
+        ktraj = trajGR(Nsample, Nspokes * Ng)
+        ktraj = torch.tensor(ktraj, dtype=torch.float)
+        dcomp = tkbn.calc_density_compensation_function(ktraj=ktraj, im_size=im_size)
+        dcomp = dcomp.squeeze()
 
-    ktraj = torch.tensor(ktraj, dtype=torch.float)
-    dcomp = tkbn.calc_density_compensation_function(ktraj=ktraj, im_size=im_size)
-    dcomp = dcomp.squeeze()
+        ktraju = np.zeros([2, Nspokes * Nsample, Ng], dtype=float)
+        dcompu = np.zeros([Nspokes * Nsample, Ng], dtype=complex)
 
-    ktraju = np.zeros([2, Nspokes * Nsample, Ng], dtype=float)
-    dcompu = np.zeros([Nspokes * Nsample, Ng], dtype=complex)
+        for ii in range(0, Ng):
+            ktraju[:, :, ii] = ktraj[:, (ii * Nspokes * Nsample):((ii + 1) * Nspokes * Nsample)]
+            dcompu[:, ii] = dcomp[(ii * Nspokes * Nsample):((ii + 1) * Nspokes * Nsample)]
 
-    for ii in range(0, Ng):
-        ktraju[:, :, ii] = ktraj[:, (ii * Nspokes * Nsample):((ii + 1) * Nspokes * Nsample)]
-        dcompu[:, ii] = dcomp[(ii * Nspokes * Nsample):((ii + 1) * Nspokes * Nsample)]
-
-    ktraju = torch.tensor(ktraju, dtype=torch.float)
-    dcompu = torch.tensor(dcompu, dtype=torch.complex64)
+        ktraju = torch.tensor(ktraju, dtype=torch.float)
+        dcompu = torch.tensor(dcompu, dtype=torch.complex64)
+    elif traj_method == "get_traj":
+        ktraju, dcompu = _ktraj_and_dcomp_from_get_traj(Nsample, Nspokes, Ng, im_size)
+    else:
+        raise ValueError(f"Unknown traj_method: {traj_method}")
 
     nufft_ob = tkbn.KbNufft(im_size=im_size, grid_size=grid_size)  # forward nufft
     adjnufft_ob = tkbn.KbNufftAdjoint(im_size=im_size, grid_size=grid_size)  # backward nufft

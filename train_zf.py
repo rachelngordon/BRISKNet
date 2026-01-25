@@ -127,6 +127,7 @@ def main():
         new_config = apply_cluster_paths(new_config)
 
     use_edge_time_index_sampling = config.get('training', {}).get('edge_time_index_sampling', False)
+    traj_method = config.get("data", {}).get("traj_method", "trajGR")
 
     # create output directories
     output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
@@ -458,7 +459,9 @@ def main():
         N_time_eval, N_spokes_eval = config["data"]["eval_timeframes"], config["data"]["eval_spokes"]
 
     # define physics object for evaluation
-    eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(N_samples, N_spokes_eval, N_time_eval)
+    eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(
+        N_samples, N_spokes_eval, N_time_eval, traj_method=traj_method
+    )
     eval_ktraj = eval_ktraj.to(device)
     eval_dcomp = eval_dcomp.to(device)
     eval_nufft_ob = eval_nufft_ob.to(device)
@@ -844,7 +847,9 @@ def main():
                 measured_kspace = rearrange(measured_kspace, 't co sp sam -> co (sp sam) t')
 
                 # prep physics operators
-                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(N_samples, N_spokes, N_time)
+                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
+                    N_samples, N_spokes, N_time, traj_method=traj_method
+                )
                 ktraj = ktraj.to(device)
                 dcomp = dcomp.to(device)
                 nufft_ob = nufft_ob.to(device)
@@ -1202,7 +1207,9 @@ def main():
                                 N_time_eval = phase['eval_num_frames']
 
                                 # define physics object for evaluation
-                                eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(N_samples, N_spokes_eval, N_time_eval)
+                                eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(
+                                    N_samples, N_spokes_eval, N_time_eval, traj_method=traj_method
+                                )
                                 eval_ktraj = eval_ktraj.to(device)
                                 eval_dcomp = eval_dcomp.to(device)
                                 eval_nufft_ob = eval_nufft_ob.to(device)
@@ -1254,7 +1261,9 @@ def main():
                 measured_kspace = rearrange(measured_kspace, 't co sp sam -> co (sp sam) t')
 
                 # prep physics operators
-                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(N_samples, N_spokes, N_time)
+                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
+                    N_samples, N_spokes, N_time, traj_method=traj_method
+                )
                 ktraj = ktraj.to(device)
                 dcomp = dcomp.to(device)
                 nufft_ob = nufft_ob.to(device)

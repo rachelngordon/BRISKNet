@@ -63,11 +63,13 @@ def main():
 
     # Trajectory 1: get_traj from dce_recon.py
     traj_dce = get_traj_dce(_Args(), csmaps=False, N_spokes=n_spokes, N_time=1, base_res=base_res, gind=1)
+    print("get_traj output shape: ", traj_dce.shape)
     if traj_dce.ndim == 4:
         traj_dce = traj_dce[0]
 
     # Trajectory 2: trajGR from utils.py
     traj_gr = trajGR(n_samples, n_spokes)
+    print("trajGR output shape: ", traj_gr.shape)
     traj_gr = traj_gr.reshape(2, n_spokes, n_samples).transpose(1, 2, 0)
 
     img_dce = _adjoint_nufft(kspace_frame, traj_dce)
