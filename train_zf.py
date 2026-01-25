@@ -478,6 +478,7 @@ def main():
         dataset_key=config["data"]["dataset_key"],
         spokes_per_frame=N_spokes_eval,
         num_frames=N_time_eval,
+        traj_method=traj_method,
         grasp_slice_idx=raw_grasp_slice_idx)
 
 

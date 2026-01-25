@@ -363,6 +363,7 @@ def main():
 
     data_dir = config["data"]["root_dir"]
     model_type = config["model"]["name"]
+    traj_method = config.get("data", {}).get("traj_method", "trajGR")
 
     val_dataset = SimulatedDataset(
         # root_dir=config["evaluation"]["simulated_dataset_path"],
@@ -373,6 +374,7 @@ def main():
         dataset_key=config["data"]["dataset_key"],
         spokes_per_frame=N_spokes_eval,
         num_frames=N_time_eval,
+        traj_method=traj_method,
         grasp_slice_idx=raw_grasp_slice_idx,
     )
 
@@ -392,7 +394,9 @@ def main():
     H, W = config["data"]["height"], config["data"]["width"]
     N_full = H * math.pi / 2
 
-    eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(N_samples, N_spokes_eval, N_time_eval)
+    eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(
+        N_samples, N_spokes_eval, N_time_eval, traj_method=traj_method
+    )
     eval_ktraj = eval_ktraj.to(device)
     eval_dcomp = eval_dcomp.to(device)
     eval_nufft_ob = eval_nufft_ob.to(device)

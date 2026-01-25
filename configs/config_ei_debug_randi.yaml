@@ -20,6 +20,7 @@ data:
   slices_to_eval: 1
   eval_frequency: 1
   flip_kspace: False
+  traj_method: get_traj
 
 # Experiment settings
 experiment:

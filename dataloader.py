@@ -538,7 +538,7 @@ class SimulatedDataset(Dataset):
     It loads the simulated k-space, coil sensitivity maps, and the
     ground truth dynamic image (DRO).
     """
-    def __init__(self, root_dir, raw_kspace_path, model_type, patient_ids, dataset_key, grasp_slice_idx=95, spokes_per_frame=36, num_frames=8):
+    def __init__(self, root_dir, raw_kspace_path, model_type, patient_ids, dataset_key, grasp_slice_idx=95, spokes_per_frame=36, num_frames=8, traj_method="trajGR"):
 
         self.root_dir = root_dir
         self.raw_kspace_path = raw_kspace_path
@@ -548,6 +548,7 @@ class SimulatedDataset(Dataset):
         self.num_frames = num_frames
         self.grasp_slice_idx = grasp_slice_idx
         self.dataset_key = dataset_key
+        self.traj_method = traj_method
         self.slice_map = load_slice_map(SLICE_MAP_PATH)
         self._update_sample_paths()
 
@@ -603,7 +604,11 @@ class SimulatedDataset(Dataset):
         # Load the data from .npy files
         csmaps = np.load(os.path.join(sample_dir, 'csmaps.npy'))
         dro = np.load(os.path.join(sample_dir, 'dro_ground_truth.npz'))
-        grasp_path = os.path.join(sample_dir, f'grasp_spf{self.spokes_per_frame}_frames{self.num_frames}.npy')
+        grasp_suffix = "_correct_traj.npy" if self.traj_method == "get_traj" else ".npy"
+        grasp_path = os.path.join(
+            sample_dir,
+            f'grasp_spf{self.spokes_per_frame}_frames{self.num_frames}{grasp_suffix}'
+        )
 
         grasp_recon = np.load(grasp_path)
 
@@ -614,7 +619,11 @@ class SimulatedDataset(Dataset):
         grasp_recon_torch = torch.flip(grasp_recon_torch, dims=[-3])
         grasp_recon_torch = torch.rot90(grasp_recon_torch, k=3, dims=[-3,-1])
 
-        kspace_path = os.path.join(sample_dir, f'simulated_kspace_spf{self.spokes_per_frame}_frames{self.num_frames}.npy')
+        kspace_suffix = "_correct_traj.npy" if self.traj_method == "get_traj" else ".npy"
+        kspace_path = os.path.join(
+            sample_dir,
+            f'simulated_kspace_spf{self.spokes_per_frame}_frames{self.num_frames}{kspace_suffix}'
+        )
 
         if os.path.exists(kspace_path):
             kspace_complex = np.load(kspace_path, allow_pickle=True)
