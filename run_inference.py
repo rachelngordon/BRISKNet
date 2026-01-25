@@ -490,10 +490,10 @@ def main():
                 )
             else:
                 x_recon, *_ = model(
-                    dro_kspace, eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="inference", norm=config["model"]["norm"]
+                    dro_kspace, eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="inference", norm="none"#config["model"]["norm"]
                 )
                 raw_x_recon, *_ = model(
-                    raw_kspace, eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm=config["model"]["norm"]
+                    raw_kspace, eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm="none"#config["model"]["norm"]
                 )
 
             sample_dir = os.path.join(inference_dir, f"sample_{idx:02d}")

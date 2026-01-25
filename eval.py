@@ -673,16 +673,10 @@ def plot_spatial_quality(
         for contour in contours:
             ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
 
-    if plot_dro:
-        window_images = [gt_img, recon_img, grasp_img]
-    else:
-        window_images = [recon_img, grasp_img]
-
-    vmin_window, vmax_window = robust_window_multi(
-        window_images,
-        p_low=1,
-        p_high=99.5,
-    )
+    # Compute per-image windows to maximize contrast in each panel.
+    vmin_gt, vmax_gt = robust_window(gt_img, p_low=1, p_high=99.5)
+    vmin_recon, vmax_recon = robust_window(recon_img, p_low=1, p_high=99.5)
+    vmin_grasp, vmax_grasp = robust_window(grasp_img, p_low=1, p_high=99.5)
 
     if plot_dro:
         # Calculate error maps
@@ -724,11 +718,11 @@ def plot_spatial_quality(
 
         # --- Top Row: BRISKNet Comparison ---
 
-        axes[0, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        axes[0, 0].imshow(gt_img, cmap='gray', vmin=vmin_gt, vmax=vmax_gt)
         _overlay_contours(axes[0, 0])
         axes[0, 0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
 
-        axes[0, 1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        axes[0, 1].imshow(recon_img, cmap='gray', vmin=vmin_recon, vmax=vmax_recon)
         _overlay_contours(axes[0, 1])
         axes[0, 1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
 
@@ -772,11 +766,11 @@ def plot_spatial_quality(
 
 
         # --- Bottom Row: GRASP Reconstruction Comparison ---
-        axes[1, 0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        axes[1, 0].imshow(gt_img, cmap='gray', vmin=vmin_gt, vmax=vmax_gt)
         _overlay_contours(axes[1, 0])
         axes[1, 0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
 
-        axes[1, 1].imshow(grasp_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        axes[1, 1].imshow(grasp_img, cmap='gray', vmin=vmin_grasp, vmax=vmax_grasp)
         _overlay_contours(axes[1, 1])
         axes[1, 1].set_title(r"$|\mathrm{GRASP}|$", fontsize=PLOT_FONT_SIZES["title"])
 
@@ -830,10 +824,10 @@ def plot_spatial_quality(
         top_axes[2] = top_fig.add_subplot(top_gs[0, 2])
         top_axes[3] = top_fig.add_subplot(top_gs[0, 3])
 
-        top_axes[0].imshow(gt_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        top_axes[0].imshow(gt_img, cmap='gray', vmin=vmin_gt, vmax=vmax_gt)
         _overlay_contours(top_axes[0])
         top_axes[0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
-        top_axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        top_axes[1].imshow(recon_img, cmap='gray', vmin=vmin_recon, vmax=vmax_recon)
         _overlay_contours(top_axes[1])
         top_axes[1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
         top_axes[2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
@@ -871,14 +865,8 @@ def plot_spatial_quality(
     # Calculate error map
     error_map = recon_img - grasp_img
 
-    vmin = np.percentile(error_map, 1)
-    vmax = np.percentile(error_map, 99)
-
     # Calculate SSIM maps
     ssim, ssim_map = ssim_map_func(grasp_img, recon_img, data_range=data_range, full=True)
-
-    vmin_ssim = np.percentile(ssim_map, 5)
-    vmax_ssim = np.percentile(ssim_map, 95)
 
     # Create a 1x4 plot grid with dedicated colorbar columns so image axes stay the same size.
     fig = plt.figure(figsize=(24, 6))
@@ -902,15 +890,15 @@ def plot_spatial_quality(
 
     # --- Top Row: BRISKNet Comparison ---
 
-    axes[0].imshow(grasp_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+    axes[0].imshow(grasp_img, cmap='gray', vmin=vmin_grasp, vmax=vmax_grasp)
     _overlay_contours(axes[0])
     axes[0].set_title(r"$|\mathrm{GRASP}|$", fontsize=PLOT_FONT_SIZES["title"])
 
-    axes[1].imshow(recon_img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+    axes[1].imshow(recon_img, cmap='gray', vmin=vmin_recon, vmax=vmax_recon)
     _overlay_contours(axes[1])
     axes[1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
 
-    im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', vmin=vmin, vmax=vmax)
+    im_err_dl = axes[2].imshow(error_map, cmap='coolwarm', vmin=-0.5, vmax=0.5)
     axes[2].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}| - |\mathrm{GRASP}|$", fontsize=PLOT_FONT_SIZES["title"])
     div = make_axes_locatable(axes[2])
     cax_err_dl = div.append_axes("right", size="4%", pad=0.04)
@@ -918,7 +906,7 @@ def plot_spatial_quality(
     cb_err_dl.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
     # cb_err_dl.set_label(r"$|\mathrm{BRISKNet}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["tick"])
 
-    im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=vmin_ssim, vmax=vmax_ssim)
+    im_ssim_dl = axes[3].imshow(ssim_map, cmap='viridis', vmin=0, vmax=1)
     axes[3].set_title(
         # f"SSIM Map (SSIM: {round(ssim, 3)})",
         r"$|\mathrm{SSIM}_{\mathrm{BRISKNet}}|$",
@@ -1403,12 +1391,6 @@ def plot_time_series(
         y=0.995,
     )
 
-    vmin_window, vmax_window = robust_window_multi(
-        [recon_img_stack, grasp_img_stack],
-        p_low=1,
-        p_high=99.5,
-    )
-
     # --- Row 1: Ground Truth ---
     # for i, frame_idx in enumerate(indices):
     #     img = gt_img_stack[:, :, frame_idx]
@@ -1429,7 +1411,8 @@ def plot_time_series(
     # --- Row 2: BRISKNet ---
     for i, frame_idx in enumerate(indices):
         img = recon_img_stack[:, :, frame_idx]
-        axes[0, i].imshow(img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        vmin_frame, vmax_frame = robust_window(img, p_low=1, p_high=99.5)
+        axes[0, i].imshow(img, cmap='gray', vmin=vmin_frame, vmax=vmax_frame)
         _overlay_contours(axes[0, i])
         axes[0, i].set_title(f"BRISKNet: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[0, i].axis('off')
@@ -1437,7 +1420,8 @@ def plot_time_series(
     # --- Row 3: GRASP Reconstruction ---
     for i, frame_idx in enumerate(indices):
         img = grasp_img_stack[:, :, frame_idx]
-        axes[1, i].imshow(img, cmap='gray', vmin=vmin_window, vmax=vmax_window)
+        vmin_frame, vmax_frame = robust_window(img, p_low=1, p_high=99.5)
+        axes[1, i].imshow(img, cmap='gray', vmin=vmin_frame, vmax=vmax_frame)
         _overlay_contours(axes[1, i])
         axes[1, i].set_title(f"GRASP: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[1, i].axis('off')

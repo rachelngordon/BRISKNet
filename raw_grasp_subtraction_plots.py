@@ -10,7 +10,7 @@ from matplotlib.patches import Rectangle
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SimulatedDataset
-from eval import _get_patient_id_from_grasp_path, _load_slice_map, _load_tumor_mask
+from eval import _get_patient_id_from_grasp_path, _load_slice_map, _load_tumor_mask, compute_temporal_metrics
 from radial_lsfp import MCNUFFT
 from run_inference import _build_model, _load_weights, _resolve_eval_params
 from utils import prep_nufft, set_seed, sliding_window_inference, to_torch_complex
@@ -239,6 +239,22 @@ def plot_roi_enhancement_comparison(dl_stack, grasp_stack, box, title, filename)
 
 
 malignant_count = 0
+temporal_metrics_rows = []
+dro_temporal_metrics_rows = []
+metric_names = [
+    "curve_corr",
+    "curve_mae",
+    "early_corr",
+    "early_mae",
+    "ttae_sec",
+    "wash_in_slope_err",
+    "iauc10_err",
+    "peak_err",
+    "ttpeak_err_sec",
+]
+
+def _filter_all_metrics(metrics: dict) -> dict:
+    return {k: v for k, v in metrics.items() if k.startswith("all_")}
 for sample_idx in range(len(dataset)):
     if malignant_count >= max_malignant_samples:
         break
@@ -350,6 +366,116 @@ for sample_idx in range(len(dataset)):
     if box is None:
         print(f'No ROI box for {sample_label}; skipping ROI curve.')
     else:
+        num_frames = raw_recon_mag.shape[2]
+        time_points = np.linspace(0, 150, num_frames)
+        x, y, size = box
+        x0 = max(0, int(x))
+        y0 = max(0, int(y))
+        x1 = min(raw_recon_mag.shape[1], x0 + int(size))
+        y1 = min(raw_recon_mag.shape[0], y0 + int(size))
+        roi_mask = np.zeros(raw_recon_mag.shape[:2], dtype=bool)
+        non_dro_metrics_added = False
+        if x1 > x0 and y1 > y0:
+            roi_mask[y0:y1, x0:x1] = True
+            temporal_metrics = compute_temporal_metrics(
+                raw_grasp_mag,
+                raw_recon_mag,
+                roi_mask,
+                time_points,
+            )
+            if temporal_metrics:
+                temporal_metrics_rows.append(
+                    {"sample": sample_label, **_filter_all_metrics(temporal_metrics)}
+                )
+                non_dro_metrics_added = True
+        else:
+            print(f'Invalid ROI box {box}; skipping temporal metrics.')
+
+        if non_dro_metrics_added:
+            dro_kspace = torch.as_tensor(_dro_kspace).to(device)
+            dro_csmaps = torch.as_tensor(_csmap).squeeze(0).to(device)
+            dro_csmaps = dro_csmaps.unsqueeze(0)
+            dro_grasp_img = torch.as_tensor(_dro_grasp_img).to(device)
+
+            with torch.no_grad():
+                if N_time_eval > eval_chunk_size:
+                    dro_x_recon, _ = sliding_window_inference(
+                        H,
+                        W,
+                        N_time_eval,
+                        eval_ktraj,
+                        eval_dcomp,
+                        eval_nufft_ob,
+                        eval_adjnufft_ob,
+                        eval_chunk_size,
+                        eval_chunk_overlap,
+                        dro_kspace,
+                        dro_csmaps,
+                        acceleration_encoding,
+                        start_timepoint_index,
+                        model,
+                        epoch='inference',
+                        device=device,
+                        norm=config['model']['norm'],
+                    )
+                else:
+                    dro_x_recon, *_ = model(
+                        dro_kspace,
+                        eval_physics,
+                        dro_csmaps,
+                        acceleration_encoding,
+                        start_timepoint_index,
+                        epoch='inference',
+                        norm=config['model']['norm'],
+                    )
+
+            dro_x_recon = dro_x_recon.cpu()
+            dro_grasp_img = dro_grasp_img.cpu()
+
+            dro_x_recon_np = dro_x_recon.numpy()
+            dro_grasp_np = dro_grasp_img.numpy()
+
+            if rescale:
+                c = np.dot(dro_x_recon_np.flatten(), ground_truth_np.flatten()) / np.dot(
+                    dro_x_recon_np.flatten(), dro_x_recon_np.flatten()
+                )
+                dro_x_recon_scaled = torch.tensor(c * dro_x_recon_np)
+                c_grasp = np.dot(dro_grasp_np.flatten(), ground_truth_np.flatten()) / np.dot(
+                    dro_grasp_np.flatten(), dro_grasp_np.flatten()
+                )
+                dro_grasp_scaled = torch.tensor(c_grasp * dro_grasp_np)
+            else:
+                dro_x_recon_scaled = torch.tensor(dro_x_recon_np)
+                dro_grasp_scaled = torch.tensor(dro_grasp_np)
+
+            dro_recon_complex = to_torch_complex(dro_x_recon_scaled).squeeze().cpu().numpy()
+            dro_recon_mag = np.abs(dro_recon_complex)
+
+            dro_grasp_scaled = dro_grasp_scaled.unsqueeze(0)
+            dro_grasp_complex = rearrange(
+                to_torch_complex(dro_grasp_scaled).squeeze(),
+                'h t w -> h w t',
+            )
+            dro_grasp_mag = np.abs(dro_grasp_complex.cpu().numpy())
+
+            gt_squeezed = ground_truth.squeeze()
+            gt_rearranged = rearrange(gt_squeezed, 'c t h w -> t c h w')
+            gt_complex_tensor = to_torch_complex(gt_rearranged)
+            gt_final_tensor = rearrange(gt_complex_tensor, 't h w -> h w t')
+            gt_mag_np = np.abs(gt_final_tensor.cpu().numpy())
+
+            tumor_mask_np = np.asarray(tumor_mask).astype(bool)
+            dro_time_points = np.linspace(0, 150, dro_recon_mag.shape[2])
+            dro_temporal_metrics = compute_temporal_metrics(
+                dro_grasp_mag,
+                dro_recon_mag,
+                tumor_mask_np,
+                dro_time_points,
+            )
+            if dro_temporal_metrics:
+                dro_temporal_metrics_rows.append(
+                    {"sample": sample_label, **_filter_all_metrics(dro_temporal_metrics)}
+                )
         plot_curve_with_box(
             raw_recon_mag,
             box,
@@ -375,3 +501,29 @@ for sample_idx in range(len(dataset)):
     malignant_count += 1
 
 print(f'Generated subtraction plots for {malignant_count} malignant validation samples.')
+
+def _mean_std(values, key):
+    vals = [v.get(key) for v in values if v.get(key) is not None and np.isfinite(v.get(key))]
+    if not vals:
+        return None, None
+    mean = sum(vals) / len(vals)
+    std = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
+    return mean, std
+
+def _format_mean_std(mean, std):
+    if mean is None:
+        return ""
+    return f"{mean:.4f} ± {std:.4f}"
+
+if temporal_metrics_rows or dro_temporal_metrics_rows:
+    print("----- Temporal Fidelity Metrics vs GRASP (mean ± std, all voxels) -----")
+    header = f"{'Metric':<22} {'Non-DRO (ROI)':<18} {'DRO (mask)':<18}"
+    print(header)
+    print("-" * len(header))
+    for metric in metric_names:
+        key = f"all_{metric}"
+        non_dro_val = _format_mean_std(*_mean_std(temporal_metrics_rows, key))
+        dro_val = _format_mean_std(*_mean_std(dro_temporal_metrics_rows, key))
+        print(f"{metric:<22} {non_dro_val:<18} {dro_val:<18}")
+else:
+    print("No temporal fidelity metrics computed (no valid ROI boxes or masks).")
