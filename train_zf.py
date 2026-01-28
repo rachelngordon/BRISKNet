@@ -1253,6 +1253,21 @@ def main():
             if config['training']['multigpu']:
                 train_loader.sampler.set_epoch(epoch)
 
+            # EI schedule is epoch-wise; compute once per epoch to avoid per-iteration overhead.
+            ei_loss_weight = 0.0
+            compute_ei_this_epoch = False
+            if use_ei_loss:
+                ei_loss_weight = get_cosine_ei_weight(
+                    current_epoch=epoch,
+                    warmup_epochs=warmup,
+                    schedule_duration=duration,
+                    target_weight=target_w_ei,
+                )
+                compute_ei_this_epoch = ei_loss_weight > 0.0
+
+            # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
+            t_img = None
+
             for measured_kspace, csmap, N_samples, N_spokes, N_time in train_loader_tqdm:  # measured_kspace shape: (B, C, I, S, T)
                 
                 start = time.time()
@@ -1322,29 +1337,23 @@ def main():
                         mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
                         running_mc_loss += mc_loss.item()
 
-                        if use_ei_loss:
+                        if use_ei_loss and compute_ei_this_epoch:
                             ei_loss, t_img = ei_loss_fn(
                                 x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
                             )
 
-
-                            ei_loss_weight = get_cosine_ei_weight(
-                                current_epoch=epoch,
-                                warmup_epochs=warmup,
-                                schedule_duration=duration,
-                                target_weight=target_w_ei
-                            )
-
-
                             running_ei_loss += ei_loss.item()
                             total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
                             train_loader_tqdm.set_postfix(
-                                mc_loss=mc_loss.item(), ei_loss=ei_loss.item()
+                                mc_loss=mc_loss.item(), ei_loss=ei_loss.item(), ei_w=ei_loss_weight
                             )
 
                         else:
                             total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                            train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
+                            if use_ei_loss:
+                                train_loader_tqdm.set_postfix(mc_loss=mc_loss.item(), ei_w=ei_loss_weight)
+                            else:
+                                train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
 
                     if torch.isnan(total_loss):
                         print(
@@ -1433,7 +1442,7 @@ def main():
                             ),
                         )
                     
-                    if use_ei_loss:
+                    if use_ei_loss and t_img is not None:
 
                         plot_reconstruction_sample(
                             t_img,
@@ -1540,17 +1549,20 @@ def main():
                                 val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
                                 val_running_mc_loss += val_mc_loss.item()
 
-                                if use_ei_loss:
+                                if use_ei_loss and compute_ei_this_epoch:
                                     val_ei_loss, val_t_img = ei_loss_fn(
                                         val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
                                     )
 
                                     val_running_ei_loss += val_ei_loss.item()
                                     val_loader_tqdm.set_postfix(
-                                        val_mc_loss=val_mc_loss.item(), val_ei_loss=val_ei_loss.item()
+                                        val_mc_loss=val_mc_loss.item(), val_ei_loss=val_ei_loss.item(), ei_w=ei_loss_weight
                                     )
                                 else:
-                                    val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item())
+                                    if use_ei_loss:
+                                        val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item(), ei_w=ei_loss_weight)
+                                    else:
+                                        val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item())
 
 
                             ## Evaluation
