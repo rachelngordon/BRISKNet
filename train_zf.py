@@ -333,6 +333,7 @@ def main():
     eval_chunk_overlap = config["evaluation"]["chunk_overlap"]
 
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
+    val_noise_level = config.get("evaluation", {}).get("val_noise_level", 0)
 
     cluster = config["experiment"].get("cluster", "Randi")
 
@@ -497,7 +498,8 @@ def main():
         spokes_per_frame=N_spokes_eval,
         num_frames=N_time_eval,
         traj_method=traj_method,
-        grasp_slice_idx=raw_grasp_slice_idx)
+        grasp_slice_idx=raw_grasp_slice_idx,
+        noise_level=val_noise_level)
 
 
     val_dro_loader = DataLoader(

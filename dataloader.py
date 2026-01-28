@@ -538,7 +538,7 @@ class SimulatedDataset(Dataset):
     It loads the simulated k-space, coil sensitivity maps, and the
     ground truth dynamic image (DRO).
     """
-    def __init__(self, root_dir, raw_kspace_path, model_type, patient_ids, dataset_key, grasp_slice_idx=95, spokes_per_frame=36, num_frames=8, traj_method="trajGR"):
+    def __init__(self, root_dir, raw_kspace_path, model_type, patient_ids, dataset_key, grasp_slice_idx=95, spokes_per_frame=36, num_frames=8, traj_method="trajGR", noise_level=0):
 
         self.root_dir = root_dir
         self.raw_kspace_path = raw_kspace_path
@@ -549,6 +549,9 @@ class SimulatedDataset(Dataset):
         self.grasp_slice_idx = grasp_slice_idx
         self.dataset_key = dataset_key
         self.traj_method = traj_method
+        self.noise_level_value, self.noise_level_label = self._parse_noise_level(noise_level)
+        if self.noise_level_value > 0 and self.traj_method != "get_traj":
+            print(f"SimulatedDataset: noise_level={self.noise_level_label} ignored because traj_method={self.traj_method}.")
         self.slice_map = load_slice_map(SLICE_MAP_PATH)
         self._update_sample_paths()
 
@@ -579,6 +582,33 @@ class SimulatedDataset(Dataset):
 
         print(f"Found {len(self.sample_paths)} simulated samples in {self.dro_dir} for {self.num_frames} frames.")
 
+    @staticmethod
+    def _parse_noise_level(noise_level):
+        if noise_level is None:
+            return 0.0, None
+        if isinstance(noise_level, str):
+            label = noise_level.strip()
+            if label == "":
+                return 0.0, None
+            try:
+                value = float(label)
+            except ValueError as exc:
+                raise ValueError(f"noise_level must be numeric; got {noise_level!r}") from exc
+            if value <= 0:
+                return 0.0, None
+            return value, label
+        value = float(noise_level)
+        if value <= 0:
+            return 0.0, None
+        return value, str(noise_level)
+
+    def _traj_suffix(self):
+        if self.traj_method != "get_traj":
+            return ".npy"
+        if self.noise_level_value > 0:
+            return f"_correct_traj_n{self.noise_level_label}.npy"
+        return "_correct_traj.npy"
+
 
     def get_fastMRI_id(self, sample_dir):
 
@@ -604,10 +634,10 @@ class SimulatedDataset(Dataset):
         # Load the data from .npy files
         csmaps = np.load(os.path.join(sample_dir, 'csmaps.npy'))
         dro = np.load(os.path.join(sample_dir, 'dro_ground_truth.npz'))
-        grasp_suffix = "_correct_traj.npy" if self.traj_method == "get_traj" else ".npy"
+        traj_suffix = self._traj_suffix()
         grasp_path = os.path.join(
             sample_dir,
-            f'grasp_spf{self.spokes_per_frame}_frames{self.num_frames}{grasp_suffix}'
+            f'grasp_spf{self.spokes_per_frame}_frames{self.num_frames}{traj_suffix}'
         )
 
         grasp_recon = np.load(grasp_path)
@@ -619,10 +649,9 @@ class SimulatedDataset(Dataset):
         grasp_recon_torch = torch.flip(grasp_recon_torch, dims=[-3])
         grasp_recon_torch = torch.rot90(grasp_recon_torch, k=3, dims=[-3,-1])
 
-        kspace_suffix = "_correct_traj.npy" if self.traj_method == "get_traj" else ".npy"
         kspace_path = os.path.join(
             sample_dir,
-            f'simulated_kspace_spf{self.spokes_per_frame}_frames{self.num_frames}{kspace_suffix}'
+            f'simulated_kspace_spf{self.spokes_per_frame}_frames{self.num_frames}{traj_suffix}'
         )
 
         if os.path.exists(kspace_path):
