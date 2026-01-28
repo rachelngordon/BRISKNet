@@ -334,7 +334,14 @@ def main():
 
     # Resolve config/checkpoint paths and load config.
     config_path = args.config or os.path.join(args.exp_dir, "config.yaml")
-    ckpt_path = args.checkpoint or os.path.join(args.exp_dir, f"{exp_name}_model.pth")
+    if args.checkpoint:
+        ckpt_path = args.checkpoint
+    else:
+        best_ckpt_path = os.path.join(args.exp_dir, f"{exp_name}_best_model.pth")
+        if os.path.exists(best_ckpt_path):
+            ckpt_path = best_ckpt_path
+        else:
+            ckpt_path = os.path.join(args.exp_dir, f"{exp_name}_model.pth")
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)

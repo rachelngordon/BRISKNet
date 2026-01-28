@@ -1,21 +1,21 @@
 # Directories for input data
 data:
-  root_dir: "/ess/scratch/scratch1/rachelgordon/zf_data_192_slices/zf_kspace"
+  root_dir: "/net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace"
   dataset_key: "kspace"
-  split_file: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/data/data_split.json"
+  split_file: "/home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json"
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 8
+  timeframes: 18
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 8
-  eval_spokes: 36
+  eval_timeframes: 18
+  eval_spokes: 16
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 36
+  train_spokes_per_frame: 16
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -24,8 +24,8 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/output"
-  cluster: "Randi"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  cluster: "DSI"
 
 # DataLoader settings
 dataloader:
@@ -83,15 +83,9 @@ model:
     ei_loss:
       metric: "MSE"
       temporal_transform: "none"
-<<<<<<< HEAD:configs/config_ei_36spf_spatial.yaml
-      spatial_transform: "all"
-      rotate_range: 60
-      weight: 10000
-=======
       spatial_transform: "rotate"
-      rotate_range: 20
-      weight: 0
->>>>>>> origin/main:configs/config_mc_16spf.yaml
+      rotate_range: 100
+      weight: 10000
       warmup: 10
       duration: 5
       subsample_ratio_min: 0.7
@@ -131,11 +125,10 @@ training:
 
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/ess/scratch/scratch1/rachelgordon/dro_dataset_frontpad"
+  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset_frontpad"
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
-  val_noise_level: 0.5
 
 debugging:
   calc_step_0: True

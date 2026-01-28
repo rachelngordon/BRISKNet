@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "mc_36spf_noise_eval"
-    config_path = 'configs/randi/config_mc_36spf_noise.yaml'
+    job_name = "ei_16spf_diffeo"
+    config_path = 'configs/config_ei_16spf_diffeo.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"

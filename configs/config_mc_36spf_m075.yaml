@@ -1,8 +1,8 @@
 # Directories for input data
 data:
-  root_dir: "/ess/scratch/scratch1/rachelgordon/zf_data_192_slices/zf_kspace"
+  root_dir: "/net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace"
   dataset_key: "kspace"
-  split_file: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/data/data_split.json"
+  split_file: "/home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json"
   val_split_ratio: 0.2
   height: 320
   width: 320
@@ -24,8 +24,8 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/output"
-  cluster: "Randi"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  cluster: "DSI"
 
 # DataLoader settings
 dataloader:
@@ -54,8 +54,8 @@ model:
   film_identity_init: true
   film_L: true
   svd_noise_std: 0.001
-  lambda_L: 0.0025
-  lambda_S: 0.05
+  lambda_L: 0.001875
+  lambda_S: 0.0375
   lambda_spatial_L: 0.05
   lambda_spatial_S: 0.05
   gamma: 0.5
@@ -76,24 +76,18 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: True
+    use_ei_loss: False
     mc_loss:
-      weight: 1
+      weight: 10
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "none"
-<<<<<<< HEAD:configs/config_ei_36spf_spatial.yaml
+      temporal_transform: "warp"
       spatial_transform: "all"
-      rotate_range: 60
-      weight: 10000
-=======
-      spatial_transform: "rotate"
       rotate_range: 20
       weight: 0
->>>>>>> origin/main:configs/config_mc_16spf.yaml
-      warmup: 10
-      duration: 5
+      warmup: 25
+      duration: 10000
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
@@ -104,7 +98,7 @@ model:
 
 # Training settings
 training:
-  epochs: 100
+  epochs: 40
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -131,11 +125,10 @@ training:
 
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/ess/scratch/scratch1/rachelgordon/dro_dataset_frontpad"
+  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset_frontpad"
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
-  val_noise_level: 0.5
 
 debugging:
   calc_step_0: True

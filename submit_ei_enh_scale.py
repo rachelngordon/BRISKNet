@@ -48,8 +48,13 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
+<<<<<<<< HEAD:submit_ei_enh_scale.py
     job_name = "ei_enh_scale_36spf_noise_eval"
     config_path = 'configs/randi/config_ei_36spf_enh_scale.yaml'
+========
+    job_name = "ei_16spf_rotate100"
+    config_path = 'configs/config_ei_16spf_rotate100.yaml'
+>>>>>>>> origin/main:submit_ei_rotate100.py
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"

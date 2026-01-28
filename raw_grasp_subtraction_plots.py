@@ -17,7 +17,7 @@ from utils import prep_nufft, set_seed, sliding_window_inference, to_torch_compl
 
 
 # ---- User inputs ----
-exp_dir = '/net/projects2/annawoodard/rachelgordon/experiments/ei_warp_8spf_final'
+exp_dir = '/net/projects2/annawoodard/rachelgordon/experiments/mc_36spf_new_traj'
 device_override = None  # e.g., 'cuda:0' or 'cpu'
 eval_spokes = None  # override spokes per frame if desired
 eval_frames = None  # override num frames if desired
