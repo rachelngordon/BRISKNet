@@ -7,11 +7,10 @@ class Trainer(submitit.helpers.Checkpointable):
     """
     A Checkpointable class to handle training and resubmission.
     """
-    def __init__(self, exp_name, config_path, num_gpus, from_checkpoint=False):
+    def __init__(self, exp_name, config_path, num_gpus):
         self.exp_name = exp_name
         self.config_path = config_path
         self.num_gpus = num_gpus
-        self.from_checkpoint = from_checkpoint
 
     def __call__(self):
         """
@@ -19,7 +18,7 @@ class Trainer(submitit.helpers.Checkpointable):
         """
         # Activate your Micromamba environment
         # CORRECTED THE TYPO IN THIS PATH
-        micromamba_path = "/gpfs/data/karczmar-lab/workspaces/rachelgordon/micromamba/etc/profile.d/micromamba.sh"
+        micromamba_path = "/home/rachelgordon/micromamba/etc/profile.d/mamba.sh"
         env_name = "recon_mri"
         
         command_str = (
@@ -32,9 +31,6 @@ class Trainer(submitit.helpers.Checkpointable):
             f"--exp_name {self.exp_name} "
         )
 
-        if self.from_checkpoint:
-            command_str += " --from_checkpoint True"
-
         # Using shell=True to handle the source and && operators
         subprocess.run(command_str, shell=True, check=True, executable='/bin/bash')
 
@@ -43,18 +39,13 @@ class Trainer(submitit.helpers.Checkpointable):
         This method is called by submitit when the job is about to time out.
         It returns a DelayedSubmission object for proper requeueing.
         """
-        new_trainer_instance = Trainer(exp_name=self.exp_name, config_path=self.config_path, num_gpus=self.num_gpus, from_checkpoint=True)
+        new_trainer_instance = Trainer(exp_name=self.exp_name, config_path=self.config_path, num_gpus=self.num_gpus)
         return submitit.helpers.DelayedSubmission(new_trainer_instance)
 
 def main():
     # --- Executor Configuration ---
-<<<<<<<< HEAD:submit_ei_arrival_shift.py
-    job_name = "ei_arrival_shift_36spf_noise_eval"
-    config_path = 'configs/randi/config_ei_36spf_arrival_shift.yaml'
-========
-    job_name = "mc_36spf_m2"
-    config_path = 'configs/config_mc_36spf_m2.yaml'
->>>>>>>> origin/main:submit_mc_m2.py
+    job_name = "ei_arrival_shift_36spf"
+    config_path = 'configs/config_ei_arrival_shift.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -64,18 +55,24 @@ def main():
 
     # --- SLURM Parameter Configuration --
     executor.update_parameters(
-        slurm_partition="gpuq",
+        slurm_partition="general",
         slurm_job_name=job_name,
         nodes=1,
-        gpus_per_node=num_gpus,
         tasks_per_node=1,
-        cpus_per_task=4,
-        slurm_mem_per_gpu="50000",
-        timeout_min=1440,
+        cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
+        slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
+        timeout_min=700,
+
+        # IMPORTANT: no cpu_bind here anymore, this only affects sbatch
+        # and your sbatch doesn't support --cpu-bind
+        # slurm_additional_parameters={"export": "ALL,SLURM_CPU_BIND=off"},
+
+        # Instead: tell the *srun* that submitit uses not to do CPU binding
+        srun_args=["--cpu-bind=none"],
     )
 
     # --- Job Submission ---
-    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus, from_checkpoint=False)
+    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus)
     job = executor.submit(initial_trainer)
 
     print(f"Submitted job with ID: {job.job_id}")

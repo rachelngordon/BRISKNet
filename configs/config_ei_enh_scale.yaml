@@ -1,8 +1,8 @@
 # Directories for input data
 data:
-  root_dir: "/ess/scratch/scratch1/rachelgordon/zf_data_192_slices/zf_kspace"
+  root_dir: "/net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace"
   dataset_key: "kspace"
-  split_file: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/data/data_split.json"
+  split_file: "/home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json"
   val_split_ratio: 0.2
   height: 320
   width: 320
@@ -24,8 +24,8 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/output"
-  cluster: "Randi"
+  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  cluster: "DSI"
 
 # DataLoader settings
 dataloader:
@@ -82,11 +82,8 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "arrival_shift"
+      temporal_transform: "enh_scale"
       spatial_transform: "all"
-      arrival_shift_max_shift: 1
-      arrival_shift_percentile: 0.95
-      arrival_shift_baseline_k: 2.0
       rotate_range: 60
       weight: 10000
       warmup: 10
@@ -95,6 +92,13 @@ model:
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
+      # --- arrival_shift params ---
+      arrival_shift_max_shift: 1
+      arrival_shift_percentile: 0.95
+      arrival_shift_baseline_k: 2.0
+      # --- enh_scale params ---
+      enh_scale_min: 0.85
+      enh_scale_max: 1.15
       no_grad: false
   norm: "both"
 
@@ -128,11 +132,11 @@ training:
 
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/ess/scratch/scratch1/rachelgordon/dro_dataset_frontpad"
+  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset_frontpad"
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
-  val_noise_level: 0.5
+  val_noise_level: 0
 
 debugging:
   calc_step_0: True

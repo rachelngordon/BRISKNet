@@ -24,7 +24,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
   cluster: "DSI"
 
 # DataLoader settings
@@ -54,8 +54,8 @@ model:
   film_identity_init: true
   film_L: true
   svd_noise_std: 0.001
-  lambda_L: 0.001875
-  lambda_S: 0.0375
+  lambda_L: 0.0025
+  lambda_S: 0.05
   lambda_spatial_L: 0.05
   lambda_spatial_S: 0.05
   gamma: 0.5
@@ -76,18 +76,18 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: False
+    use_ei_loss: True
     mc_loss:
-      weight: 10
+      weight: 1
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp"
+      temporal_transform: "none"
       spatial_transform: "all"
-      rotate_range: 20
-      weight: 0
-      warmup: 25
-      duration: 10000
+      rotate_range: 60
+      weight: 10000
+      warmup: 10
+      duration: 5
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
@@ -98,7 +98,7 @@ model:
 
 # Training settings
 training:
-  epochs: 40
+  epochs: 100
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -129,6 +129,7 @@ evaluation:
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
+  val_noise_level: 0
 
 debugging:
   calc_step_0: True

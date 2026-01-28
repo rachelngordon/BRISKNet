@@ -431,11 +431,13 @@ def main():
     results = []
     raw_results = []
     grasp_results = []
+    inference_times = []
 
     with torch.no_grad():
         for idx, batch in enumerate(tqdm(val_loader, total=num_samples, desc="Inference on validation")):
             if idx >= num_samples:
                 break
+            label = f"sample{idx:02d}"
 
             (
                 dro_kspace,
@@ -459,6 +461,10 @@ def main():
 
             acceleration_encoding = acceleration_val if config["model"]["encode_acceleration"] else None
             start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device) if config["model"]["encode_time_index"] else None
+
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            infer_start = time.perf_counter()
 
             if N_time_eval > eval_chunk_size:
                 x_recon, _ = sliding_window_inference(
@@ -507,9 +513,16 @@ def main():
                     raw_kspace, eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm="none"#config["model"]["norm"]
                 )
 
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            infer_time = time.perf_counter() - infer_start
+            inference_times.append(infer_time)
+            tqdm.write(
+                f"[Timing] {label}: recon-only inference time = {infer_time:.3f}s"
+            )
+
             sample_dir = os.path.join(inference_dir, f"sample_{idx:02d}")
             os.makedirs(sample_dir, exist_ok=True)
-            label = f"sample{idx:02d}"
 
             if args.diagnostics:
                 ref_map = {
@@ -699,6 +712,31 @@ def main():
                     raw_ssdu_nmse=ssdu_result.get("ssdu_nmse_mean"),
                     raw_grasp_ssdu_nmse=ssdu_grasp_result.get("ssdu_nmse_mean"),
                 )
+            )
+
+    if inference_times:
+        mean_infer = sum(inference_times) / len(inference_times)
+        std_infer = statistics.stdev(inference_times) if len(inference_times) > 1 else 0.0
+        print(
+            "Inference timing (recon only): "
+            f"{mean_infer:.3f}s ± {std_infer:.3f}s per sample"
+        )
+        results_dir = os.path.join(os.path.dirname(__file__), "results")
+        os.makedirs(results_dir, exist_ok=True)
+        times_path = os.path.join(results_dir, "inference_times")
+        write_header = not os.path.exists(times_path)
+        acceleration_report = (320.0 * math.pi / 2.0) / float(N_spokes_eval)
+        seconds_per_frame = 150.0 / float(N_time_eval)
+        with open(times_path, "a") as f:
+            if write_header:
+                f.write(
+                    "exp_name,spokes_per_frame,time_frames,acceleration,seconds_per_frame,"
+                    "mean_infer_s,std_infer_s\n"
+                )
+            f.write(
+                f"{exp_name},{int(N_spokes_eval)},{int(N_time_eval)},"
+                f"{acceleration_report:.6f},{seconds_per_frame:.6f},"
+                f"{mean_infer:.6f},{std_infer:.6f}\n"
             )
 
     # Save metrics.

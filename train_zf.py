@@ -106,36 +106,37 @@ def main():
         type=bool,
         required=False,
         default=False,
-        help="Whether to load from a checkpoint",
+        help="Deprecated (ignored). Checkpoints auto-resume based on exp_name.",
     )
     args = parser.parse_args()
 
     # print experiment name and git commit
     exp_name = args.exp_name
 
-    # NOTE: need to change for running on Randi
-    # config_dir = '/net/projects2/annawoodard/rachelgordon/experiments'
-    config_dir = 'output'
+    # Load config and auto-resume if a last checkpoint exists for this exp_name
+    with open(args.config, "r") as file:
+        new_config = yaml.safe_load(file)
+    new_config = apply_cluster_paths(new_config)
 
+    output_dir = os.path.join(new_config["experiment"]["output_dir"], exp_name)
+    checkpoint_file = os.path.join(output_dir, f"{exp_name}_model.pth")
+    resume_from_checkpoint = os.path.isfile(checkpoint_file)
 
-    # Load the configuration file
-    if args.from_checkpoint == True:
-        with open(os.path.join(config_dir, f"{exp_name}/config.yaml"), "r") as file:
-            config = yaml.safe_load(file)
-
-        with open(args.config, "r") as file:
-            new_config = yaml.safe_load(file)
-        
+    if resume_from_checkpoint:
+        config_path = os.path.join(output_dir, "config.yaml")
+        if os.path.isfile(config_path):
+            with open(config_path, "r") as file:
+                config = yaml.safe_load(file)
+        else:
+            config = new_config
+        config = apply_cluster_paths(config)
         epochs = new_config['training']["epochs"]
     else:
-        with open(args.config, "r") as file:
-            config = yaml.safe_load(file)
-
+        config = new_config
         epochs = config['training']["epochs"]
 
-    config = apply_cluster_paths(config)
-    if args.from_checkpoint:
-        new_config = apply_cluster_paths(new_config)
+    # Keep output_dir aligned with the resolved checkpoint location.
+    config.setdefault("experiment", {})["output_dir"] = os.path.dirname(output_dir)
 
     use_edge_time_index_sampling = config.get('training', {}).get('edge_time_index_sampling', False)
     traj_method = config.get("data", {}).get("traj_method", "trajGR")
@@ -202,6 +203,10 @@ def main():
         print(f"Running experiment on Git commit: {commit_hash}")
 
         print(f"Experiment: {exp_name}")
+        if resume_from_checkpoint:
+            print(f"[Checkpoint] Resuming from {checkpoint_file}")
+        else:
+            print("[Checkpoint] No existing checkpoint found; starting new run.")
 
 
 
@@ -224,7 +229,7 @@ def main():
 
 
         # Save the configuration file
-        if args.from_checkpoint == False:
+        if not resume_from_checkpoint:
             with open(os.path.join(output_dir, 'config.yaml'), 'w') as file:
                 yaml.dump(config, file)
 
@@ -644,7 +649,7 @@ def main():
 
 
     # Load the checkpoint to resume training
-    if args.from_checkpoint == True:
+    if resume_from_checkpoint:
         # if global_rank == 0 or config['training']['multigpu'] == False:
         checkpoint_file = os.path.join(output_dir, f'{exp_name}_model.pth')
         model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
@@ -785,7 +790,7 @@ def main():
 
 
 
-    if args.from_checkpoint:
+    if resume_from_checkpoint:
         train_mc_losses = train_curves["train_mc_losses"]
         val_mc_losses = val_curves["val_mc_losses"]
         train_ei_losses = train_curves["train_ei_losses"]
@@ -836,7 +841,7 @@ def main():
 
 
     eval_spf_curves = {}
-    if args.from_checkpoint:
+    if resume_from_checkpoint:
         eval_spf_curves = eval_curves.get("eval_spf_curves", {})
     for spf in low_spf_eval_targets:
         if spf not in eval_spf_curves:
@@ -853,7 +858,7 @@ def main():
     best_checkpoint_path = os.path.join(output_dir, f'{exp_name}_best_model.pth')
     best_psnr = -np.inf
     best_epoch = None
-    if args.from_checkpoint:
+    if resume_from_checkpoint:
         psnr_array = np.array(eval_psnrs, dtype=float)
         if psnr_array.size and np.isfinite(psnr_array).any():
             best_idx = int(np.nanargmax(psnr_array))
@@ -913,7 +918,7 @@ def main():
     raw_grasp_dc_maes = []
 
     # Defaults so checkpointing works even if Step-0 validation is skipped
-    if not args.from_checkpoint:
+    if not resume_from_checkpoint:
         avg_grasp_ssim = 0.0
         avg_grasp_psnr = 0.0
         avg_grasp_mse = 0.0
@@ -935,7 +940,7 @@ def main():
 
     # Step 0: Evaluate the untrained model
     step0_do_val = config.get("debugging", {}).get("calc_step_0_val", True)
-    if (not args.from_checkpoint) and config.get("debugging", {}).get("calc_step_0", True):
+    if (not resume_from_checkpoint) and config.get("debugging", {}).get("calc_step_0", True):
         model.eval()
         initial_train_mc_loss = 0.0
         initial_val_mc_loss = 0.0

@@ -89,11 +89,6 @@ model:
       temporal_transform: "none"
       spatial_transform: "all"
       rotate_range: 20
-<<<<<<< HEAD
-      weight: 40000
-      warmup: 25
-      duration: 10000
-=======
       weight: 10000
       warmup: 1
       duration: 0
@@ -101,7 +96,6 @@ model:
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
->>>>>>> origin/main
       pre_contrast_baseline: "m_seconds"
       baseline_seconds: 20
       total_seconds: 150.0
@@ -126,7 +120,7 @@ model:
 
 # Training settings
 training:
-  epochs: 3
+  epochs: 2
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

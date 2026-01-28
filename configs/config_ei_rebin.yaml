@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 18
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 18
-  eval_spokes: 16
+  eval_timeframes: 8
+  eval_spokes: 36
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 16
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -24,7 +24,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
   cluster: "DSI"
 
 # DataLoader settings
@@ -83,8 +83,8 @@ model:
     ei_loss:
       metric: "MSE"
       temporal_transform: "none"
-      spatial_transform: "rotate"
-      rotate_range: 80
+      spatial_transform: "all"
+      rotate_range: 60
       weight: 10000
       warmup: 10
       duration: 5
@@ -92,7 +92,21 @@ model:
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
+      # --- arrival_shift params ---
+      arrival_shift_max_shift: 1
+      arrival_shift_percentile: 0.95
+      arrival_shift_baseline_k: 2.0
+      # --- enh_scale params ---
+      enh_scale_min: 0.85
+      enh_scale_max: 1.15
       no_grad: false
+    # Operator-level (binning) equivariance (DDEI-ish).
+    rebin_loss:
+      enable: false
+      weight: 10000
+      factor: 2
+      metric: "MSE"
+      time_index_mode: "scaled"
   norm: "both"
 
 
@@ -129,6 +143,7 @@ evaluation:
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
+  val_noise_level: 0
 
 debugging:
   calc_step_0: True
