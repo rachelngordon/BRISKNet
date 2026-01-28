@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 12
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 12
-  eval_spokes: 24
+  eval_timeframes: 8
+  eval_spokes: 36
   spf_aug: false
   weight_accelerations: false
   fpg: 12
-  train_spokes_per_frame: 24
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
   eval_frequency: 1
@@ -133,6 +133,7 @@ evaluation:
   chunk_size: 12
   chunk_overlap: 8
   rescale: False
+  val_noise_level: 0.5
 
 debugging:
   calc_step_0: True
