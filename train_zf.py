@@ -103,8 +103,8 @@ def main():
     exp_name = args.exp_name
 
     # NOTE: need to change for running on Randi
-    config_dir = '/net/projects2/annawoodard/rachelgordon/experiments'
-    # config_dir = 'output'
+    # config_dir = '/net/projects2/annawoodard/rachelgordon/experiments'
+    config_dir = 'output'
 
 
     # Load the configuration file
@@ -781,6 +781,57 @@ def main():
                 eval_curve_corrs=[],
             )
 
+    best_checkpoint_path = os.path.join(output_dir, f'{exp_name}_best_model.pth')
+    best_psnr = -np.inf
+    best_epoch = None
+    if args.from_checkpoint:
+        psnr_array = np.array(eval_psnrs, dtype=float)
+        if psnr_array.size and np.isfinite(psnr_array).any():
+            best_idx = int(np.nanargmax(psnr_array))
+            best_psnr = float(psnr_array[best_idx])
+            if eval_temporal_epochs and len(eval_temporal_epochs) == len(eval_psnrs):
+                best_epoch = eval_temporal_epochs[best_idx]
+            else:
+                best_epoch = best_idx * eval_frequency
+        if global_rank == 0 or not config['training']['multigpu']:
+            if best_epoch is not None:
+                print(f"[Checkpoint] Loaded best PSNR {best_psnr:.4f} from epoch {best_epoch}")
+
+    def _build_checkpoint_curves():
+        train_curves = dict(
+            train_mc_losses=train_mc_losses,
+            train_ei_losses=train_ei_losses,
+            train_adj_losses=train_adj_losses,
+            weighted_train_mc_losses=weighted_train_mc_losses,
+            weighted_train_ei_losses=weighted_train_ei_losses,
+            weighted_train_adj_losses=weighted_train_adj_losses,
+        )
+        val_curves = dict(
+            val_mc_losses=val_mc_losses,
+            val_ei_losses=val_ei_losses,
+            val_adj_losses=val_adj_losses,
+        )
+        eval_curves = dict(
+            eval_ssims=eval_ssims,
+            eval_psnrs=eval_psnrs,
+            eval_mses=eval_mses,
+            eval_lpipses=eval_lpipses,
+            eval_dc_mses=eval_dc_mses,
+            eval_dc_maes=eval_dc_maes,
+            eval_raw_dc_mses=eval_raw_dc_mses,
+            eval_raw_dc_maes=eval_raw_dc_maes,
+            eval_curve_corrs=eval_curve_corrs,
+            eval_temporal_epochs=eval_temporal_epochs,
+            eval_curve_maes=eval_curve_maes,
+            eval_ttae_secs=eval_ttae_secs,
+            eval_iauc10_errs=eval_iauc10_errs,
+            eval_peak_errs=eval_peak_errs,
+            eval_spf_curves=eval_spf_curves,
+            best_psnr=best_psnr,
+            best_epoch=best_epoch,
+        )
+        return train_curves, val_curves, eval_curves
+
 
     grasp_ssims = []
     grasp_psnrs = []
@@ -1149,6 +1200,40 @@ def main():
             avg_grasp_curve_corr = np.mean(grasp_curve_corrs)
             avg_grasp_raw_dc_mae = np.mean(raw_grasp_dc_maes)
             avg_grasp_raw_dc_mse = np.mean(raw_grasp_dc_mses)
+
+            if global_rank == 0 or not config['training']['multigpu']:
+                if np.isfinite(initial_eval_psnr) and initial_eval_psnr > best_psnr:
+                    best_psnr = float(initial_eval_psnr)
+                    best_epoch = 0
+                    train_curves, val_curves, eval_curves = _build_checkpoint_curves()
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        1,
+                        train_curves,
+                        val_curves,
+                        eval_curves,
+                        target_w_ei,
+                        step0_train_ei_loss,
+                        step0_train_mc_loss,
+                        avg_grasp_ssim,
+                        avg_grasp_psnr,
+                        avg_grasp_mse,
+                        avg_grasp_lpips,
+                        avg_grasp_dc_mse,
+                        avg_grasp_dc_mae,
+                        avg_grasp_curve_corr,
+                        avg_grasp_raw_dc_mae,
+                        avg_grasp_raw_dc_mse,
+                        best_checkpoint_path,
+                    )
+                    print(
+                        f"[Checkpoint] New best PSNR {best_psnr:.4f} at epoch 0. Saved to {best_checkpoint_path}"
+                    )
+                    if run_state is not None:
+                        run_state["best_checkpoint_epoch"] = int(best_epoch)
+                        run_state["best_checkpoint_psnr"] = float(best_psnr)
+                        _save_run_state(run_state_path, run_state)
 
 
 
@@ -1756,6 +1841,39 @@ def main():
                     writer.add_scalar('Loss/Val_EI', epoch_val_ei_loss, epoch)
                     writer.add_scalar('Loss/Val_Adj', epoch_val_adj_loss, epoch)
 
+                    if np.isfinite(epoch_eval_psnr) and epoch_eval_psnr > best_psnr:
+                        best_psnr = float(epoch_eval_psnr)
+                        best_epoch = epoch
+                        train_curves, val_curves, eval_curves = _build_checkpoint_curves()
+                        save_checkpoint(
+                            model,
+                            optimizer,
+                            epoch + 1,
+                            train_curves,
+                            val_curves,
+                            eval_curves,
+                            target_w_ei,
+                            step0_train_ei_loss,
+                            epoch_train_mc_loss,
+                            avg_grasp_ssim,
+                            avg_grasp_psnr,
+                            avg_grasp_mse,
+                            avg_grasp_lpips,
+                            avg_grasp_dc_mse,
+                            avg_grasp_dc_mae,
+                            avg_grasp_curve_corr,
+                            avg_grasp_raw_dc_mae,
+                            avg_grasp_raw_dc_mse,
+                            best_checkpoint_path,
+                        )
+                        print(
+                            f"[Checkpoint] New best PSNR {best_psnr:.4f} at epoch {epoch}. Saved to {best_checkpoint_path}"
+                        )
+                        if run_state is not None:
+                            run_state["best_checkpoint_epoch"] = int(best_epoch)
+                            run_state["best_checkpoint_psnr"] = float(best_psnr)
+                            _save_run_state(run_state_path, run_state)
+
 
 
 
@@ -1765,36 +1883,7 @@ def main():
                     if global_rank == 0 or not config['training']['multigpu']:
 
                         # Save the model checkpoint
-                        train_curves = dict(
-                            train_mc_losses=train_mc_losses,
-                            train_ei_losses=train_ei_losses,
-                            train_adj_losses=train_adj_losses,
-                            weighted_train_mc_losses=weighted_train_mc_losses,
-                            weighted_train_ei_losses=weighted_train_ei_losses,
-                            weighted_train_adj_losses=weighted_train_adj_losses,
-                        )
-                        val_curves = dict(
-                            val_mc_losses=val_mc_losses,
-                            val_ei_losses=val_ei_losses,
-                            val_adj_losses=val_adj_losses,
-                        )
-                        eval_curves = dict(
-                            eval_ssims=eval_ssims,
-                            eval_psnrs=eval_psnrs,
-                            eval_mses=eval_mses,
-                            eval_lpipses=eval_lpipses,
-                            eval_dc_mses=eval_dc_mses,
-                            eval_dc_maes=eval_dc_maes,
-                            eval_raw_dc_mses=eval_raw_dc_mses,
-                            eval_raw_dc_maes=eval_raw_dc_maes,
-                            eval_curve_corrs=eval_curve_corrs,
-                            eval_temporal_epochs=eval_temporal_epochs,
-                            eval_curve_maes=eval_curve_maes,
-                            eval_ttae_secs=eval_ttae_secs,
-                            eval_iauc10_errs=eval_iauc10_errs,
-                            eval_peak_errs=eval_peak_errs,
-                            eval_spf_curves=eval_spf_curves,
-                        )
+                        train_curves, val_curves, eval_curves = _build_checkpoint_curves()
                         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
                         save_checkpoint(model, optimizer, epoch + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
                         print(f'Model saved to {model_save_path}')
@@ -2180,36 +2269,7 @@ def main():
 
     # Save the model at the end of training
     if global_rank == 0 or not config['training']['multigpu']:
-        train_curves = dict(
-            train_mc_losses=train_mc_losses,
-            train_ei_losses=train_ei_losses,
-            train_adj_losses=train_adj_losses,
-            weighted_train_mc_losses=weighted_train_mc_losses,
-            weighted_train_ei_losses=weighted_train_ei_losses,
-            weighted_train_adj_losses=weighted_train_adj_losses,
-        )
-        val_curves = dict(
-            val_mc_losses=val_mc_losses,
-            val_ei_losses=val_ei_losses,
-            val_adj_losses=val_adj_losses,
-        )
-        eval_curves = dict(
-            eval_ssims=eval_ssims,
-            eval_psnrs=eval_psnrs,
-            eval_mses=eval_mses,
-            eval_lpipses=eval_lpipses,
-            eval_dc_mses=eval_dc_mses,
-            eval_dc_maes=eval_dc_maes,
-            eval_raw_dc_mses=eval_raw_dc_mses,
-            eval_raw_dc_maes=eval_raw_dc_maes,
-            eval_curve_corrs=eval_curve_corrs,
-            eval_temporal_epochs=eval_temporal_epochs,
-            eval_curve_maes=eval_curve_maes,
-            eval_ttae_secs=eval_ttae_secs,
-            eval_iauc10_errs=eval_iauc10_errs,
-            eval_peak_errs=eval_peak_errs,
-            eval_spf_curves=eval_spf_curves,
-        )
+        train_curves, val_curves, eval_curves = _build_checkpoint_curves()
         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
         save_checkpoint(model, optimizer, epochs + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
         print(f'Model saved to {model_save_path}')

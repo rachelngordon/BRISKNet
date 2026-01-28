@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "mc_36spf_new_traj_smaller_kernel"
-    config_path = 'configs/config_mc_36spf_new_traj_smaller_kernel.yaml'
+    job_name = "mc_36spf_m3"
+    config_path = 'configs/config_mc_36spf_m3.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
