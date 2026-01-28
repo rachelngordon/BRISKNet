@@ -10,7 +10,17 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
-from transform import VideoRotate, VideoDiffeo, SubsampleTime, MonophasicTimeWarp, TemporalShiftJitterAfterBaseline, TemporalNoise, TimeReverse
+from transform import (
+    VideoRotate,
+    VideoDiffeo,
+    SubsampleTime,
+    MonophasicTimeWarp,
+    TemporalShiftJitterAfterBaseline,
+    TemporalNoise,
+    TimeReverse,
+    BolusArrivalTimeShift,
+    BaselineEnhancementScale,
+)
 from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
@@ -23,6 +33,7 @@ import random
 import time 
 import seaborn as sns
 from loss_metrics import LPIPSVideoMetric, SSIMVideoMetric
+from rebin_loss import RebinConsistencyLoss
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
@@ -288,6 +299,13 @@ def main():
     target_w_ei = config["model"]["losses"]["ei_loss"]["weight"]
     warmup = config["model"]["losses"]["ei_loss"]["warmup"]
     duration = config["model"]["losses"]["ei_loss"]["duration"]
+
+    rebin_cfg = config["model"]["losses"].get("rebin_loss", {})
+    use_rebin_loss = bool(rebin_cfg.get("enable", False))
+    rebin_loss_weight = float(rebin_cfg.get("weight", 0.0))
+    rebin_factor = int(rebin_cfg.get("factor", 2))
+    rebin_metric_name = str(rebin_cfg.get("metric", "MSE"))
+    rebin_time_index_mode = str(rebin_cfg.get("time_index_mode", "none"))
 
     save_interval = config["training"]["save_interval"]
     plot_interval = config["training"]["plot_interval"]
@@ -655,18 +673,37 @@ def main():
     ei_checkpoint_mode = config['model']['losses']['ei_loss'].get("checkpoint_mode", "none")
     ei_checkpoint_use_reentrant = config['model']['losses']['ei_loss'].get("checkpoint_use_reentrant", False)
 
+    if use_rebin_loss:
+        if rebin_metric_name.upper() == "MAE":
+            rebin_metric = torch.nn.L1Loss()
+        else:
+            rebin_metric = torch.nn.MSELoss()
+        rebin_loss_fn = RebinConsistencyLoss(
+            factor=rebin_factor,
+            metric=rebin_metric,
+            time_index_mode=rebin_time_index_mode,
+        )
+    else:
+        rebin_loss_fn = None
+
 
     # define EI loss transformations
     if use_ei_loss:
         rotate = VideoRotate(n_trans=1, interpolation_mode="bilinear", degrees=config['model']['losses']['ei_loss'].get("rotate_range", 180))
         diffeo = VideoDiffeo(n_trans=1, device=device)
 
-        subsample = SubsampleTime(n_trans=1, subsample_ratio_range=(config['model']['losses']['ei_loss']['subsample_ratio_min'], config['model']['losses']['ei_loss']['subsample_ratio_max']))
+        subsample = SubsampleTime(
+            n_trans=1,
+            subsample_ratio_range=(
+                config['model']['losses']['ei_loss'].get("subsample_ratio_min", 0.7),
+                config['model']['losses']['ei_loss'].get("subsample_ratio_max", 0.95),
+            ),
+        )
         monophasic_warp = MonophasicTimeWarp(
             n_trans=1,
             warp_ratio_range=(
-                config['model']['losses']['ei_loss']['warp_ratio_min'],
-                config['model']['losses']['ei_loss']['warp_ratio_max'],
+                config['model']['losses']['ei_loss'].get("warp_ratio_min", 0.7),
+                config['model']['losses']['ei_loss'].get("warp_ratio_max", 1.3),
             ),
             pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
             baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
@@ -677,6 +714,26 @@ def main():
             max_shift=config['model']['losses']['ei_loss'].get("shift_jitter_max_shift", 2),
             pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
             baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+            buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
+        )
+        arrival_shift = BolusArrivalTimeShift(
+            n_trans=1,
+            max_shift=config['model']['losses']['ei_loss'].get("arrival_shift_max_shift", 2),
+            percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+            baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+            total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
+        )
+        enh_scale = BaselineEnhancementScale(
+            n_trans=1,
+            scale_range=(
+                config['model']['losses']['ei_loss'].get("enh_scale_min", 0.8),
+                config['model']['losses']['ei_loss'].get("enh_scale_max", 1.2),
+            ),
+            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
+            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+            total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
             buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
         )
         temp_noise = TemporalNoise(n_trans=1, noise_strength=config['model']['losses']['ei_loss'].get("noise_strength", 0.5))
@@ -697,6 +754,16 @@ def main():
                 ei_loss_fn = EILoss(shift_jitter, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
                 ei_loss_fn = EILoss(shift_jitter | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+        elif config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift":
+            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
+                ei_loss_fn = EILoss(arrival_shift, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+            else:
+                ei_loss_fn = EILoss(arrival_shift | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+        elif config['model']['losses']['ei_loss']['temporal_transform'] == "enh_scale":
+            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
+                ei_loss_fn = EILoss(enh_scale, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+            else:
+                ei_loss_fn = EILoss(enh_scale | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "noise":
             ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp_subsample":
@@ -815,7 +882,7 @@ def main():
 
     # Step 0: Evaluate the untrained model
     step0_do_val = config.get("debugging", {}).get("calc_step_0_val", True)
-    if args.from_checkpoint == False and config['debugging']['calc_step_0'] == True:
+    if (not args.from_checkpoint) and config.get("debugging", {}).get("calc_step_0", True):
         model.eval()
         initial_train_mc_loss = 0.0
         initial_val_mc_loss = 0.0
@@ -1168,6 +1235,7 @@ def main():
             running_mc_loss = 0.0
             running_ei_loss = 0.0
             running_adj_loss = 0.0
+            running_rebin_loss = 0.0
             epoch_eval_ssims = []
             epoch_eval_psnrs = []
             epoch_eval_mses = []
@@ -1322,6 +1390,23 @@ def main():
                         mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
                         running_mc_loss += mc_loss.item()
 
+                        if use_rebin_loss:
+                            rebin_loss = rebin_loss_fn(
+                                measured_kspace.to(device),
+                                x_recon,
+                                physics,
+                                model,
+                                csmap,
+                                acceleration_encoding,
+                                start_timepoint_index,
+                                spokes_per_frame=int(N_spokes),
+                                samples_per_spoke=int(N_samples),
+                                norm=config['model']['norm'],
+                            )
+                            running_rebin_loss += rebin_loss.item()
+                        else:
+                            rebin_loss = None
+
                         if use_ei_loss:
                             ei_loss, t_img = ei_loss_fn(
                                 x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
@@ -1338,13 +1423,22 @@ def main():
 
                             running_ei_loss += ei_loss.item()
                             total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
+                            if rebin_loss is not None and rebin_loss_weight > 0:
+                                total_loss = total_loss + rebin_loss * rebin_loss_weight
                             train_loader_tqdm.set_postfix(
-                                mc_loss=mc_loss.item(), ei_loss=ei_loss.item()
+                                mc_loss=mc_loss.item(),
+                                ei_loss=ei_loss.item(),
+                                rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
                             )
 
                         else:
                             total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                            train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
+                            if rebin_loss is not None and rebin_loss_weight > 0:
+                                total_loss = total_loss + rebin_loss * rebin_loss_weight
+                            train_loader_tqdm.set_postfix(
+                                mc_loss=mc_loss.item(),
+                                rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
+                            )
 
                     if torch.isnan(total_loss):
                         print(
@@ -1359,7 +1453,8 @@ def main():
                         total_loss.backward()
 
 
-                    if config["debugging"]["enable_gradient_monitoring"] == True and iteration_count % config["debugging"]["monitoring_interval"] == 0:
+                    debug_cfg = config.get("debugging", {})
+                    if debug_cfg.get("enable_gradient_monitoring", False) and iteration_count % int(debug_cfg.get("monitoring_interval", 100)) == 0:
                     
                         log_gradient_stats(
                             model=model,
@@ -1462,11 +1557,19 @@ def main():
             train_adj_losses.append(epoch_train_adj_loss)
             weighted_train_adj_losses.append(epoch_train_adj_loss*adj_loss_weight)
 
+            if use_rebin_loss:
+                epoch_train_rebin_loss = running_rebin_loss / len(train_loader)
+            else:
+                epoch_train_rebin_loss = 0.0
+
 
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('Loss/Train_MC', epoch_train_mc_loss, epoch)
                 writer.add_scalar('Loss/Train_EI', epoch_train_ei_loss, epoch)
                 writer.add_scalar('Loss/Train_Adj', epoch_train_adj_loss, epoch)
+                if use_rebin_loss:
+                    writer.add_scalar('Loss/Train_Rebin', epoch_train_rebin_loss, epoch)
+                    writer.add_scalar('Loss/Train_Weighted_Rebin', epoch_train_rebin_loss * rebin_loss_weight, epoch)
 
 
             lambda_Ls.append(lambda_L.item())

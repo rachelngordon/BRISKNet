@@ -1,3 +1,6 @@
+# Debug config: operator-level rebinning consistency (DDEI-ish) + spatial EI only.
+# Derived from configs/config_ei_debug.yaml.
+
 # Directories for input data
 data:
   root_dir: "/net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace"
@@ -24,7 +27,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/home/annawoodard/mri_recon/radial-breast-ddei/output"
   cluster: "DSI"
 
 # DataLoader settings
@@ -82,31 +85,22 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      # New temporal options (no interpolation-based warps):
-      #   - "arrival_shift": bolus-arrival-anchored integer time shift (no resampling)
-      #   - "enh_scale": scale enhancement above baseline (dose/B1/gain proxy)
-      #   - "none": no temporal transform (spatial EI only)
       temporal_transform: "none"
       spatial_transform: "all"
       rotate_range: 20
       weight: 40000
-      warmup: 25
-      duration: 10000
+      warmup: 0
+      duration: 1
+      # DEBUG ANNA
+      # warmup: 25
+      # duration: 10000
       pre_contrast_baseline: "m_seconds"
       baseline_seconds: 20
       total_seconds: 150.0
       buffer_frames: 0
-      # --- arrival_shift params ---
-      arrival_shift_max_shift: 1
-      arrival_shift_percentile: 0.95
-      arrival_shift_baseline_k: 2.0
-      # --- enh_scale params ---
-      enh_scale_min: 0.85
-      enh_scale_max: 1.15
       no_grad: false
-    # Operator-level (binning) equivariance (DDEI-ish).
     rebin_loss:
-      enable: false
+      enable: true
       weight: 10000
       factor: 2
       metric: "MSE"
@@ -132,18 +126,18 @@ training:
       - name: "Phase 1: Moderate Accelerations"
         start_epoch: 1
         train_spokes_range: [16, 24, 36]
-        eval_spokes_per_frame: 16       # Validate on the highest acceleration in this phase
-        eval_num_frames: 18 # (16 * 18 = 288 total spokes, assuming a fixed total spoke budget)
+        eval_spokes_per_frame: 16
+        eval_num_frames: 18
       - name: "Phase 2: Higher Accelerations"
         start_epoch: 2
-        train_spokes_range: [8, 16, 24, 36] # Introduces 8 spokes/frame
+        train_spokes_range: [8, 16, 24, 36]
         eval_spokes_per_frame: 8
-        eval_num_frames: 36 # (8 * 36 = 288 total spokes)
+        eval_num_frames: 36
       - name: "Phase 3: Ultra-High Accelerations"
         start_epoch: 3
-        train_spokes_range: [2, 4, 8, 16, 24, 36] # Introduces 2 and 4 spokes/frame
+        train_spokes_range: [2, 4, 8, 16, 24, 36]
         eval_spokes_per_frame: 2
-        eval_num_frames: 144 # (2 * 144 = 288 total spokes)
+        eval_num_frames: 144
 
 evaluation:
   num_samples: 15
