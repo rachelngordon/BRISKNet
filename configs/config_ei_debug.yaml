@@ -20,7 +20,7 @@ data:
   slices_to_eval: 1
   eval_frequency: 1
   flip_kspace: False
-  traj_method: trajGR
+  traj_method: get_traj
 
 # Experiment settings
 experiment:
@@ -78,16 +78,16 @@ model:
       weight: 1
     use_ei_loss: true
     mc_loss:
-      weight: 10
+      weight: 1
       metric: "MAE"
     ei_loss:
       metric: "MSE"
       temporal_transform: "shift_jitter"
       spatial_transform: "all"
       rotate_range: 20
-      weight: 40000
-      warmup: 25
-      duration: 10000
+      weight: 10000
+      warmup: 0
+      duration: 0
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
@@ -102,7 +102,7 @@ model:
 
 # Training settings
 training:
-  epochs: 2
+  epochs: 3
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -133,7 +133,7 @@ training:
 
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
+  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset_frontpad"
   chunk_size: 16
   chunk_overlap: 8
   rescale: False

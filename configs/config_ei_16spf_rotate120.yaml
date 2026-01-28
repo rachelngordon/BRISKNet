@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 8
+  timeframes: 18
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 8
-  eval_spokes: 36
+  eval_timeframes: 18
+  eval_spokes: 16
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 36
+  train_spokes_per_frame: 16
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -62,7 +62,7 @@ model:
   lambda_step: 0.1
   encode_acceleration: false
   encode_time_index: false
-  kernel_size_L: [3, 3, 3]
+  kernel_size_L: [3, 3, 5]
   kernel_size_S: [3, 3, 3]
   activation_checkpointing: false
   checkpoint_use_reentrant: false
@@ -76,18 +76,18 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: False
+    use_ei_loss: True
     mc_loss:
-      weight: 10
+      weight: 1
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp"
-      spatial_transform: "all"
-      rotate_range: 20
-      weight: 0
-      warmup: 25
-      duration: 10000
+      temporal_transform: "none"
+      spatial_transform: "rotate"
+      rotate_range: 120
+      weight: 10000
+      warmup: 10
+      duration: 5
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6

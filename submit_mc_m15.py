@@ -48,8 +48,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_16spf_diffeo"
-    config_path = 'configs/config_ei_16spf_diffeo.yaml'
+    job_name = "mc_36spf_m15"
+    config_path = 'configs/config_mc_36spf_m15.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
