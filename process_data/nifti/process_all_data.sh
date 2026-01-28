@@ -20,7 +20,7 @@ OUT_DIR="$2"
 NUM_SLICES="$3"
 
 # Directory range (e.g., 001_010 to 291_300)
-START_DIR="291_300"
+START_DIR="001_010"
 END_DIR="291_300"
 
 # Convert ranges to numerical values for looping
