@@ -1267,6 +1267,7 @@ def main():
 
             # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
             t_img = None
+            val_t_img = None
 
             for measured_kspace, csmap, N_samples, N_spokes, N_time in train_loader_tqdm:  # measured_kspace shape: (B, C, I, S, T)
                 
@@ -1721,7 +1722,7 @@ def main():
                             )
 
 
-                        if use_ei_loss:
+                        if use_ei_loss and val_t_img is not None:
                             plot_reconstruction_sample(
                                 val_t_img,
                                 f"Transformed Validation Sample - Epoch {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
