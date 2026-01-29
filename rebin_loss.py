@@ -7,6 +7,7 @@ from deepinv.loss.loss import Loss
 from deepinv.loss.metric.metric import Metric
 
 from radial_lsfp import MCNUFFT
+from utils import rebin_binned_sequence
 
 
 class RebinConsistencyLoss(Loss):
@@ -35,12 +36,14 @@ class RebinConsistencyLoss(Loss):
         factor: int = 2,
         metric: Union[Metric, torch.nn.Module] = torch.nn.MSELoss(),
         time_index_mode: str = "none",
+        jitter_max_frames: int = 0,
     ):
         super().__init__()
         self.name = "rebin_consistency"
         self.factor = max(1, int(factor))
         self.metric = metric
         self.time_index_mode = str(time_index_mode).lower()
+        self.jitter_max_frames = max(0, int(jitter_max_frames))
 
         if self.time_index_mode not in {"none", "inherit", "scaled"}:
             raise ValueError(
@@ -60,59 +63,6 @@ class RebinConsistencyLoss(Loss):
         x_grouped = x_cropped.view(B, C, H, W, T_lo, factor)
         return x_grouped.mean(dim=-1)
 
-    @staticmethod
-    def _rebin_kspace(y: torch.Tensor, spf_hi: int, samples_per_spoke: int, factor: int) -> torch.Tensor:
-        # y: (coils, spf_hi * samples, T_hi) -> (coils, (spf_hi*factor)*samples, T_lo)
-        if factor <= 1:
-            return y
-        coils, sp_samp, T = y.shape
-        expected = spf_hi * samples_per_spoke
-        if sp_samp != expected:
-            raise ValueError(f"Unexpected k-space shape: got {sp_samp}, expected {expected}.")
-
-        T_lo = T // factor
-        if T_lo <= 0:
-            return y[:, :, :0]
-        y_cropped = y[:, :, : T_lo * factor]
-        y_rs = y_cropped.reshape(coils, spf_hi, samples_per_spoke, T_lo, factor)
-        # move factor into spokes axis
-        y_rs = y_rs.permute(0, 4, 1, 2, 3).reshape(
-            coils, spf_hi * factor, samples_per_spoke, T_lo
-        )
-        return y_rs.reshape(coils, spf_hi * factor * samples_per_spoke, T_lo)
-
-    @staticmethod
-    def _rebin_ktraj_dcomp(
-        physics: MCNUFFT, spf_hi: int, samples_per_spoke: int, factor: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        # ktraj: (2, spf_hi * samples, T_hi) -> (2, (spf_hi*factor)*samples, T_lo)
-        # dcomp: (spf_hi * samples, T_hi) -> ((spf_hi*factor)*samples, T_lo)
-        if factor <= 1:
-            return physics.ktraj, physics.dcomp
-
-        ktraj = physics.ktraj
-        dcomp = physics.dcomp
-        _, sp_samp, T = ktraj.shape
-        expected = spf_hi * samples_per_spoke
-        if sp_samp != expected:
-            raise ValueError(f"Unexpected ktraj shape: got {sp_samp}, expected {expected}.")
-
-        T_lo = T // factor
-        if T_lo <= 0:
-            return ktraj[:, :, :0], dcomp[:, :0]
-
-        ktraj_c = ktraj[:, :, : T_lo * factor].reshape(2, spf_hi, samples_per_spoke, T_lo, factor)
-        ktraj_c = ktraj_c.permute(0, 4, 1, 2, 3).reshape(
-            2, spf_hi * factor, samples_per_spoke, T_lo
-        )
-        ktraj_lo = ktraj_c.reshape(2, spf_hi * factor * samples_per_spoke, T_lo)
-
-        dcomp_c = dcomp[:, : T_lo * factor].reshape(spf_hi, samples_per_spoke, T_lo, factor)
-        dcomp_c = dcomp_c.permute(3, 0, 1, 2).reshape(spf_hi * factor, samples_per_spoke, T_lo)
-        dcomp_lo = dcomp_c.reshape(spf_hi * factor * samples_per_spoke, T_lo)
-
-        return ktraj_lo, dcomp_lo
-
     def forward(
         self,
         y_hi: torch.Tensor,
@@ -125,10 +75,30 @@ class RebinConsistencyLoss(Loss):
         spokes_per_frame: int,
         samples_per_spoke: int,
         norm: str = "both",
+        jitter_max_frames: int | None = None,
         **kwargs,
     ) -> torch.Tensor:
         if self.factor <= 1:
             return torch.tensor(0.0, device=x_net.device, dtype=x_net.dtype)
+
+        # Optional jitter: drop a small number of initial frames before rebinning.
+        jitter_limit = self.jitter_max_frames if jitter_max_frames is None else int(jitter_max_frames)
+        max_offset = min(jitter_limit, max(0, self.factor - 1))
+        if max_offset > 0:
+            offset = int(torch.randint(0, max_offset + 1, (1,), device=x_net.device).item())
+            if offset > 0:
+                x_net = x_net[..., offset:]
+                y_hi = y_hi[..., offset:]
+                ktraj_hi = physics.ktraj[..., offset:]
+                dcomp_hi = physics.dcomp[..., offset:]
+                if start_timepoint_index is not None:
+                    start_timepoint_index = start_timepoint_index + float(offset)
+            else:
+                ktraj_hi = physics.ktraj
+                dcomp_hi = physics.dcomp
+        else:
+            ktraj_hi = physics.ktraj
+            dcomp_hi = physics.dcomp
 
         # High-temporal recon (already computed outside) -> downsample to low temporal grid.
         x_hi_down = self._downsample_time_mean(x_net, self.factor)
@@ -136,8 +106,11 @@ class RebinConsistencyLoss(Loss):
             return torch.tensor(0.0, device=x_net.device, dtype=x_net.dtype)
 
         # Rebin measurements and corresponding operator.
-        y_lo = self._rebin_kspace(y_hi, spokes_per_frame, samples_per_spoke, self.factor)
-        ktraj_lo, dcomp_lo = self._rebin_ktraj_dcomp(physics, spokes_per_frame, samples_per_spoke, self.factor)
+        y_lo = rebin_binned_sequence(y_hi, spokes_per_frame, samples_per_spoke, self.factor)
+        ktraj_lo = rebin_binned_sequence(ktraj_hi, spokes_per_frame, samples_per_spoke, self.factor)
+        dcomp_lo = rebin_binned_sequence(
+            dcomp_hi.unsqueeze(0), spokes_per_frame, samples_per_spoke, self.factor
+        ).squeeze(0)
         physics_lo = MCNUFFT(physics.nufft_ob, physics.adjnufft_ob, ktraj_lo, dcomp_lo).to(csmap.device)
 
         # Adjust conditioning for the re-binned series.

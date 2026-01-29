@@ -11,7 +11,7 @@ import nibabel as nib
 from einops import rearrange
 import random
 import sigpy as sp
-from utils import prep_nufft
+from utils import prep_nufft, kspace_to_spokes_sequence, bin_spokes_sequence, frames_to_binned
 from radial_lsfp import MCNUFFT
 import time
 from typing import Union, List, Optional
@@ -259,14 +259,10 @@ class ZFSliceDataset(Dataset):
     
         # bin k-space according to desired spokes per frame (desired final shape (T, C, Sp, Sam))
         N_coils, N_spokes, N_samples = kspace_slice.shape
-        N_time = N_spokes // spokes_per_frame
-        N_spokes_prep = N_time * spokes_per_frame
-
-        ksp_redu = kspace_slice[:, :N_spokes_prep, :] # (16, 288, 640)
-        ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
-        ksp_prep_shape = ksp_prep.shape
-        ksp_prep = np.reshape(ksp_prep, [N_time, spokes_per_frame] + list(ksp_prep_shape[1:]))
-        ksp_prep = rearrange(ksp_prep, 't sp c sam -> t c sp sam')
+        kspace_seq, _, _ = kspace_to_spokes_sequence(
+            kspace_slice, input_layout="coils_spokes_samples"
+        )
+        ksp_prep, N_time = bin_spokes_sequence(kspace_seq, spokes_per_frame)
 
         real_part = ksp_prep.real
         imag_part = ksp_prep.imag
@@ -498,11 +494,9 @@ class SliceDataset(Dataset):
 
 
         if self.spf_aug or self.spokes_per_frame:
-            total_spokes = kspace_slice.shape[0] * kspace_slice.shape[2]
-            N_samples = kspace_slice.shape[-1]
-            kspace = rearrange(kspace_slice, 't c sp sam -> t sp c sam')
-            kspace_flat = kspace.contiguous().view(total_spokes, self.N_coils, N_samples)
-            # kspace_flat = kspace.contiguous().reshape(total_spokes, self.N_coils, N_samples)
+            kspace_seq, total_spokes, N_samples = kspace_to_spokes_sequence(
+                kspace_slice, input_layout="time_coils_spokes_samples"
+            )
 
             if self.spf_aug:
                 print("setting random spokes per frame...")
@@ -511,9 +505,8 @@ class SliceDataset(Dataset):
                 spokes_per_frame = self.spokes_per_frame
                 print(f"training with fixed spokes per frame ({spokes_per_frame})")
 
-            N_time = total_spokes // spokes_per_frame
-            kspace_binned = kspace_flat.view(N_time, spokes_per_frame, self.N_coils, N_samples)
-            kspace_slice = rearrange(kspace_binned, 't sp c sam -> t c sp sam')
+            kspace_binned, N_time = bin_spokes_sequence(kspace_seq, spokes_per_frame)
+            kspace_slice = kspace_binned
         else:
             N_time = self.N_time
             N_samples = kspace_slice.shape[-1]
@@ -690,16 +683,14 @@ class SimulatedDataset(Dataset):
             raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
 
         # time-bin k-space
-        N_spokes_prep = self.num_frames * self.spokes_per_frame
-
-        ksp_redu = raw_kspace_slice[:, :N_spokes_prep, :] # (16, 288, 640)
-        ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
-        ksp_prep_shape = ksp_prep.shape
-        ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
-
-        ksp_prep = torch.flip(ksp_prep, dims=[-1])
-
-        raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(kspace_torch.dtype)
+        kspace_seq, _, _ = kspace_to_spokes_sequence(
+            raw_kspace_slice, input_layout="coils_spokes_samples"
+        )
+        ksp_frames, _ = bin_spokes_sequence(
+            kspace_seq, self.spokes_per_frame, num_frames=self.num_frames
+        )
+        ksp_frames = torch.flip(ksp_frames, dims=[-1])
+        raw_kspace_slice = frames_to_binned(ksp_frames).to(kspace_torch.dtype)
 
 
         ground_truth_complex = dro['ground_truth_images']
@@ -898,16 +889,14 @@ class SimulatedSPFDataset(Dataset):
             raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
 
         # time-bin k-space
-        N_spokes_prep = self.num_frames * self.spokes_per_frame
-
-        ksp_redu = raw_kspace_slice[:, :N_spokes_prep, :] # (16, 288, 640)
-        ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
-        ksp_prep_shape = ksp_prep.shape
-        ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
-        
-        ksp_prep = torch.flip(ksp_prep, dims=[-1])
-
-        raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(smap_torch.dtype)
+        kspace_seq, _, _ = kspace_to_spokes_sequence(
+            raw_kspace_slice, input_layout="coils_spokes_samples"
+        )
+        ksp_frames, _ = bin_spokes_sequence(
+            kspace_seq, self.spokes_per_frame, num_frames=self.num_frames
+        )
+        ksp_frames = torch.flip(ksp_frames, dims=[-1])
+        raw_kspace_slice = frames_to_binned(ksp_frames).to(smap_torch.dtype)
 
         raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
         raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(smap_torch.dtype)

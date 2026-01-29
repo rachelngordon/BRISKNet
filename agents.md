@@ -37,3 +37,4 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - Keep `data.root_dir` and `experiment.cluster` aligned with your cluster paths; `cluster_paths.py` can rewrite paths per environment.
 - For curriculum learning, adjust `training.curriculum_learning.phases` to introduce higher accelerations gradually.
 - When extending transforms, ensure they operate on rearranged video tensors (see `EILoss` and `transform.py`) and preserve complex channel conventions.
+- No unit tests for the rest of this conversation; fail fast and fix manually if something breaks.

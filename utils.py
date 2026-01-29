@@ -316,6 +316,224 @@ def prep_nufft(Nsample, Nspokes, Ng, traj_method="trajGR"):
     return ktraju, dcompu, nufft_ob, adjnufft_ob
 
 
+def kspace_to_spokes_sequence(
+    kspace: torch.Tensor,
+    *,
+    input_layout: str,
+    spokes_per_frame: int | None = None,
+    samples_per_spoke: int | None = None,
+) -> tuple[torch.Tensor, int, int]:
+    """
+    Normalize k-space to a contiguous spoke sequence.
+
+    Args:
+        kspace: Input k-space tensor.
+        input_layout:
+            - "coils_spokes_samples": (C, S_total, N)
+            - "time_coils_spokes_samples": (T, C, S_per_frame, N)
+            - "coils_spfsamp_time": (C, S_per_frame * N, T)
+        spokes_per_frame: Required for "coils_spfsamp_time".
+        samples_per_spoke: Optional for "coils_spfsamp_time" (inferred if None).
+
+    Returns:
+        kspace_seq: (C, S_total, N)
+        total_spokes: S_total
+        samples_per_spoke: N
+    """
+    layout = str(input_layout).lower()
+
+    if layout == "coils_spokes_samples":
+        if kspace.dim() != 3:
+            raise ValueError(f"Expected kspace shape (C, S, N) but got {kspace.shape}.")
+        coils, total_spokes, samples = kspace.shape
+        return kspace, total_spokes, samples
+
+    if layout == "time_coils_spokes_samples":
+        if kspace.dim() != 4:
+            raise ValueError(f"Expected kspace shape (T, C, S, N) but got {kspace.shape}.")
+        T, C, spf_old, samples = kspace.shape
+        total_spokes = T * spf_old
+        kspace_seq = (
+            kspace.contiguous()
+            .permute(1, 0, 2, 3)
+            .reshape(C, total_spokes, samples)
+        )
+        return kspace_seq, total_spokes, samples
+
+    if layout == "coils_spfsamp_time":
+        if kspace.dim() != 3:
+            raise ValueError(f"Expected kspace shape (C, S_per_frame*N, T) but got {kspace.shape}.")
+        if spokes_per_frame is None:
+            raise ValueError("spokes_per_frame is required for input_layout='coils_spfsamp_time'.")
+        C, sp_samp, T = kspace.shape
+        if samples_per_spoke is None:
+            if sp_samp % spokes_per_frame != 0:
+                raise ValueError(
+                    f"sp_samp ({sp_samp}) is not divisible by spokes_per_frame ({spokes_per_frame})."
+                )
+            samples_per_spoke = sp_samp // spokes_per_frame
+        expected = spokes_per_frame * samples_per_spoke
+        if sp_samp != expected:
+            raise ValueError(f"Unexpected k-space shape: got {sp_samp}, expected {expected}.")
+        kspace_seq = (
+            kspace.contiguous()
+            .reshape(C, spokes_per_frame, samples_per_spoke, T)
+            .permute(0, 3, 1, 2)
+            .reshape(C, T * spokes_per_frame, samples_per_spoke)
+        )
+        return kspace_seq, T * spokes_per_frame, samples_per_spoke
+
+    raise ValueError(f"Unsupported input_layout '{input_layout}'.")
+
+
+def bin_spokes_sequence(
+    kspace_seq: torch.Tensor,
+    spokes_per_frame: int,
+    num_frames: int | None = None,
+) -> tuple[torch.Tensor, int]:
+    """
+    Bin a contiguous spoke sequence into frames.
+
+    Args:
+        kspace_seq: (C, S_total, N)
+        spokes_per_frame: spokes per frame in the output.
+
+    Returns:
+        kspace_frames: (T, C, S_per_frame, N)
+        num_frames: T
+    """
+    if kspace_seq.dim() != 3:
+        raise ValueError(f"Expected kspace_seq shape (C, S, N) but got {kspace_seq.shape}.")
+    if spokes_per_frame <= 0:
+        raise ValueError(f"spokes_per_frame must be > 0, got {spokes_per_frame}.")
+    C, total_spokes, samples = kspace_seq.shape
+    if num_frames is None:
+        num_frames = total_spokes // spokes_per_frame
+    else:
+        if num_frames < 0:
+            raise ValueError(f"num_frames must be >= 0, got {num_frames}.")
+        required_spokes = num_frames * spokes_per_frame
+        if required_spokes > total_spokes:
+            raise ValueError(
+                f"Requested {required_spokes} spokes but only {total_spokes} available."
+            )
+    if num_frames <= 0:
+        return kspace_seq[:, :0, :].reshape(0, C, spokes_per_frame, samples), 0
+    total_used = num_frames * spokes_per_frame
+    kspace_seq = kspace_seq[:, :total_used, :].contiguous()
+    kspace_frames = (
+        kspace_seq.reshape(C, num_frames, spokes_per_frame, samples)
+        .permute(1, 0, 2, 3)
+        .contiguous()
+    )
+    return kspace_frames, num_frames
+
+
+def frames_to_binned(kspace_frames: torch.Tensor) -> torch.Tensor:
+    """
+    Convert frames to binned layout.
+
+    Args:
+        kspace_frames: (T, C, S_per_frame, N)
+
+    Returns:
+        kspace_binned: (C, S_per_frame * N, T)
+    """
+    if kspace_frames.dim() != 4:
+        raise ValueError(f"Expected kspace_frames shape (T, C, S, N) but got {kspace_frames.shape}.")
+    T, C, spf, samples = kspace_frames.shape
+    if T == 0:
+        return kspace_frames.permute(1, 2, 3, 0).reshape(C, spf * samples, 0)
+    return kspace_frames.permute(1, 2, 3, 0).reshape(C, spf * samples, T)
+
+
+def rebin_binned_sequence(
+    data: torch.Tensor,
+    spokes_per_frame: int,
+    samples_per_spoke: int,
+    factor: int,
+) -> torch.Tensor:
+    """
+    Rebin a binned (frame-wise) k-space sequence by grouping time frames.
+
+    Args:
+        data: (C, S_per_frame * N, T)
+        spokes_per_frame: S_per_frame in the input.
+        samples_per_spoke: N (samples per spoke).
+        factor: number of consecutive frames to merge.
+
+    Returns:
+        rebinned: (C, (S_per_frame*factor) * N, T_lo)
+    """
+    if factor <= 1:
+        return data
+    kspace_seq, _, _ = kspace_to_spokes_sequence(
+        data,
+        input_layout="coils_spfsamp_time",
+        spokes_per_frame=spokes_per_frame,
+        samples_per_spoke=samples_per_spoke,
+    )
+    kspace_frames, _ = bin_spokes_sequence(kspace_seq, spokes_per_frame * factor)
+    return frames_to_binned(kspace_frames)
+
+
+def apply_binning_offset_roll(
+    data_binned: torch.Tensor,
+    spokes_per_frame: int,
+    samples_per_spoke: int,
+    offset_spokes: int,
+) -> torch.Tensor:
+    """
+    Apply a circular spoke-offset to a binned (frame-wise) sequence.
+
+    This keeps the number of frames and spokes/frame fixed by rolling the underlying
+    spoke sequence, then re-binning with the original spokes/frame count.
+
+    Args:
+        data_binned: (C, S_per_frame * N, T)
+        spokes_per_frame: S_per_frame in the input.
+        samples_per_spoke: N (samples per spoke).
+        offset_spokes: number of spokes to roll the sequence by.
+
+    Returns:
+        data_binned_offset: (C, S_per_frame * N, T)
+    """
+    if offset_spokes == 0:
+        return data_binned
+    if data_binned.dim() != 3:
+        raise ValueError(f"Expected data_binned shape (C, S_per_frame*N, T) but got {data_binned.shape}.")
+    if spokes_per_frame <= 0 or samples_per_spoke <= 0:
+        raise ValueError("spokes_per_frame and samples_per_spoke must be positive.")
+
+    C, sp_samp, T = data_binned.shape
+    if T == 0:
+        return data_binned
+    if sp_samp != spokes_per_frame * samples_per_spoke:
+        raise ValueError(
+            f"Unexpected data_binned shape: got {sp_samp}, expected {spokes_per_frame * samples_per_spoke}."
+        )
+
+    # Normalize offset to valid range for a boundary shift within a frame.
+    offset = int(offset_spokes) % max(1, spokes_per_frame)
+    if offset == 0:
+        return data_binned
+
+    kspace_seq, total_spokes, _ = kspace_to_spokes_sequence(
+        data_binned,
+        input_layout="coils_spfsamp_time",
+        spokes_per_frame=spokes_per_frame,
+        samples_per_spoke=samples_per_spoke,
+    )
+    if total_spokes == 0:
+        return data_binned
+
+    kspace_seq = torch.roll(kspace_seq, shifts=-offset, dims=1)
+    kspace_frames, _ = bin_spokes_sequence(
+        kspace_seq, spokes_per_frame, num_frames=T
+    )
+    return frames_to_binned(kspace_frames)
+
+
 def _calculate_top_percentile_curve(dynamic_slice: torch.Tensor, percentile: float) -> list[float]:
     """Helper function to calculate the enhancement curve for a single dynamic slice."""
     

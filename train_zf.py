@@ -25,7 +25,7 @@ from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
 from radial_lsfp import MCNUFFT
-from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
+from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png, apply_binning_offset_roll
 from eval import eval_grasp, eval_sample
 import csv
 import math
@@ -84,6 +84,33 @@ def sample_start_time_index(max_idx, use_edge_mixture):
     if r < 2.0 / 3.0:
         return max_idx
     return random.randint(0, max_idx)
+
+
+def _sample_binning_offset(max_offset_spokes: int, spokes_per_frame: int) -> int:
+    max_offset = min(int(max_offset_spokes), max(0, int(spokes_per_frame) - 1))
+    if max_offset <= 0:
+        return 0
+    return random.randint(0, max_offset)
+
+
+def _apply_binning_jitter(
+    data_binned: torch.Tensor,
+    ktraj: torch.Tensor,
+    dcomp: torch.Tensor,
+    spokes_per_frame: int,
+    samples_per_spoke: int,
+    max_offset_spokes: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    offset = _sample_binning_offset(max_offset_spokes, spokes_per_frame)
+    if offset == 0:
+        return data_binned, ktraj, dcomp, 0
+
+    data_binned = apply_binning_offset_roll(data_binned, spokes_per_frame, samples_per_spoke, offset)
+    ktraj = apply_binning_offset_roll(ktraj, spokes_per_frame, samples_per_spoke, offset)
+    dcomp = apply_binning_offset_roll(
+        dcomp.unsqueeze(0), spokes_per_frame, samples_per_spoke, offset
+    ).squeeze(0)
+    return data_binned, ktraj, dcomp, offset
 
 def main():
 
@@ -306,6 +333,9 @@ def main():
     rebin_factor = int(rebin_cfg.get("factor", 2))
     rebin_metric_name = str(rebin_cfg.get("metric", "MSE"))
     rebin_time_index_mode = str(rebin_cfg.get("time_index_mode", "none"))
+    rebin_jitter_train_frames = int(rebin_cfg.get("jitter_max_frames_train", 0))
+    rebin_jitter_eval_frames = int(rebin_cfg.get("jitter_max_frames_eval", 0))
+    rebin_eval_enable = bool(rebin_cfg.get("eval_enable", False))
 
     save_interval = config["training"]["save_interval"]
     plot_interval = config["training"]["plot_interval"]
@@ -338,6 +368,8 @@ def main():
     cluster = config["experiment"].get("cluster", "Randi")
 
     flip_kspace = config["data"].get("flip_kspace", True)
+    train_binning_jitter_spokes = int(config["data"].get("binning_jitter_spokes_train", 0))
+    eval_binning_jitter_spokes = int(config["data"].get("binning_jitter_spokes_eval", 0))
 
 
     if config["data"]["train_spokes_per_frame"] != "None":
@@ -684,6 +716,7 @@ def main():
             factor=rebin_factor,
             metric=rebin_metric,
             time_index_mode=rebin_time_index_mode,
+            jitter_max_frames=rebin_jitter_train_frames,
         )
     else:
         rebin_loss_fn = None
@@ -935,12 +968,31 @@ def main():
                     ktraj_chunk = ktraj[..., random_index:random_index + Ng]
                     dcomp_chunk = dcomp[..., random_index:random_index + Ng]
 
+                    if train_binning_jitter_spokes > 0:
+                        measured_kspace, ktraj_chunk, dcomp_chunk, _ = _apply_binning_jitter(
+                            measured_kspace,
+                            ktraj_chunk,
+                            dcomp_chunk,
+                            N_spokes,
+                            N_samples,
+                            train_binning_jitter_spokes,
+                        )
+
 
                     physics = MCNUFFT(nufft_ob, adjnufft_ob, ktraj_chunk, dcomp_chunk)
 
                     start_timepoint_index = torch.tensor([random_index], dtype=torch.float, device=device)
 
                 else:
+                    if train_binning_jitter_spokes > 0:
+                        measured_kspace, ktraj, dcomp, _ = _apply_binning_jitter(
+                            measured_kspace,
+                            ktraj,
+                            dcomp,
+                            N_spokes,
+                            N_samples,
+                            train_binning_jitter_spokes,
+                        )
                     physics = MCNUFFT(nufft_ob, adjnufft_ob, ktraj, dcomp)
 
                     start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
@@ -1017,6 +1069,21 @@ def main():
                     raw_grasp_img = raw_grasp_img.to(device) # Shape: (1, 2, H, T, W)
                     raw_csmaps = raw_csmaps.squeeze(0).to(device)   # Remove batch dim
     
+                    eval_ktraj_batch = eval_ktraj
+                    eval_dcomp_batch = eval_dcomp
+                    eval_physics_batch = eval_physics
+                    if eval_binning_jitter_spokes > 0:
+                        offset = _sample_binning_offset(eval_binning_jitter_spokes, N_spokes_eval)
+                        if offset > 0:
+                            dro_kspace = apply_binning_offset_roll(dro_kspace, N_spokes_eval, N_samples, offset)
+                            raw_kspace = apply_binning_offset_roll(raw_kspace, N_spokes_eval, N_samples, offset)
+                            eval_ktraj_batch = apply_binning_offset_roll(eval_ktraj, N_spokes_eval, N_samples, offset)
+                            eval_dcomp_batch = apply_binning_offset_roll(
+                                eval_dcomp.unsqueeze(0), N_spokes_eval, N_samples, offset
+                            ).squeeze(0)
+                            eval_physics_batch = MCNUFFT(
+                                eval_nufft_ob, eval_adjnufft_ob, eval_ktraj_batch, eval_dcomp_batch
+                            )
     
                     N_spokes = eval_ktraj.shape[1] / config['data']['samples']
                     acceleration = torch.tensor([N_full / int(N_spokes)], dtype=torch.float, device=device)
@@ -1034,14 +1101,14 @@ def main():
                     # inference + losses
                     with amp_autocast():
                         if N_time_eval > eval_chunk_size:
-                            x_recon, adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, dro_kspace, csmap, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
-                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
+                            x_recon, adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj_batch, eval_dcomp_batch, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, dro_kspace, csmap, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
+                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj_batch, eval_dcomp_batch, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
                         else:
                             x_recon, adj_loss, *_ = model(
-                            dro_kspace.to(device), eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
+                            dro_kspace.to(device), eval_physics_batch, csmap, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
                             )
                             raw_x_recon, *_ = model(
-                            raw_kspace.to(device), eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
+                            raw_kspace.to(device), eval_physics_batch, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
                             )
                             adj_loss = adj_loss.item()
     
@@ -1051,12 +1118,12 @@ def main():
                         # compute losses
                         initial_val_adj_loss += adj_loss
                         
-                        mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics, csmap)
+                        mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics_batch, csmap)
                         initial_val_mc_loss += mc_loss.item()
     
                         if use_ei_loss:
                             ei_loss, t_img = ei_loss_fn(
-                                x_recon, eval_physics, model, csmap, acceleration_encoding, start_timepoint_index
+                                x_recon, eval_physics_batch, model, csmap, acceleration_encoding, start_timepoint_index
                             )
     
                             initial_val_ei_loss += ei_loss.item()
@@ -1064,7 +1131,7 @@ def main():
     
                     # calculate grasp metrics
                     if global_rank == 0 or not config['training']['multigpu']:
-                        ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(dro_kspace, csmap, ground_truth, dro_grasp_img, eval_physics, device, eval_dir, dro_eval=True)
+                        ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(dro_kspace, csmap, ground_truth, dro_grasp_img, eval_physics_batch, device, eval_dir, dro_eval=True)
                         grasp_ssims.append(ssim_grasp)
                         grasp_psnrs.append(psnr_grasp)
                         grasp_mses.append(mse_grasp)
@@ -1077,7 +1144,7 @@ def main():
                             csmap,
                             ground_truth,
                             x_recon,
-                            eval_physics,
+                            eval_physics_batch,
                             mask,
                             dro_grasp_img,
                             acceleration,
@@ -1116,8 +1183,8 @@ def main():
     
                         # raw k-space eval
                         print("performing non-DRO eval...")
-                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, dro_eval=False)
-                        dc_mse_raw, dc_mae_raw, _ = eval_sample(raw_kspace, raw_csmaps, ground_truth, raw_x_recon, eval_physics, mask, raw_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
+                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics_batch, device, eval_dir, dro_eval=False)
+                        dc_mse_raw, dc_mae_raw, _ = eval_sample(raw_kspace, raw_csmaps, ground_truth, raw_x_recon, eval_physics_batch, mask, raw_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
     
                         raw_grasp_dc_mses.append(dc_mse_raw_grasp)
                         raw_grasp_dc_maes.append(dc_mae_raw_grasp)
@@ -1349,12 +1416,31 @@ def main():
                     ktraj_chunk = ktraj[..., random_index:random_index + Ng]
                     dcomp_chunk = dcomp[..., random_index:random_index + Ng]
 
+                    if train_binning_jitter_spokes > 0:
+                        measured_kspace, ktraj_chunk, dcomp_chunk, _ = _apply_binning_jitter(
+                            measured_kspace,
+                            ktraj_chunk,
+                            dcomp_chunk,
+                            N_spokes,
+                            N_samples,
+                            train_binning_jitter_spokes,
+                        )
+
                     physics = MCNUFFT(nufft_ob, adjnufft_ob, ktraj_chunk, dcomp_chunk)
 
                     start_timepoint_index = torch.tensor([random_index], dtype=torch.float, device=device)
                     
 
                 else:
+                    if train_binning_jitter_spokes > 0:
+                        measured_kspace, ktraj, dcomp, _ = _apply_binning_jitter(
+                            measured_kspace,
+                            ktraj,
+                            dcomp,
+                            N_spokes,
+                            N_samples,
+                            train_binning_jitter_spokes,
+                        )
                     physics = MCNUFFT(nufft_ob, adjnufft_ob, ktraj, dcomp)
 
                     start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
@@ -1404,6 +1490,7 @@ def main():
                                 spokes_per_frame=int(N_spokes),
                                 samples_per_spoke=int(N_samples),
                                 norm=config['model']['norm'],
+                                jitter_max_frames=rebin_jitter_train_frames,
                             )
                             running_rebin_loss += rebin_loss.item()
                         else:
@@ -1588,6 +1675,7 @@ def main():
                 val_running_mc_loss = 0.0
                 val_running_ei_loss = 0.0
                 val_running_adj_loss = 0.0
+                val_running_rebin_loss = 0.0
                 val_loader_tqdm = tqdm(
                     val_dro_loader,
                     desc=f"Epoch {epoch}/{epochs}  Validation",
@@ -1608,6 +1696,28 @@ def main():
                         val_raw_grasp_img = val_raw_grasp_img.to(device)
                         val_raw_csmaps = val_raw_csmaps.squeeze(0).to(device)
 
+                        eval_ktraj_batch = eval_ktraj
+                        eval_dcomp_batch = eval_dcomp
+                        eval_physics_batch = eval_physics
+                        if eval_binning_jitter_spokes > 0:
+                            offset = _sample_binning_offset(eval_binning_jitter_spokes, N_spokes_eval)
+                            if offset > 0:
+                                val_dro_kspace_batch = apply_binning_offset_roll(
+                                    val_dro_kspace_batch, N_spokes_eval, N_samples, offset
+                                )
+                                val_raw_kspace = apply_binning_offset_roll(
+                                    val_raw_kspace, N_spokes_eval, N_samples, offset
+                                )
+                                eval_ktraj_batch = apply_binning_offset_roll(
+                                    eval_ktraj, N_spokes_eval, N_samples, offset
+                                )
+                                eval_dcomp_batch = apply_binning_offset_roll(
+                                    eval_dcomp.unsqueeze(0), N_spokes_eval, N_samples, offset
+                                ).squeeze(0)
+                                eval_physics_batch = MCNUFFT(
+                                    eval_nufft_ob, eval_adjnufft_ob, eval_ktraj_batch, eval_dcomp_batch
+                                )
+
                         # calculate acceleration factor
                         N_spokes = eval_ktraj.shape[1] / config['data']['samples']
                         acceleration = torch.tensor([N_full / int(N_spokes)], dtype=torch.float, device=device)
@@ -1625,14 +1735,14 @@ def main():
                         try:
                             with amp_autocast():
                                 if N_time_eval > eval_chunk_size:
-                                    val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device, norm=config["model"]["norm"])  
-                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
+                                    val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj_batch, eval_dcomp_batch, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device, norm=config["model"]["norm"])  
+                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj_batch, eval_dcomp_batch, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
                                 else:
                                     val_x_recon, val_adj_loss, *_ = model(
-                                    val_dro_kspace_batch.to(device), eval_physics, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
+                                    val_dro_kspace_batch.to(device), eval_physics_batch, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
                                     )
                                     val_raw_x_recon, *_ = model(
-                                    val_raw_kspace.to(device), eval_physics, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
+                                    val_raw_kspace.to(device), eval_physics_batch, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
                                     )
                                     val_adj_loss = val_adj_loss.item()
 
@@ -1642,12 +1752,28 @@ def main():
                                 # compute losses
                                 val_running_adj_loss += val_adj_loss
 
-                                val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
+                                val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics_batch, val_csmap)
                                 val_running_mc_loss += val_mc_loss.item()
+
+                                if use_rebin_loss and rebin_eval_enable:
+                                    val_rebin_loss = rebin_loss_fn(
+                                        val_dro_kspace_batch.to(device),
+                                        val_x_recon,
+                                        eval_physics_batch,
+                                        model,
+                                        val_csmap,
+                                        acceleration_encoding,
+                                        start_timepoint_index,
+                                        spokes_per_frame=int(N_spokes_eval),
+                                        samples_per_spoke=int(N_samples),
+                                        norm=config['model']['norm'],
+                                        jitter_max_frames=rebin_jitter_eval_frames,
+                                    )
+                                    val_running_rebin_loss += val_rebin_loss.item()
 
                                 if use_ei_loss:
                                     val_ei_loss, val_t_img = ei_loss_fn(
-                                        val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
+                                        val_x_recon, eval_physics_batch, model, val_csmap, acceleration_encoding, start_timepoint_index
                                     )
 
                                     val_running_ei_loss += val_ei_loss.item()
@@ -1661,16 +1787,16 @@ def main():
                             ## Evaluation
                             if global_rank == 0 or not config['training']['multigpu']:
                                 ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, _, temporal_metrics = eval_sample(
-                                    val_dro_kspace_batch,
-                                    val_csmap,
-                                    val_ground_truth,
-                                    val_x_recon,
-                                    eval_physics,
-                                    val_mask,
-                                    val_dro_grasp_img,
-                                    acceleration,
-                                    int(N_spokes),
-                                    eval_dir,
+                                val_dro_kspace_batch,
+                                val_csmap,
+                                val_ground_truth,
+                                val_x_recon,
+                                eval_physics_batch,
+                                val_mask,
+                                val_dro_grasp_img,
+                                acceleration,
+                                int(N_spokes),
+                                eval_dir,
                                     f'epoch{epoch}',
                                     device,
                                     cluster=cluster,
@@ -1702,7 +1828,7 @@ def main():
                                         epoch_eval_peak_errs.append(peak_err)
 
                                 # raw k-space eval
-                                dc_mse_raw, dc_mae_raw, _ = eval_sample(val_raw_kspace, val_raw_csmaps, val_ground_truth, val_raw_x_recon, eval_physics, val_mask, val_raw_grasp_img, acceleration, int(N_spokes), eval_dir, label=f'epoch{epoch}', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
+                                dc_mse_raw, dc_mae_raw, _ = eval_sample(val_raw_kspace, val_raw_csmaps, val_ground_truth, val_raw_x_recon, eval_physics_batch, val_mask, val_raw_grasp_img, acceleration, int(N_spokes), eval_dir, label=f'epoch{epoch}', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
 
                                 epoch_eval_raw_dc_mses.append(dc_mse_raw)
                                 epoch_eval_raw_dc_maes.append(dc_mae_raw)
@@ -1843,10 +1969,17 @@ def main():
                 
                 val_adj_losses.append(epoch_val_adj_loss)
 
+                if use_rebin_loss and rebin_eval_enable:
+                    epoch_val_rebin_loss = val_running_rebin_loss / len(val_dro_loader)
+                else:
+                    epoch_val_rebin_loss = 0.0
+
                 if global_rank == 0 or not config['training']['multigpu']:
                     writer.add_scalar('Loss/Val_MC', epoch_val_mc_loss, epoch)
                     writer.add_scalar('Loss/Val_EI', epoch_val_ei_loss, epoch)
                     writer.add_scalar('Loss/Val_Adj', epoch_val_adj_loss, epoch)
+                    if use_rebin_loss and rebin_eval_enable:
+                        writer.add_scalar('Loss/Val_Rebin', epoch_val_rebin_loss, epoch)
 
 
 
