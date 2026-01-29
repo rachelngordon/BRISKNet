@@ -273,6 +273,9 @@ def main():
 
     batch_size = config["dataloader"]["batch_size"]
     max_subjects = config["dataloader"]["max_subjects"]
+    slice_sampling_mode = config["dataloader"].get("slice_sampling_mode", "uniform")
+    slice_sampling_uniform_fraction = config["dataloader"].get("slice_sampling_uniform_fraction", 1.0)
+    slice_sampling_filter_quantile = config["dataloader"].get("slice_sampling_filter_quantile", 0.2)
 
     initial_lambdas = {'lambda_L': config['model']['lambda_L'], 
                     'lambda_S': config['model']['lambda_S'], 
@@ -378,6 +381,9 @@ def main():
             file_pattern="*.h5",
             slice_idx=config["dataloader"]["slice_idx"],
             num_random_slices=config["dataloader"].get("num_random_slices", None),
+            slice_sampling_mode=slice_sampling_mode,
+            slice_sampling_uniform_fraction=slice_sampling_uniform_fraction,
+            slice_sampling_filter_quantile=slice_sampling_filter_quantile,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],
@@ -395,6 +401,9 @@ def main():
             file_pattern="*.h5",
             slice_idx=range(config['dataloader']['slice_range_start'], config['dataloader']['slice_range_end']),
             num_random_slices=config["dataloader"].get("num_random_slices", None),
+            slice_sampling_mode=slice_sampling_mode,
+            slice_sampling_uniform_fraction=slice_sampling_uniform_fraction,
+            slice_sampling_filter_quantile=slice_sampling_filter_quantile,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],

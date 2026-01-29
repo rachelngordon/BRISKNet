@@ -21,6 +21,41 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent
 SLICE_MAP_PATH = REPO_ROOT / "data" / "largest_tumor_slices.csv"
 
+def _compute_slice_sampling_scores(
+    file_path: str,
+    dataset_key: str,
+    spokes_per_frame: Optional[int],
+    n_time: Optional[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute per-slice background and enhancement proxy scores from center k-space."""
+    with h5py.File(file_path, "r") as f:
+        if dataset_key not in f:
+            raise KeyError(f"Dataset key '{dataset_key}' not found in file {file_path}")
+        ds = f[dataset_key]
+        if ds.ndim != 4:
+            raise ValueError(f"Expected k-space dataset with 4 dims, got shape {ds.shape} in {file_path}")
+        num_slices, _, num_spokes, num_samples = ds.shape
+        center_idx = num_samples // 2
+        center = ds[:, :, :, center_idx]  # (slices, coils, spokes)
+        mag = np.abs(center).mean(axis=1)  # (slices, spokes)
+
+        spf = spokes_per_frame
+        if spf is None or spf <= 0:
+            if n_time is None or n_time <= 0:
+                raise ValueError("spokes_per_frame or n_time must be provided to compute slice scores.")
+            spf = max(1, num_spokes // n_time)
+
+        t_frames = num_spokes // spf
+        if t_frames <= 0:
+            return np.zeros(num_slices), np.zeros(num_slices)
+
+        mag = mag[:, : t_frames * spf].reshape(num_slices, t_frames, spf)
+        time_curve = mag.mean(axis=2)  # (slices, T)
+
+        background_score = time_curve.mean(axis=1)
+        enhancement_score = time_curve.std(axis=1)
+        return background_score, enhancement_score
+
 
 def load_slice_map(csv_path: Path) -> dict:
     """Load patient -> slice index map; return empty dict if missing."""
@@ -63,6 +98,9 @@ class ZFSliceDataset(Dataset):
         file_pattern="*.h5",
         slice_idx: Optional[Union[int, range]] = 41,
         num_random_slices: Optional[int] = None,  # New parameter for random sampling
+        slice_sampling_mode: str = "uniform",
+        slice_sampling_uniform_fraction: float = 1.0,
+        slice_sampling_filter_quantile: float = 0.2,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -96,6 +134,11 @@ class ZFSliceDataset(Dataset):
         self.weight_acc = weight_accelerations
         self.cluster=cluster
         self.flip_kspace=flip_kspace
+        self.spokes_per_frame = spokes_per_frame
+        self.slice_sampling_mode = str(slice_sampling_mode).lower()
+        self.slice_sampling_uniform_fraction = float(slice_sampling_uniform_fraction)
+        self.slice_sampling_filter_quantile = float(slice_sampling_filter_quantile)
+        self._slice_score_cache = {}
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -163,8 +206,6 @@ class ZFSliceDataset(Dataset):
 
         print(f"Dataset initialized with {len(self.slice_index_map)} total slice examples.")
 
-        self.spokes_per_frame = spokes_per_frame
-
         # NOTE: removed ultra-high accelerations until curriculum learning is implemented
         self.spokes_range = initial_spokes_range
         self.update_spokes_weights()
@@ -188,17 +229,75 @@ class ZFSliceDataset(Dataset):
 
         self.slice_index_map = []
         for file_path, num_slices in self.volume_map:
-            if num_slices >= self.num_random_slices:
-                # Randomly sample N unique slices without replacement
-                selected_slices = random.sample(range(num_slices), self.num_random_slices)
-            else:
+            if num_slices <= 0:
+                continue
+            if num_slices <= self.num_random_slices:
                 # If the volume has fewer than N slices, take all of them.
                 print(f"Warning: Volume {os.path.basename(file_path)} has only {num_slices} slices, "
                       f"which is less than the requested {self.num_random_slices}. Using all available slices.")
                 selected_slices = list(range(num_slices))
+            else:
+                if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+                    selected_slices = random.sample(range(num_slices), self.num_random_slices)
+                else:
+                    selected_slices = self._sample_slices_weighted(file_path, num_slices)
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
+
+    def _get_slice_scores(self, file_path: str, num_slices: int) -> dict:
+        cached = self._slice_score_cache.get(file_path)
+        if cached is not None and len(cached.get("background", [])) == num_slices:
+            return cached
+        background, enhancement = _compute_slice_sampling_scores(
+            file_path=file_path,
+            dataset_key=self.dataset_key,
+            spokes_per_frame=self.spokes_per_frame,
+            n_time=self.N_time,
+        )
+        cached = {"background": background, "enhancement": enhancement}
+        self._slice_score_cache[file_path] = cached
+        return cached
+
+    def _sample_slices_weighted(self, file_path: str, num_slices: int) -> list[int]:
+        uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
+        n_uniform = int(round(self.num_random_slices * uniform_fraction))
+        n_uniform = min(n_uniform, self.num_random_slices)
+        n_weighted = self.num_random_slices - n_uniform
+
+        selected = set()
+        if n_uniform > 0:
+            selected.update(random.sample(range(num_slices), n_uniform))
+
+        if n_weighted <= 0:
+            return list(selected)
+
+        scores = self._get_slice_scores(file_path, num_slices)
+        if self.slice_sampling_mode == "background":
+            weights = np.array(scores["background"], dtype=np.float64)
+        elif self.slice_sampling_mode == "nonenhancing":
+            weights = np.array(scores["enhancement"], dtype=np.float64)
+        else:
+            remaining = [idx for idx in range(num_slices) if idx not in selected]
+            return list(selected) + random.sample(remaining, min(n_weighted, len(remaining)))
+
+        if self.slice_sampling_filter_quantile > 0:
+            cutoff = np.quantile(weights, self.slice_sampling_filter_quantile)
+            weights = np.where(weights >= cutoff, weights, 0.0)
+
+        remaining = [idx for idx in range(num_slices) if idx not in selected]
+        if not remaining:
+            return list(selected)
+
+        remaining_weights = np.array([weights[idx] for idx in remaining], dtype=np.float64)
+        if remaining_weights.sum() <= 0:
+            selected.update(random.sample(remaining, min(n_weighted, len(remaining))))
+            return list(selected)
+
+        probs = remaining_weights / remaining_weights.sum()
+        picks = np.random.choice(remaining, size=min(n_weighted, len(remaining)), replace=False, p=probs)
+        selected.update([int(x) for x in picks])
+        return list(selected)
 
     def load_dynamic_img(self, patient_id, slice):
         # This method remains unchanged
@@ -302,6 +401,9 @@ class SliceDataset(Dataset):
         file_pattern="*.h5",
         slice_idx: Optional[Union[int, range]] = 41,
         num_random_slices: Optional[int] = None,  # New parameter for random sampling
+        slice_sampling_mode: str = "uniform",
+        slice_sampling_uniform_fraction: float = 1.0,
+        slice_sampling_filter_quantile: float = 0.2,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -335,6 +437,11 @@ class SliceDataset(Dataset):
         self.spf_aug = spf_aug
         self.weight_acc = weight_accelerations
         self.cluster=cluster
+        self.spokes_per_frame = spokes_per_frame
+        self.slice_sampling_mode = str(slice_sampling_mode).lower()
+        self.slice_sampling_uniform_fraction = float(slice_sampling_uniform_fraction)
+        self.slice_sampling_filter_quantile = float(slice_sampling_filter_quantile)
+        self._slice_score_cache = {}
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -402,8 +509,6 @@ class SliceDataset(Dataset):
 
         print(f"Dataset initialized with {len(self.slice_index_map)} total slice examples.")
 
-        self.spokes_per_frame = spokes_per_frame
-
         # NOTE: removed ultra-high accelerations until curriculum learning is implemented
         # self.spokes_range = [2, 4, 8, 16, 24, 36]
         # self.spokes_range = [8, 16, 24, 36]
@@ -429,17 +534,75 @@ class SliceDataset(Dataset):
 
         self.slice_index_map = []
         for file_path, num_slices in self.volume_map:
-            if num_slices >= self.num_random_slices:
-                # Randomly sample N unique slices without replacement
-                selected_slices = random.sample(range(num_slices), self.num_random_slices)
-            else:
+            if num_slices <= 0:
+                continue
+            if num_slices <= self.num_random_slices:
                 # If the volume has fewer than N slices, take all of them.
                 print(f"Warning: Volume {os.path.basename(file_path)} has only {num_slices} slices, "
                       f"which is less than the requested {self.num_random_slices}. Using all available slices.")
                 selected_slices = list(range(num_slices))
+            else:
+                if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+                    selected_slices = random.sample(range(num_slices), self.num_random_slices)
+                else:
+                    selected_slices = self._sample_slices_weighted(file_path, num_slices)
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
+
+    def _get_slice_scores(self, file_path: str, num_slices: int) -> dict:
+        cached = self._slice_score_cache.get(file_path)
+        if cached is not None and len(cached.get("background", [])) == num_slices:
+            return cached
+        background, enhancement = _compute_slice_sampling_scores(
+            file_path=file_path,
+            dataset_key=self.dataset_key,
+            spokes_per_frame=self.spokes_per_frame,
+            n_time=self.N_time,
+        )
+        cached = {"background": background, "enhancement": enhancement}
+        self._slice_score_cache[file_path] = cached
+        return cached
+
+    def _sample_slices_weighted(self, file_path: str, num_slices: int) -> list[int]:
+        uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
+        n_uniform = int(round(self.num_random_slices * uniform_fraction))
+        n_uniform = min(n_uniform, self.num_random_slices)
+        n_weighted = self.num_random_slices - n_uniform
+
+        selected = set()
+        if n_uniform > 0:
+            selected.update(random.sample(range(num_slices), n_uniform))
+
+        if n_weighted <= 0:
+            return list(selected)
+
+        scores = self._get_slice_scores(file_path, num_slices)
+        if self.slice_sampling_mode == "background":
+            weights = np.array(scores["background"], dtype=np.float64)
+        elif self.slice_sampling_mode == "nonenhancing":
+            weights = np.array(scores["enhancement"], dtype=np.float64)
+        else:
+            remaining = [idx for idx in range(num_slices) if idx not in selected]
+            return list(selected) + random.sample(remaining, min(n_weighted, len(remaining)))
+
+        if self.slice_sampling_filter_quantile > 0:
+            cutoff = np.quantile(weights, self.slice_sampling_filter_quantile)
+            weights = np.where(weights >= cutoff, weights, 0.0)
+
+        remaining = [idx for idx in range(num_slices) if idx not in selected]
+        if not remaining:
+            return list(selected)
+
+        remaining_weights = np.array([weights[idx] for idx in remaining], dtype=np.float64)
+        if remaining_weights.sum() <= 0:
+            selected.update(random.sample(remaining, min(n_weighted, len(remaining))))
+            return list(selected)
+
+        probs = remaining_weights / remaining_weights.sum()
+        picks = np.random.choice(remaining, size=min(n_weighted, len(remaining)), replace=False, p=probs)
+        selected.update([int(x) for x in picks])
+        return list(selected)
 
     def load_dynamic_img(self, patient_id, slice):
         # This method remains unchanged
