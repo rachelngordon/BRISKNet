@@ -369,7 +369,6 @@ class ZFSliceDataset(Dataset):
         num_spokes: int,
         num_samples: int,
     ) -> dict:
-        spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
         return {
             "version": np.array(1, dtype=np.int64),
             "dataset_key": np.array(self.dataset_key),
@@ -377,8 +376,6 @@ class ZFSliceDataset(Dataset):
             "num_slices": np.array(num_slices, dtype=np.int64),
             "num_spokes": np.array(num_spokes, dtype=np.int64),
             "num_samples": np.array(num_samples, dtype=np.int64),
-            "spf": np.array(spf, dtype=np.int64),
-            "n_time": np.array(self.N_time, dtype=np.int64),
         }
 
     def _load_slice_scores_from_disk(
@@ -404,11 +401,6 @@ class ZFSliceDataset(Dataset):
                 if int(data["num_spokes"]) != int(num_spokes):
                     return None
                 if int(data["num_samples"]) != int(num_samples):
-                    return None
-                spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
-                if int(data["spf"]) != int(spf):
-                    return None
-                if int(data["n_time"]) != int(self.N_time):
                     return None
                 return {
                     "background": data["background"],
@@ -868,7 +860,6 @@ class SliceDataset(Dataset):
         num_spokes: int,
         num_samples: int,
     ) -> dict:
-        spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
         return {
             "version": np.array(1, dtype=np.int64),
             "dataset_key": np.array(self.dataset_key),
@@ -876,8 +867,6 @@ class SliceDataset(Dataset):
             "num_slices": np.array(num_slices, dtype=np.int64),
             "num_spokes": np.array(num_spokes, dtype=np.int64),
             "num_samples": np.array(num_samples, dtype=np.int64),
-            "spf": np.array(spf, dtype=np.int64),
-            "n_time": np.array(self.N_time, dtype=np.int64),
         }
 
     def _load_slice_scores_from_disk(
@@ -903,11 +892,6 @@ class SliceDataset(Dataset):
                 if int(data["num_spokes"]) != int(num_spokes):
                     return None
                 if int(data["num_samples"]) != int(num_samples):
-                    return None
-                spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
-                if int(data["spf"]) != int(spf):
-                    return None
-                if int(data["n_time"]) != int(self.N_time):
                     return None
                 return {
                     "background": data["background"],
