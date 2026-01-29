@@ -423,24 +423,6 @@ class ZFSliceDataset(Dataset):
         metadata = self._build_cache_metadata(file_path, num_slices, num_spokes, num_samples)
         _write_slice_sampling_cache(cache_path, scores["background"], scores["enhancement"], metadata)
 
-    def _warm_slice_score_cache(self) -> None:
-        if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
-            self._slice_score_cache_ready = True
-            return
-        if self._slice_score_cache_ready:
-            return
-        if not hasattr(self, "volume_map"):
-            return
-        iterator = self.volume_map
-        if len(iterator) >= 10:
-            iterator = tqdm(iterator, desc="Precomputing slice sampling scores", unit="vol")
-        for file_path, num_slices in iterator:
-            cached = self._slice_score_cache.get(file_path)
-            if cached is not None and len(cached.get("background", [])) == num_slices:
-                continue
-            self._get_slice_scores(file_path, num_slices)
-        self._slice_score_cache_ready = True
-
     def _get_slice_scores(
         self,
         file_path: str,
