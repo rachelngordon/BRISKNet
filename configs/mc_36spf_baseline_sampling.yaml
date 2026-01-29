@@ -32,6 +32,7 @@ dataloader:
   slice_sampling_mode: background
   slice_sampling_uniform_fraction: 0.7
   slice_sampling_filter_quantile: 0.2
+  slice_sampling_no_replacement: true
 debugging:
   calc_step_0: true
   calc_step_0_val: true

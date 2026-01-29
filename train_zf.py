@@ -276,6 +276,7 @@ def main():
     slice_sampling_mode = config["dataloader"].get("slice_sampling_mode", "uniform")
     slice_sampling_uniform_fraction = config["dataloader"].get("slice_sampling_uniform_fraction", 1.0)
     slice_sampling_filter_quantile = config["dataloader"].get("slice_sampling_filter_quantile", 0.2)
+    slice_sampling_no_replacement = config["dataloader"].get("slice_sampling_no_replacement", False)
 
     initial_lambdas = {'lambda_L': config['model']['lambda_L'], 
                     'lambda_S': config['model']['lambda_S'], 
@@ -384,6 +385,7 @@ def main():
             slice_sampling_mode=slice_sampling_mode,
             slice_sampling_uniform_fraction=slice_sampling_uniform_fraction,
             slice_sampling_filter_quantile=slice_sampling_filter_quantile,
+            slice_sampling_no_replacement=slice_sampling_no_replacement,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],
@@ -404,6 +406,7 @@ def main():
             slice_sampling_mode=slice_sampling_mode,
             slice_sampling_uniform_fraction=slice_sampling_uniform_fraction,
             slice_sampling_filter_quantile=slice_sampling_filter_quantile,
+            slice_sampling_no_replacement=slice_sampling_no_replacement,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],

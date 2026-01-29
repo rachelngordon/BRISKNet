@@ -86,7 +86,7 @@ class ZFSliceDataset(Dataset):
       - Each file is assumed to contain a dataset at `dataset_key`, with shape (... Z),
         where Z is the number of slices/partitions.
       - Can either use a fixed set of slices or randomly sample N slices per volume
-        at the start of each epoch.
+        at the start of each epoch (optionally without replacement across epochs).
       - Returns each slice as a torch.Tensor.
     """
 
@@ -101,6 +101,7 @@ class ZFSliceDataset(Dataset):
         slice_sampling_mode: str = "uniform",
         slice_sampling_uniform_fraction: float = 1.0,
         slice_sampling_filter_quantile: float = 0.2,
+        slice_sampling_no_replacement: bool = False,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -138,7 +139,9 @@ class ZFSliceDataset(Dataset):
         self.slice_sampling_mode = str(slice_sampling_mode).lower()
         self.slice_sampling_uniform_fraction = float(slice_sampling_uniform_fraction)
         self.slice_sampling_filter_quantile = float(slice_sampling_filter_quantile)
+        self.slice_sampling_no_replacement = bool(slice_sampling_no_replacement)
         self._slice_score_cache = {}
+        self._slice_remaining = {}
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -171,6 +174,8 @@ class ZFSliceDataset(Dataset):
                         raise KeyError(f"Dataset key '{self.dataset_key}' not found in file {fp}")
                     num_slices = f[self.dataset_key].shape[0]
                     self.volume_map.append((fp, num_slices))
+                    if self.slice_sampling_no_replacement:
+                        self._slice_remaining[fp] = list(range(num_slices))
             
             # Perform the initial random sampling for the first epoch
             self.resample_slices()
@@ -236,11 +241,19 @@ class ZFSliceDataset(Dataset):
                 print(f"Warning: Volume {os.path.basename(file_path)} has only {num_slices} slices, "
                       f"which is less than the requested {self.num_random_slices}. Using all available slices.")
                 selected_slices = list(range(num_slices))
+                if self.slice_sampling_no_replacement:
+                    self._slice_remaining[file_path] = []
             else:
-                if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+                if self.slice_sampling_no_replacement:
+                    pool = self._slice_remaining.get(file_path, [])
+                    if len(pool) < self.num_random_slices:
+                        pool = list(range(num_slices))
+                    selected_slices = self._sample_from_pool(file_path, pool, num_slices)
+                    self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
+                elif self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
                     selected_slices = random.sample(range(num_slices), self.num_random_slices)
                 else:
-                    selected_slices = self._sample_slices_weighted(file_path, num_slices)
+                    selected_slices = self._sample_slices_weighted(file_path, list(range(num_slices)), num_slices)
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
@@ -259,15 +272,20 @@ class ZFSliceDataset(Dataset):
         self._slice_score_cache[file_path] = cached
         return cached
 
-    def _sample_slices_weighted(self, file_path: str, num_slices: int) -> list[int]:
+    def _sample_from_pool(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
+        if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+            return random.sample(pool, self.num_random_slices)
+        return self._sample_slices_weighted(file_path, pool, num_slices)
+
+    def _sample_slices_weighted(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
         uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
         n_uniform = int(round(self.num_random_slices * uniform_fraction))
         n_uniform = min(n_uniform, self.num_random_slices)
         n_weighted = self.num_random_slices - n_uniform
 
         selected = set()
-        if n_uniform > 0:
-            selected.update(random.sample(range(num_slices), n_uniform))
+        if n_uniform > 0 and pool:
+            selected.update(random.sample(pool, min(n_uniform, len(pool))))
 
         if n_weighted <= 0:
             return list(selected)
@@ -278,14 +296,14 @@ class ZFSliceDataset(Dataset):
         elif self.slice_sampling_mode == "nonenhancing":
             weights = np.array(scores["enhancement"], dtype=np.float64)
         else:
-            remaining = [idx for idx in range(num_slices) if idx not in selected]
+            remaining = [idx for idx in pool if idx not in selected]
             return list(selected) + random.sample(remaining, min(n_weighted, len(remaining)))
 
         if self.slice_sampling_filter_quantile > 0:
             cutoff = np.quantile(weights, self.slice_sampling_filter_quantile)
             weights = np.where(weights >= cutoff, weights, 0.0)
 
-        remaining = [idx for idx in range(num_slices) if idx not in selected]
+        remaining = [idx for idx in pool if idx not in selected]
         if not remaining:
             return list(selected)
 
@@ -389,7 +407,7 @@ class SliceDataset(Dataset):
       - Each file is assumed to contain a dataset at `dataset_key`, with shape (... Z),
         where Z is the number of slices/partitions.
       - Can either use a fixed set of slices or randomly sample N slices per volume
-        at the start of each epoch.
+        at the start of each epoch (optionally without replacement across epochs).
       - Returns each slice as a torch.Tensor.
     """
 
@@ -404,6 +422,7 @@ class SliceDataset(Dataset):
         slice_sampling_mode: str = "uniform",
         slice_sampling_uniform_fraction: float = 1.0,
         slice_sampling_filter_quantile: float = 0.2,
+        slice_sampling_no_replacement: bool = False,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -441,7 +460,9 @@ class SliceDataset(Dataset):
         self.slice_sampling_mode = str(slice_sampling_mode).lower()
         self.slice_sampling_uniform_fraction = float(slice_sampling_uniform_fraction)
         self.slice_sampling_filter_quantile = float(slice_sampling_filter_quantile)
+        self.slice_sampling_no_replacement = bool(slice_sampling_no_replacement)
         self._slice_score_cache = {}
+        self._slice_remaining = {}
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -474,6 +495,8 @@ class SliceDataset(Dataset):
                         raise KeyError(f"Dataset key '{self.dataset_key}' not found in file {fp}")
                     num_slices = f[self.dataset_key].shape[0]
                     self.volume_map.append((fp, num_slices))
+                    if self.slice_sampling_no_replacement:
+                        self._slice_remaining[fp] = list(range(num_slices))
             
             # Perform the initial random sampling for the first epoch
             self.resample_slices()
@@ -541,11 +564,19 @@ class SliceDataset(Dataset):
                 print(f"Warning: Volume {os.path.basename(file_path)} has only {num_slices} slices, "
                       f"which is less than the requested {self.num_random_slices}. Using all available slices.")
                 selected_slices = list(range(num_slices))
+                if self.slice_sampling_no_replacement:
+                    self._slice_remaining[file_path] = []
             else:
-                if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+                if self.slice_sampling_no_replacement:
+                    pool = self._slice_remaining.get(file_path, [])
+                    if len(pool) < self.num_random_slices:
+                        pool = list(range(num_slices))
+                    selected_slices = self._sample_from_pool(file_path, pool, num_slices)
+                    self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
+                elif self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
                     selected_slices = random.sample(range(num_slices), self.num_random_slices)
                 else:
-                    selected_slices = self._sample_slices_weighted(file_path, num_slices)
+                    selected_slices = self._sample_slices_weighted(file_path, list(range(num_slices)), num_slices)
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
@@ -564,15 +595,20 @@ class SliceDataset(Dataset):
         self._slice_score_cache[file_path] = cached
         return cached
 
-    def _sample_slices_weighted(self, file_path: str, num_slices: int) -> list[int]:
+    def _sample_from_pool(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
+        if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+            return random.sample(pool, self.num_random_slices)
+        return self._sample_slices_weighted(file_path, pool, num_slices)
+
+    def _sample_slices_weighted(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
         uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
         n_uniform = int(round(self.num_random_slices * uniform_fraction))
         n_uniform = min(n_uniform, self.num_random_slices)
         n_weighted = self.num_random_slices - n_uniform
 
         selected = set()
-        if n_uniform > 0:
-            selected.update(random.sample(range(num_slices), n_uniform))
+        if n_uniform > 0 and pool:
+            selected.update(random.sample(pool, min(n_uniform, len(pool))))
 
         if n_weighted <= 0:
             return list(selected)
@@ -583,14 +619,14 @@ class SliceDataset(Dataset):
         elif self.slice_sampling_mode == "nonenhancing":
             weights = np.array(scores["enhancement"], dtype=np.float64)
         else:
-            remaining = [idx for idx in range(num_slices) if idx not in selected]
+            remaining = [idx for idx in pool if idx not in selected]
             return list(selected) + random.sample(remaining, min(n_weighted, len(remaining)))
 
         if self.slice_sampling_filter_quantile > 0:
             cutoff = np.quantile(weights, self.slice_sampling_filter_quantile)
             weights = np.where(weights >= cutoff, weights, 0.0)
 
-        remaining = [idx for idx in range(num_slices) if idx not in selected]
+        remaining = [idx for idx in pool if idx not in selected]
         if not remaining:
             return list(selected)
 
