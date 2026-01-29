@@ -44,7 +44,7 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_spatial_36spf"
+    job_name = "ei_spatial_rotate20_36spf"
     config_path = 'configs/config_ei_spatial.yaml'
     num_gpus = 4
 
@@ -62,6 +62,8 @@ def main():
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
         slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
         timeout_min=700,
+        # Mark job requeueable so submitit can restart it at timeout.
+        slurm_additional_parameters={"requeue": True},
 
         # IMPORTANT: no cpu_bind here anymore, this only affects sbatch
         # and your sbatch doesn't support --cpu-bind

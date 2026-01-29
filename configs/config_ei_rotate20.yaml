@@ -24,7 +24,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
   cluster: "DSI"
 
 # DataLoader settings
@@ -82,8 +82,8 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "arrival_shift"
-      spatial_transform: "all"
+      temporal_transform: "none"
+      spatial_transform: "rotate"
       rotate_range: 20
       weight: 10000
       warmup: 10
@@ -92,10 +92,6 @@ model:
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
-      # --- arrival_shift params ---
-      arrival_shift_max_shift: 1
-      arrival_shift_percentile: 0.95
-      arrival_shift_baseline_k: 2.0
       no_grad: false
   norm: "both"
 

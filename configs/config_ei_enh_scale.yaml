@@ -24,7 +24,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
@@ -84,7 +84,7 @@ model:
       metric: "MSE"
       temporal_transform: "enh_scale"
       spatial_transform: "all"
-      rotate_range: 60
+      rotate_range: 20
       weight: 10000
       warmup: 10
       duration: 5
