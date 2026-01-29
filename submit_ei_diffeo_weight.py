@@ -44,8 +44,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "mc_36spf_baseline"
-    config_path = 'configs/config_mc_36spf.yaml'
+    job_name = "ei_diffeo_weight50000_36spf"
+    config_path = 'configs/config_ei_diffeo_weight.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -61,7 +61,8 @@ def main():
         tasks_per_node=1,
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
         slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
-        timeout_min=700,
+        timeout_min=200,
+        qos="burst",
         # Mark job requeueable so submitit can restart it at timeout.
         slurm_additional_parameters={"requeue": True},
 

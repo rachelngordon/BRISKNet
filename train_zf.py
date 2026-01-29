@@ -30,7 +30,9 @@ from eval import eval_grasp, eval_sample
 import csv
 import math
 import random
-import time 
+import time
+import threading
+import atexit
 import seaborn as sns
 from loss_metrics import LPIPSVideoMetric, SSIMVideoMetric
 from rebin_loss import RebinConsistencyLoss
@@ -66,6 +68,22 @@ def _load_run_state(run_state_path):
 def _save_run_state(run_state_path, run_state):
     with open(run_state_path, "w") as file:
         json.dump(run_state, file, indent=2)
+
+def _sync_run_state_totals(run_state):
+    attempt_history = run_state.get("attempt_history", [])
+    cumulative_wall_time_sec = 0.0
+    max_peak_mem_gb = 0.0
+    for item in attempt_history:
+        wall_time = float(item.get("wall_time_sec", 0.0) or 0.0)
+        peak_mem = float(item.get("peak_mem_gb", 0.0) or 0.0)
+        cumulative_wall_time_sec += wall_time
+        if peak_mem > max_peak_mem_gb:
+            max_peak_mem_gb = peak_mem
+    run_state["cumulative_wall_time_sec"] = cumulative_wall_time_sec
+    run_state["max_peak_mem_gb"] = max_peak_mem_gb
+    run_state.setdefault("attempt_count", 0)
+    run_state.setdefault("attempt_history", [])
+    return run_state
 
 def _get_param_counts(model):
     if isinstance(model, DDP):
@@ -149,12 +167,17 @@ def main():
     block_dir = os.path.join(output_dir, "block_outputs") if save_block_outputs else None
     ec_dir = os.path.join(output_dir, "enhancement_curves") if save_enhancement_curves else None
 
-    attempt_start_time = time.time()
+    attempt_start_time_epoch = time.time()
+    attempt_start_time_monotonic = time.monotonic()
     attempt_peak_mem_gb = 0.0
     run_state_path = os.path.join(output_dir, "run_state.json")
     run_state = None
     state_written = False
     attempt_idx = None
+    state_lock = threading.Lock()
+    stop_run_state = threading.Event()
+    run_state_thread = None
+    run_state_heartbeat_sec = float(os.environ.get("RUN_STATE_HEARTBEAT_SEC", "60"))
 
         
 
@@ -220,7 +243,30 @@ def main():
             os.makedirs(ec_dir, exist_ok=True)
 
         run_state = _load_run_state(run_state_path)
+        run_state.setdefault("attempt_history", [])
+        run_state.setdefault("attempt_count", 0)
+
+        # If a prior attempt was interrupted before finalization, mark it as such.
+        last_attempt = run_state["attempt_history"][-1] if run_state["attempt_history"] else None
+        if last_attempt is not None and last_attempt.get("status") == "running":
+            last_attempt["status"] = "interrupted"
+            last_attempt.setdefault("reason", "interrupted")
+            last_attempt.setdefault("end_time_epoch", time.time())
+
         attempt_idx = run_state.get("attempt_count", 0) + 1
+        run_state["attempt_count"] = attempt_idx
+        run_state["attempt_history"].append(
+            {
+                "attempt": attempt_idx,
+                "wall_time_sec": 0.0,
+                "peak_mem_gb": 0.0,
+                "status": "running",
+                "reason": "running",
+                "start_time_epoch": attempt_start_time_epoch,
+            }
+        )
+        _sync_run_state_totals(run_state)
+        _save_run_state(run_state_path, run_state)
 
         # Initialize TensorBoard SummaryWriter
         log_dir = os.path.join(output_dir, 'logs')
@@ -233,6 +279,51 @@ def main():
             with open(os.path.join(output_dir, 'config.yaml'), 'w') as file:
                 yaml.dump(config, file)
 
+    def _update_run_state_progress(reason=None, final=False):
+        nonlocal attempt_peak_mem_gb, run_state
+        if run_state is None or attempt_idx is None:
+            return
+        if global_rank != 0 and config['training']['multigpu']:
+            return
+        with state_lock:
+            wall_time_sec = time.monotonic() - attempt_start_time_monotonic
+            if torch.cuda.is_available():
+                try:
+                    current_peak_gb = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+                except Exception:
+                    current_peak_gb = 0.0
+                attempt_peak_mem_gb = max(attempt_peak_mem_gb, current_peak_gb)
+
+            attempt_entry = None
+            for item in run_state.get("attempt_history", []):
+                if item.get("attempt") == attempt_idx:
+                    attempt_entry = item
+                    break
+            if attempt_entry is None:
+                attempt_entry = {"attempt": attempt_idx}
+                run_state.setdefault("attempt_history", []).append(attempt_entry)
+
+            attempt_entry.setdefault("start_time_epoch", attempt_start_time_epoch)
+            attempt_entry["wall_time_sec"] = wall_time_sec
+            attempt_entry["peak_mem_gb"] = attempt_peak_mem_gb
+            attempt_entry["status"] = "completed" if final else "running"
+            if reason is not None:
+                attempt_entry["reason"] = reason
+            if final:
+                attempt_entry["end_time_epoch"] = time.time()
+
+            run_state["attempt_count"] = max(run_state.get("attempt_count", 0), attempt_idx)
+            _sync_run_state_totals(run_state)
+            _save_run_state(run_state_path, run_state)
+
+    def _run_state_heartbeat():
+        while not stop_run_state.wait(run_state_heartbeat_sec):
+            _update_run_state_progress()
+
+    if run_state is not None:
+        run_state_thread = threading.Thread(target=_run_state_heartbeat, daemon=True)
+        run_state_thread.start()
+
     def _finalize_run_state(reason):
         nonlocal attempt_peak_mem_gb, state_written, run_state
         if state_written:
@@ -243,25 +334,13 @@ def main():
         if run_state is None or attempt_idx is None:
             return
 
-        wall_time_sec = time.time() - attempt_start_time
-        cumulative_wall_time_sec = run_state.get("cumulative_wall_time_sec", 0.0) + wall_time_sec
-        max_peak_mem_gb = max(run_state.get("max_peak_mem_gb", 0.0), attempt_peak_mem_gb)
-
-        run_state["attempt_count"] = attempt_idx
-        run_state["cumulative_wall_time_sec"] = cumulative_wall_time_sec
-        run_state["max_peak_mem_gb"] = max_peak_mem_gb
-        run_state.setdefault("attempt_history", []).append(
-            {
-                "attempt": attempt_idx,
-                "wall_time_sec": wall_time_sec,
-                "peak_mem_gb": attempt_peak_mem_gb,
-                "reason": reason,
-            }
-        )
-
-        _save_run_state(run_state_path, run_state)
+        stop_run_state.set()
+        _update_run_state_progress(reason=reason, final=True)
         state_written = True
 
+        wall_time_sec = run_state.get("attempt_history", [{}])[-1].get("wall_time_sec", 0.0)
+        cumulative_wall_time_sec = run_state.get("cumulative_wall_time_sec", 0.0)
+        max_peak_mem_gb = run_state.get("max_peak_mem_gb", 0.0)
         print(f"[RunState] Attempt {attempt_idx} wall time (sec): {wall_time_sec:.2f}")
         print(f"[RunState] Cumulative wall time (hours): {cumulative_wall_time_sec / 3600.0:.2f}")
         print(f"[RunState] Attempt peak GPU memory (GB): {attempt_peak_mem_gb:.2f}")
@@ -280,6 +359,9 @@ def main():
     for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGUSR1", None), getattr(signal, "SIGUSR2", None)):
         if sig is not None:
             signal.signal(sig, _handle_signal)
+
+    if run_state is not None:
+        atexit.register(_finalize_run_state, "exit")
 
 
     # load params
@@ -632,9 +714,10 @@ def main():
     if global_rank == 0 or not config['training']['multigpu']:
         if run_state is not None and ("total_params" not in run_state or "trainable_params" not in run_state):
             total_params, trainable_params = _get_param_counts(model)
-            run_state["total_params"] = total_params
-            run_state["trainable_params"] = trainable_params
-            _save_run_state(run_state_path, run_state)
+            with state_lock:
+                run_state["total_params"] = total_params
+                run_state["trainable_params"] = trainable_params
+                _save_run_state(run_state_path, run_state)
             print(f"[RunState] Total parameters: {total_params:,}")
             print(f"[RunState] Trainable parameters: {trainable_params:,}")
 
@@ -1305,9 +1388,10 @@ def main():
                         f"[Checkpoint] New best PSNR {best_psnr:.4f} at epoch 0. Saved to {best_checkpoint_path}"
                     )
                     if run_state is not None:
-                        run_state["best_checkpoint_epoch"] = int(best_epoch)
-                        run_state["best_checkpoint_psnr"] = float(best_psnr)
-                        _save_run_state(run_state_path, run_state)
+                        with state_lock:
+                            run_state["best_checkpoint_epoch"] = int(best_epoch)
+                            run_state["best_checkpoint_psnr"] = float(best_psnr)
+                            _save_run_state(run_state_path, run_state)
 
 
 
@@ -1978,9 +2062,10 @@ def main():
                             f"[Checkpoint] New best PSNR {best_psnr:.4f} at epoch {epoch}. Saved to {best_checkpoint_path}"
                         )
                         if run_state is not None:
-                            run_state["best_checkpoint_epoch"] = int(best_epoch)
-                            run_state["best_checkpoint_psnr"] = float(best_psnr)
-                            _save_run_state(run_state_path, run_state)
+                            with state_lock:
+                                run_state["best_checkpoint_epoch"] = int(best_epoch)
+                                run_state["best_checkpoint_psnr"] = float(best_psnr)
+                                _save_run_state(run_state_path, run_state)
 
 
 

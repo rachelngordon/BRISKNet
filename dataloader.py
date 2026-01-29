@@ -538,7 +538,21 @@ class SimulatedDataset(Dataset):
     It loads the simulated k-space, coil sensitivity maps, and the
     ground truth dynamic image (DRO).
     """
-    def __init__(self, root_dir, raw_kspace_path, model_type, patient_ids, dataset_key, grasp_slice_idx=95, spokes_per_frame=36, num_frames=8, traj_method="trajGR", noise_level=0):
+    def __init__(
+        self,
+        root_dir,
+        raw_kspace_path,
+        model_type,
+        patient_ids,
+        dataset_key,
+        grasp_slice_idx=95,
+        spokes_per_frame=36,
+        num_frames=8,
+        traj_method="trajGR",
+        noise_level=0,
+        dro_csmaps_source="original",
+        espirit_csmaps_dir=None,
+    ):
 
         self.root_dir = root_dir
         self.raw_kspace_path = raw_kspace_path
@@ -552,6 +566,13 @@ class SimulatedDataset(Dataset):
         self.noise_level_value, self.noise_level_label = self._parse_noise_level(noise_level)
         if self.noise_level_value > 0 and self.traj_method != "get_traj":
             print(f"SimulatedDataset: noise_level={self.noise_level_label} ignored because traj_method={self.traj_method}.")
+        self.dro_csmaps_source = dro_csmaps_source
+        self.espirit_csmaps_dir = espirit_csmaps_dir
+        if self.dro_csmaps_source not in ("original", "espirit"):
+            raise ValueError(
+                f"Unsupported dro_csmaps_source '{self.dro_csmaps_source}'. "
+                "Expected 'original' or 'espirit'."
+            )
         self.slice_map = load_slice_map(SLICE_MAP_PATH)
         self._update_sample_paths()
 
@@ -609,6 +630,14 @@ class SimulatedDataset(Dataset):
             return f"_correct_traj_n{self.noise_level_label}.npy"
         return "_correct_traj.npy"
 
+    def _load_dro_csmaps(self, sample_dir):
+        if self.dro_csmaps_source == "original":
+            csmap_path = os.path.join(sample_dir, "csmaps.npy")
+        else:
+            esp_root = self.espirit_csmaps_dir or os.path.join(self.root_dir, "csmaps_espirit")
+            sample_name = os.path.basename(sample_dir)
+            csmap_path = os.path.join(esp_root, f"csmaps_{sample_name}.npy")
+        return np.load(csmap_path)
 
     def get_fastMRI_id(self, sample_dir):
 
@@ -632,7 +661,7 @@ class SimulatedDataset(Dataset):
 
 
         # Load the data from .npy files
-        csmaps = np.load(os.path.join(sample_dir, 'csmaps.npy'))
+        csmaps = self._load_dro_csmaps(sample_dir)
         dro = np.load(os.path.join(sample_dir, 'dro_ground_truth.npz'))
         traj_suffix = self._traj_suffix()
         grasp_path = os.path.join(
@@ -730,7 +759,11 @@ class SimulatedDataset(Dataset):
         ground_truth_torch = torch.stack([ground_truth_torch.real, ground_truth_torch.imag], dim=0)
 
         # CSMaps: (H, W, C) -> (1, C, H, W) [batch, coils, h, w]
-        csmaps_torch = torch.from_numpy(csmaps).permute(2, 0, 1).unsqueeze(0)
+        if self.dro_csmaps_source == "original":
+            csmaps_torch = torch.from_numpy(csmaps).permute(2, 0, 1).unsqueeze(0)
+        else:
+            csmaps_torch = torch.from_numpy(csmaps).unsqueeze(0).to(torch.complex64)
+
         raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
         raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(csmaps_torch.dtype)
 

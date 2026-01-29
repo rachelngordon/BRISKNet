@@ -116,6 +116,17 @@ def parse_args():
     parser.add_argument("--eval_frames", type=int, help="Override number of frames for inference.")
     parser.add_argument("--phase_index", type=int, help="Curriculum phase index to use for eval params (default: last).")
     parser.add_argument("--disable_ssdu", action="store_true", help="Skip SSDU NMSE computation to speed up inference.")
+    parser.add_argument(
+        "--dro_csmaps_source",
+        default="original",
+        choices=("original", "espirit"),
+        help="Use DRO csmaps from the sample directory (original) or ESPIRiT maps (espirit).",
+    )
+    parser.add_argument(
+        "--dro_espirit_csmaps_dir",
+        default=None,
+        help="Override ESPIRiT csmaps dir (default: <dro_root>/csmaps_espirit).",
+    )
     parser.add_argument("--diagnostics", action="store_true", help="Enable diagnostic plots per sample.")
     parser.add_argument("--diag_topk", type=int, default=16, help="Top-K pixels to plot in diagnostic curves.")
     parser.add_argument("--diag_num_frames", type=int, default=6, help="Number of frames for heatmap diagnostics.")
@@ -383,6 +394,8 @@ def main():
         num_frames=N_time_eval,
         traj_method=traj_method,
         grasp_slice_idx=raw_grasp_slice_idx,
+        dro_csmaps_source=args.dro_csmaps_source,
+        espirit_csmaps_dir=args.dro_espirit_csmaps_dir,
     )
 
     val_loader = DataLoader(
