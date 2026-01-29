@@ -33,6 +33,8 @@ dataloader:
   slice_sampling_uniform_fraction: 0.7
   slice_sampling_filter_quantile: 0.2
   slice_sampling_no_replacement: true
+  slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
+  slice_sampling_cache_workers: 4
 debugging:
   calc_step_0: true
   calc_step_0_val: true

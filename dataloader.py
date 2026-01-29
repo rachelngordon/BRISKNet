@@ -18,6 +18,8 @@ from typing import Union, List, Optional
 import re
 import pandas as pd
 from tqdm import tqdm
+import hashlib
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 REPO_ROOT = Path(__file__).resolve().parent
 SLICE_MAP_PATH = REPO_ROOT / "data" / "largest_tumor_slices.csv"
@@ -56,6 +58,42 @@ def _compute_slice_sampling_scores(
         background_score = time_curve.mean(axis=1)
         enhancement_score = time_curve.std(axis=1)
         return background_score, enhancement_score
+
+
+def _write_slice_sampling_cache(
+    cache_path: str,
+    background: np.ndarray,
+    enhancement: np.ndarray,
+    metadata: dict,
+) -> None:
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    tmp_path = f"{cache_path}.tmp.npz"
+    np.savez_compressed(
+        tmp_path,
+        background=background.astype(np.float32),
+        enhancement=enhancement.astype(np.float32),
+        **metadata,
+    )
+    os.replace(tmp_path, cache_path)
+
+
+def _compute_and_cache_slice_scores(args: tuple) -> str:
+    (
+        file_path,
+        dataset_key,
+        spokes_per_frame,
+        n_time,
+        cache_path,
+        metadata,
+    ) = args
+    background, enhancement = _compute_slice_sampling_scores(
+        file_path=file_path,
+        dataset_key=dataset_key,
+        spokes_per_frame=spokes_per_frame,
+        n_time=n_time,
+    )
+    _write_slice_sampling_cache(cache_path, background, enhancement, metadata)
+    return file_path
 
 
 def load_slice_map(csv_path: Path) -> dict:
@@ -103,6 +141,8 @@ class ZFSliceDataset(Dataset):
         slice_sampling_uniform_fraction: float = 1.0,
         slice_sampling_filter_quantile: float = 0.2,
         slice_sampling_no_replacement: bool = False,
+        slice_sampling_cache_dir: Optional[str] = None,
+        slice_sampling_cache_workers: int = 0,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -141,6 +181,8 @@ class ZFSliceDataset(Dataset):
         self.slice_sampling_uniform_fraction = float(slice_sampling_uniform_fraction)
         self.slice_sampling_filter_quantile = float(slice_sampling_filter_quantile)
         self.slice_sampling_no_replacement = bool(slice_sampling_no_replacement)
+        self.slice_sampling_cache_dir = slice_sampling_cache_dir
+        self.slice_sampling_cache_workers = int(slice_sampling_cache_workers)
         self._slice_score_cache = {}
         self._slice_remaining = {}
         self._slice_score_cache_ready = False
@@ -175,8 +217,9 @@ class ZFSliceDataset(Dataset):
                 with h5py.File(fp, "r") as f:
                     if self.dataset_key not in f:
                         raise KeyError(f"Dataset key '{self.dataset_key}' not found in file {fp}")
-                    num_slices = f[self.dataset_key].shape[0]
-                    self.volume_map.append((fp, num_slices))
+                    ds_shape = f[self.dataset_key].shape
+                    num_slices, _, num_spokes, num_samples = ds_shape
+                    self.volume_map.append((fp, num_slices, num_spokes, num_samples))
                     if self.slice_sampling_no_replacement:
                         self._slice_remaining[fp] = list(range(num_slices))
             
@@ -235,10 +278,9 @@ class ZFSliceDataset(Dataset):
             # If not in random sampling mode, do nothing.
             return
         self._warm_slice_score_cache()
-        self._warm_slice_score_cache()
 
         self.slice_index_map = []
-        for file_path, num_slices in self.volume_map:
+        for file_path, num_slices, num_spokes, num_samples in self.volume_map:
             if num_slices <= 0:
                 continue
             if num_slices <= self.num_random_slices:
@@ -253,12 +295,14 @@ class ZFSliceDataset(Dataset):
                     pool = self._slice_remaining.get(file_path, [])
                     if len(pool) < self.num_random_slices:
                         pool = list(range(num_slices))
-                    selected_slices = self._sample_from_pool(file_path, pool, num_slices)
+                    selected_slices = self._sample_from_pool(file_path, pool, num_slices, num_spokes, num_samples)
                     self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
                 elif self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
                     selected_slices = random.sample(range(num_slices), self.num_random_slices)
                 else:
-                    selected_slices = self._sample_slices_weighted(file_path, list(range(num_slices)), num_slices)
+                    selected_slices = self._sample_slices_weighted(
+                        file_path, list(range(num_slices)), num_slices, num_spokes, num_samples
+                    )
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
@@ -272,14 +316,120 @@ class ZFSliceDataset(Dataset):
         if not hasattr(self, "volume_map"):
             return
         iterator = self.volume_map
-        if len(iterator) >= 10:
-            iterator = tqdm(iterator, desc="Precomputing slice sampling scores", unit="vol")
-        for file_path, num_slices in iterator:
-            cached = self._slice_score_cache.get(file_path)
-            if cached is not None and len(cached.get("background", [])) == num_slices:
-                continue
-            self._get_slice_scores(file_path, num_slices)
+        if self.slice_sampling_cache_dir and self.slice_sampling_cache_workers and self.slice_sampling_cache_workers > 1:
+            cache_jobs = []
+            for file_path, num_slices, num_spokes, num_samples in iterator:
+                cached = self._slice_score_cache.get(file_path)
+                if cached is not None and len(cached.get("background", [])) == num_slices:
+                    continue
+                if self._load_slice_scores_from_disk(file_path, num_slices, num_spokes, num_samples) is not None:
+                    continue
+                cache_path = self._cache_path(file_path)
+                if cache_path is None:
+                    continue
+                metadata = self._build_cache_metadata(
+                    file_path, num_slices, num_spokes, num_samples
+                )
+                cache_jobs.append(
+                    (
+                        file_path,
+                        self.dataset_key,
+                        self.spokes_per_frame,
+                        self.N_time,
+                        cache_path,
+                        metadata,
+                    )
+                )
+            if cache_jobs:
+                with ProcessPoolExecutor(max_workers=self.slice_sampling_cache_workers) as executor:
+                    futures = [executor.submit(_compute_and_cache_slice_scores, job) for job in cache_jobs]
+                    for _ in tqdm(as_completed(futures), total=len(futures), desc="Precomputing slice sampling scores", unit="vol"):
+                        pass
+        else:
+            if len(iterator) >= 10:
+                iterator = tqdm(iterator, desc="Precomputing slice sampling scores", unit="vol")
+            for file_path, num_slices, num_spokes, num_samples in iterator:
+                cached = self._slice_score_cache.get(file_path)
+                if cached is not None and len(cached.get("background", [])) == num_slices:
+                    continue
+                self._get_slice_scores(file_path, num_slices, num_spokes, num_samples)
         self._slice_score_cache_ready = True
+
+    def _cache_path(self, file_path: str) -> Optional[str]:
+        if not self.slice_sampling_cache_dir:
+            return None
+        base = os.path.basename(file_path)
+        digest = hashlib.md5(file_path.encode("utf-8")).hexdigest()[:8]
+        return os.path.join(self.slice_sampling_cache_dir, f"{base}.{digest}.npz")
+
+    def _build_cache_metadata(
+        self,
+        file_path: str,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> dict:
+        spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
+        return {
+            "version": np.array(1, dtype=np.int64),
+            "dataset_key": np.array(self.dataset_key),
+            "file_mtime": np.array(int(os.path.getmtime(file_path)), dtype=np.int64),
+            "num_slices": np.array(num_slices, dtype=np.int64),
+            "num_spokes": np.array(num_spokes, dtype=np.int64),
+            "num_samples": np.array(num_samples, dtype=np.int64),
+            "spf": np.array(spf, dtype=np.int64),
+            "n_time": np.array(self.N_time, dtype=np.int64),
+        }
+
+    def _load_slice_scores_from_disk(
+        self,
+        file_path: str,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> Optional[dict]:
+        cache_path = self._cache_path(file_path)
+        if cache_path is None or not os.path.exists(cache_path):
+            return None
+        try:
+            with np.load(cache_path) as data:
+                if int(data["version"]) != 1:
+                    return None
+                if str(data["dataset_key"]) != str(self.dataset_key):
+                    return None
+                if int(data["file_mtime"]) != int(os.path.getmtime(file_path)):
+                    return None
+                if int(data["num_slices"]) != int(num_slices):
+                    return None
+                if int(data["num_spokes"]) != int(num_spokes):
+                    return None
+                if int(data["num_samples"]) != int(num_samples):
+                    return None
+                spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
+                if int(data["spf"]) != int(spf):
+                    return None
+                if int(data["n_time"]) != int(self.N_time):
+                    return None
+                return {
+                    "background": data["background"],
+                    "enhancement": data["enhancement"],
+                }
+        except Exception:
+            return None
+
+    def _save_slice_scores_to_disk(
+        self,
+        file_path: str,
+        scores: dict,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> None:
+        cache_path = self._cache_path(file_path)
+        if cache_path is None:
+            return
+        metadata = self._build_cache_metadata(file_path, num_slices, num_spokes, num_samples)
+        _write_slice_sampling_cache(cache_path, scores["background"], scores["enhancement"], metadata)
 
     def _warm_slice_score_cache(self) -> None:
         if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
@@ -299,9 +449,19 @@ class ZFSliceDataset(Dataset):
             self._get_slice_scores(file_path, num_slices)
         self._slice_score_cache_ready = True
 
-    def _get_slice_scores(self, file_path: str, num_slices: int) -> dict:
+    def _get_slice_scores(
+        self,
+        file_path: str,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> dict:
         cached = self._slice_score_cache.get(file_path)
         if cached is not None and len(cached.get("background", [])) == num_slices:
+            return cached
+        cached = self._load_slice_scores_from_disk(file_path, num_slices, num_spokes, num_samples)
+        if cached is not None:
+            self._slice_score_cache[file_path] = cached
             return cached
         background, enhancement = _compute_slice_sampling_scores(
             file_path=file_path,
@@ -311,14 +471,29 @@ class ZFSliceDataset(Dataset):
         )
         cached = {"background": background, "enhancement": enhancement}
         self._slice_score_cache[file_path] = cached
+        self._save_slice_scores_to_disk(file_path, cached, num_slices, num_spokes, num_samples)
         return cached
 
-    def _sample_from_pool(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
+    def _sample_from_pool(
+        self,
+        file_path: str,
+        pool: list[int],
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> list[int]:
         if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
             return random.sample(pool, self.num_random_slices)
-        return self._sample_slices_weighted(file_path, pool, num_slices)
+        return self._sample_slices_weighted(file_path, pool, num_slices, num_spokes, num_samples)
 
-    def _sample_slices_weighted(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
+    def _sample_slices_weighted(
+        self,
+        file_path: str,
+        pool: list[int],
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> list[int]:
         uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
         n_uniform = int(round(self.num_random_slices * uniform_fraction))
         n_uniform = min(n_uniform, self.num_random_slices)
@@ -331,7 +506,7 @@ class ZFSliceDataset(Dataset):
         if n_weighted <= 0:
             return list(selected)
 
-        scores = self._get_slice_scores(file_path, num_slices)
+        scores = self._get_slice_scores(file_path, num_slices, num_spokes, num_samples)
         if self.slice_sampling_mode == "background":
             weights = np.array(scores["background"], dtype=np.float64)
         elif self.slice_sampling_mode == "nonenhancing":
@@ -464,6 +639,8 @@ class SliceDataset(Dataset):
         slice_sampling_uniform_fraction: float = 1.0,
         slice_sampling_filter_quantile: float = 0.2,
         slice_sampling_no_replacement: bool = False,
+        slice_sampling_cache_dir: Optional[str] = None,
+        slice_sampling_cache_workers: int = 0,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -502,8 +679,11 @@ class SliceDataset(Dataset):
         self.slice_sampling_uniform_fraction = float(slice_sampling_uniform_fraction)
         self.slice_sampling_filter_quantile = float(slice_sampling_filter_quantile)
         self.slice_sampling_no_replacement = bool(slice_sampling_no_replacement)
+        self.slice_sampling_cache_dir = slice_sampling_cache_dir
+        self.slice_sampling_cache_workers = int(slice_sampling_cache_workers)
         self._slice_score_cache = {}
         self._slice_remaining = {}
+        self._slice_score_cache_ready = False
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -534,8 +714,9 @@ class SliceDataset(Dataset):
                 with h5py.File(fp, "r") as f:
                     if self.dataset_key not in f:
                         raise KeyError(f"Dataset key '{self.dataset_key}' not found in file {fp}")
-                    num_slices = f[self.dataset_key].shape[0]
-                    self.volume_map.append((fp, num_slices))
+                    ds_shape = f[self.dataset_key].shape
+                    num_slices, _, num_spokes, num_samples = ds_shape
+                    self.volume_map.append((fp, num_slices, num_spokes, num_samples))
                     if self.slice_sampling_no_replacement:
                         self._slice_remaining[fp] = list(range(num_slices))
             
@@ -595,9 +776,10 @@ class SliceDataset(Dataset):
         if self.num_random_slices is None:
             # If not in random sampling mode, do nothing.
             return
+        self._warm_slice_score_cache()
 
         self.slice_index_map = []
-        for file_path, num_slices in self.volume_map:
+        for file_path, num_slices, num_spokes, num_samples in self.volume_map:
             if num_slices <= 0:
                 continue
             if num_slices <= self.num_random_slices:
@@ -612,19 +794,155 @@ class SliceDataset(Dataset):
                     pool = self._slice_remaining.get(file_path, [])
                     if len(pool) < self.num_random_slices:
                         pool = list(range(num_slices))
-                    selected_slices = self._sample_from_pool(file_path, pool, num_slices)
+                    selected_slices = self._sample_from_pool(file_path, pool, num_slices, num_spokes, num_samples)
                     self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
                 elif self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
                     selected_slices = random.sample(range(num_slices), self.num_random_slices)
                 else:
-                    selected_slices = self._sample_slices_weighted(file_path, list(range(num_slices)), num_slices)
+                    selected_slices = self._sample_slices_weighted(
+                        file_path, list(range(num_slices)), num_slices, num_spokes, num_samples
+                    )
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
 
-    def _get_slice_scores(self, file_path: str, num_slices: int) -> dict:
+    def _warm_slice_score_cache(self) -> None:
+        if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+            self._slice_score_cache_ready = True
+            return
+        if self._slice_score_cache_ready:
+            return
+        if not hasattr(self, "volume_map"):
+            return
+        iterator = self.volume_map
+        if self.slice_sampling_cache_dir and self.slice_sampling_cache_workers and self.slice_sampling_cache_workers > 1:
+            cache_jobs = []
+            for file_path, num_slices, num_spokes, num_samples in iterator:
+                cached = self._slice_score_cache.get(file_path)
+                if cached is not None and len(cached.get("background", [])) == num_slices:
+                    continue
+                if self._load_slice_scores_from_disk(file_path, num_slices, num_spokes, num_samples) is not None:
+                    continue
+                cache_path = self._cache_path(file_path)
+                if cache_path is None:
+                    continue
+                metadata = self._build_cache_metadata(
+                    file_path, num_slices, num_spokes, num_samples
+                )
+                cache_jobs.append(
+                    (
+                        file_path,
+                        self.dataset_key,
+                        self.spokes_per_frame,
+                        self.N_time,
+                        cache_path,
+                        metadata,
+                    )
+                )
+            if cache_jobs:
+                with ProcessPoolExecutor(max_workers=self.slice_sampling_cache_workers) as executor:
+                    futures = [executor.submit(_compute_and_cache_slice_scores, job) for job in cache_jobs]
+                    for _ in tqdm(as_completed(futures), total=len(futures), desc="Precomputing slice sampling scores", unit="vol"):
+                        pass
+        else:
+            if len(iterator) >= 10:
+                iterator = tqdm(iterator, desc="Precomputing slice sampling scores", unit="vol")
+            for file_path, num_slices, num_spokes, num_samples in iterator:
+                cached = self._slice_score_cache.get(file_path)
+                if cached is not None and len(cached.get("background", [])) == num_slices:
+                    continue
+                self._get_slice_scores(file_path, num_slices, num_spokes, num_samples)
+        self._slice_score_cache_ready = True
+
+    def _cache_path(self, file_path: str) -> Optional[str]:
+        if not self.slice_sampling_cache_dir:
+            return None
+        base = os.path.basename(file_path)
+        digest = hashlib.md5(file_path.encode("utf-8")).hexdigest()[:8]
+        return os.path.join(self.slice_sampling_cache_dir, f"{base}.{digest}.npz")
+
+    def _build_cache_metadata(
+        self,
+        file_path: str,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> dict:
+        spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
+        return {
+            "version": np.array(1, dtype=np.int64),
+            "dataset_key": np.array(self.dataset_key),
+            "file_mtime": np.array(int(os.path.getmtime(file_path)), dtype=np.int64),
+            "num_slices": np.array(num_slices, dtype=np.int64),
+            "num_spokes": np.array(num_spokes, dtype=np.int64),
+            "num_samples": np.array(num_samples, dtype=np.int64),
+            "spf": np.array(spf, dtype=np.int64),
+            "n_time": np.array(self.N_time, dtype=np.int64),
+        }
+
+    def _load_slice_scores_from_disk(
+        self,
+        file_path: str,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> Optional[dict]:
+        cache_path = self._cache_path(file_path)
+        if cache_path is None or not os.path.exists(cache_path):
+            return None
+        try:
+            with np.load(cache_path) as data:
+                if int(data["version"]) != 1:
+                    return None
+                if str(data["dataset_key"]) != str(self.dataset_key):
+                    return None
+                if int(data["file_mtime"]) != int(os.path.getmtime(file_path)):
+                    return None
+                if int(data["num_slices"]) != int(num_slices):
+                    return None
+                if int(data["num_spokes"]) != int(num_spokes):
+                    return None
+                if int(data["num_samples"]) != int(num_samples):
+                    return None
+                spf = self.spokes_per_frame or max(1, num_spokes // max(1, self.N_time))
+                if int(data["spf"]) != int(spf):
+                    return None
+                if int(data["n_time"]) != int(self.N_time):
+                    return None
+                return {
+                    "background": data["background"],
+                    "enhancement": data["enhancement"],
+                }
+        except Exception:
+            return None
+
+    def _save_slice_scores_to_disk(
+        self,
+        file_path: str,
+        scores: dict,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> None:
+        cache_path = self._cache_path(file_path)
+        if cache_path is None:
+            return
+        metadata = self._build_cache_metadata(file_path, num_slices, num_spokes, num_samples)
+        _write_slice_sampling_cache(cache_path, scores["background"], scores["enhancement"], metadata)
+
+    def _get_slice_scores(
+        self,
+        file_path: str,
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> dict:
         cached = self._slice_score_cache.get(file_path)
         if cached is not None and len(cached.get("background", [])) == num_slices:
+            return cached
+        cached = self._load_slice_scores_from_disk(file_path, num_slices, num_spokes, num_samples)
+        if cached is not None:
+            self._slice_score_cache[file_path] = cached
             return cached
         background, enhancement = _compute_slice_sampling_scores(
             file_path=file_path,
@@ -634,14 +952,29 @@ class SliceDataset(Dataset):
         )
         cached = {"background": background, "enhancement": enhancement}
         self._slice_score_cache[file_path] = cached
+        self._save_slice_scores_to_disk(file_path, cached, num_slices, num_spokes, num_samples)
         return cached
 
-    def _sample_from_pool(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
+    def _sample_from_pool(
+        self,
+        file_path: str,
+        pool: list[int],
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> list[int]:
         if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
             return random.sample(pool, self.num_random_slices)
-        return self._sample_slices_weighted(file_path, pool, num_slices)
+        return self._sample_slices_weighted(file_path, pool, num_slices, num_spokes, num_samples)
 
-    def _sample_slices_weighted(self, file_path: str, pool: list[int], num_slices: int) -> list[int]:
+    def _sample_slices_weighted(
+        self,
+        file_path: str,
+        pool: list[int],
+        num_slices: int,
+        num_spokes: int,
+        num_samples: int,
+    ) -> list[int]:
         uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
         n_uniform = int(round(self.num_random_slices * uniform_fraction))
         n_uniform = min(n_uniform, self.num_random_slices)
@@ -654,7 +987,7 @@ class SliceDataset(Dataset):
         if n_weighted <= 0:
             return list(selected)
 
-        scores = self._get_slice_scores(file_path, num_slices)
+        scores = self._get_slice_scores(file_path, num_slices, num_spokes, num_samples)
         if self.slice_sampling_mode == "background":
             weights = np.array(scores["background"], dtype=np.float64)
         elif self.slice_sampling_mode == "nonenhancing":
