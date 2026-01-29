@@ -17,6 +17,7 @@ import time
 from typing import Union, List, Optional
 import re
 import pandas as pd
+from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parent
 SLICE_MAP_PATH = REPO_ROOT / "data" / "largest_tumor_slices.csv"
@@ -142,6 +143,8 @@ class ZFSliceDataset(Dataset):
         self.slice_sampling_no_replacement = bool(slice_sampling_no_replacement)
         self._slice_score_cache = {}
         self._slice_remaining = {}
+        self._slice_score_cache_ready = False
+        self._slice_score_cache_ready = False
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -231,6 +234,8 @@ class ZFSliceDataset(Dataset):
         if self.num_random_slices is None:
             # If not in random sampling mode, do nothing.
             return
+        self._warm_slice_score_cache()
+        self._warm_slice_score_cache()
 
         self.slice_index_map = []
         for file_path, num_slices in self.volume_map:
@@ -257,6 +262,42 @@ class ZFSliceDataset(Dataset):
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
+
+    def _warm_slice_score_cache(self) -> None:
+        if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+            self._slice_score_cache_ready = True
+            return
+        if self._slice_score_cache_ready:
+            return
+        if not hasattr(self, "volume_map"):
+            return
+        iterator = self.volume_map
+        if len(iterator) >= 10:
+            iterator = tqdm(iterator, desc="Precomputing slice sampling scores", unit="vol")
+        for file_path, num_slices in iterator:
+            cached = self._slice_score_cache.get(file_path)
+            if cached is not None and len(cached.get("background", [])) == num_slices:
+                continue
+            self._get_slice_scores(file_path, num_slices)
+        self._slice_score_cache_ready = True
+
+    def _warm_slice_score_cache(self) -> None:
+        if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
+            self._slice_score_cache_ready = True
+            return
+        if self._slice_score_cache_ready:
+            return
+        if not hasattr(self, "volume_map"):
+            return
+        iterator = self.volume_map
+        if len(iterator) >= 10:
+            iterator = tqdm(iterator, desc="Precomputing slice sampling scores", unit="vol")
+        for file_path, num_slices in iterator:
+            cached = self._slice_score_cache.get(file_path)
+            if cached is not None and len(cached.get("background", [])) == num_slices:
+                continue
+            self._get_slice_scores(file_path, num_slices)
+        self._slice_score_cache_ready = True
 
     def _get_slice_scores(self, file_path: str, num_slices: int) -> dict:
         cached = self._slice_score_cache.get(file_path)
