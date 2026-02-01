@@ -989,6 +989,10 @@ def main():
         )
         return train_curves, val_curves, eval_curves
 
+    mc_only_checkpoint_saved = True
+    if use_ei_loss and warmup > 0 and start_epoch <= warmup:
+        mc_only_checkpoint_saved = False
+
 
     grasp_ssims = []
     grasp_psnrs = []
@@ -2450,6 +2454,44 @@ def main():
                     print(f"GRASP DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {np.std(raw_grasp_dc_maes):.4f}")
                     print(f"GRASP DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {np.std(raw_grasp_dc_mses):.4f}")
                     print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {np.std(grasp_curve_corrs):.4f}")
+
+            if (
+                not mc_only_checkpoint_saved
+                and use_ei_loss
+                and warmup > 0
+                and epoch == warmup
+            ):
+                if global_rank == 0 or not config['training']['multigpu']:
+                    train_curves, val_curves, eval_curves = _build_checkpoint_curves()
+                    mc_only_epochs = epoch
+                    mc_only_checkpoint_path = os.path.join(
+                        output_dir, f"{exp_name}_mc_{mc_only_epochs}epochs.pth"
+                    )
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        epoch + 1,
+                        train_curves,
+                        val_curves,
+                        eval_curves,
+                        target_w_ei,
+                        step0_train_ei_loss,
+                        epoch_train_mc_loss,
+                        avg_grasp_ssim,
+                        avg_grasp_psnr,
+                        avg_grasp_mse,
+                        avg_grasp_lpips,
+                        avg_grasp_dc_mse,
+                        avg_grasp_dc_mae,
+                        avg_grasp_curve_corr,
+                        avg_grasp_raw_dc_mae,
+                        avg_grasp_raw_dc_mse,
+                        mc_only_checkpoint_path,
+                    )
+                    print(
+                        f"[Checkpoint] MC-only checkpoint saved to {mc_only_checkpoint_path}"
+                    )
+                mc_only_checkpoint_saved = True
 
             if torch.cuda.is_available():
                 torch.cuda.synchronize(device)

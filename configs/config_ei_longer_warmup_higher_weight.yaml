@@ -82,23 +82,32 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "none"
-      spatial_transform: "rotate"
-      rotate_range: 40
-      weight: 10000
-      warmup: 10
-      duration: 5
+      temporal_transform: "enh_scale"
+      spatial_transform: "all"
+      rotate_range: 20
+      weight: 50000
+      warmup: 150
+      duration: 50
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
+      # --- arrival_shift params ---
+      arrival_shift_max_shift: 1
+      arrival_shift_percentile: 0.95
+      arrival_shift_baseline_k: 2.0
+      # --- enh_scale params ---
+      enh_scale_min: 0.85
+      enh_scale_max: 1.15
+      pre_contrast_baseline: "m_seconds"
+      baseline_seconds: 20.0
       no_grad: false
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 100
+  epochs: 300
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

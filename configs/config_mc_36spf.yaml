@@ -24,7 +24,7 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
 
 # DataLoader settings
@@ -98,7 +98,7 @@ model:
 
 # Training settings
 training:
-  epochs: 40
+  epochs: 250
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

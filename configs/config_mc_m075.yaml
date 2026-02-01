@@ -54,8 +54,8 @@ model:
   film_identity_init: true
   film_L: true
   svd_noise_std: 0.001
-  lambda_L: 0.0025
-  lambda_S: 0.05
+  lambda_L: 0.001875
+  lambda_S: 0.0375
   lambda_spatial_L: 0.05
   lambda_spatial_S: 0.05
   gamma: 0.5
@@ -76,33 +76,29 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: True
+    use_ei_loss: False
     mc_loss:
-      weight: 1
+      weight: 10
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "arrival_shift"
+      temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
-      weight: 10000
-      warmup: 10
-      duration: 5
+      weight: 0
+      warmup: 25
+      duration: 10000
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
-      # --- arrival_shift params ---
-      arrival_shift_max_shift: 1
-      arrival_shift_percentile: 0.95
-      arrival_shift_baseline_k: 2.0
       no_grad: false
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 300
+  epochs: 40
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

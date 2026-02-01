@@ -2,7 +2,10 @@ import argparse
 import json
 import math
 import os
+import shlex
+import shutil
 import statistics
+import sys
 import time
 from typing import Tuple
 
@@ -118,7 +121,7 @@ def parse_args():
     parser.add_argument("--disable_ssdu", action="store_true", help="Skip SSDU NMSE computation to speed up inference.")
     parser.add_argument(
         "--dro_csmaps_source",
-        default="original",
+        default="espirit",
         choices=("original", "espirit"),
         help="Use DRO csmaps from the sample directory (original) or ESPIRiT maps (espirit).",
     )
@@ -143,6 +146,34 @@ def parse_args():
     )
     parser.add_argument("--seed", type=int, default=12, help="Random seed.")
     return parser.parse_args()
+
+
+def _write_inference_metadata(
+    inference_dir: str,
+    args,
+    config: dict,
+    config_path: str,
+    ckpt_path: str,
+    device,
+    eval_spokes: int,
+    eval_frames: int,
+):
+    metadata = {
+        "argv": sys.argv,
+        "command": " ".join([shlex.quote(sys.executable)] + [shlex.quote(arg) for arg in sys.argv]),
+        "args": vars(args),
+        "config_path": config_path,
+        "checkpoint_path": ckpt_path,
+        "resolved_device": str(device),
+        "resolved_eval_spokes": int(eval_spokes),
+        "resolved_eval_frames": int(eval_frames),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    with open(os.path.join(inference_dir, "run_args.json"), "w") as f:
+        json.dump(metadata, f, indent=2, sort_keys=True)
+    with open(os.path.join(inference_dir, "config_resolved.yaml"), "w") as f:
+        yaml.safe_dump(config, f, sort_keys=False)
+    shutil.copy2(config_path, os.path.join(inference_dir, "config_source.yaml"))
 
 
 def _to_numpy_img(x: torch.Tensor) -> np.ndarray:
@@ -377,6 +408,17 @@ def main():
 
     N_spokes_eval, N_time_eval = _resolve_eval_params(
         config, spokes=args.eval_spokes, frames=args.eval_frames, phase_idx=args.phase_index
+    )
+
+    _write_inference_metadata(
+        inference_dir=inference_dir,
+        args=args,
+        config=config,
+        config_path=config_path,
+        ckpt_path=ckpt_path,
+        device=device,
+        eval_spokes=N_spokes_eval,
+        eval_frames=N_time_eval,
     )
 
     data_dir = config["data"]["root_dir"]
