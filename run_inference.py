@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import math
 import os
@@ -27,6 +28,7 @@ from eval import (
     eval_sample,
     compute_ssdu_kspace_nmse,
     compute_ssdu_kspace_nmse_grasp,
+    _resolve_baseline_frames,
     _load_tumor_mask,
     _load_slice_map,
     _resolve_plot_label,
@@ -113,6 +115,24 @@ def parse_args():
     parser.add_argument("--exp_dir", required=True, help="Experiment directory location.")
     parser.add_argument("--config", help="Path to config.yaml (defaults to output/<exp>/config.yaml).")
     parser.add_argument("--checkpoint", help="Path to model checkpoint (defaults to output/<exp>/<exp>_model.pth).")
+    parser.add_argument(
+        "--use_best_checkpoint",
+        action="store_true",
+        help="Use <exp>_best_model.pth if available (overrides default last checkpoint).",
+    )
+    parser.add_argument(
+        "--store_logs",
+        dest="store_logs",
+        action="store_true",
+        default=True,
+        help="Write/overwrite val_inference_logs for this experiment (default: true).",
+    )
+    parser.add_argument(
+        "--no_store_logs",
+        dest="store_logs",
+        action="store_false",
+        help="Disable writing val_inference_logs for this run.",
+    )
     parser.add_argument("--num_samples", type=int, help="Number of validation samples to evaluate (default: config value).")
     parser.add_argument("--device", default=None, help="Torch device to use (default: config training.device).")
     parser.add_argument("--eval_spokes", type=int, help="Override spokes per frame for inference.")
@@ -126,9 +146,21 @@ def parse_args():
         help="Use DRO csmaps from the sample directory (original) or ESPIRiT maps (espirit).",
     )
     parser.add_argument(
+        "--traj_method",
+        default="get_traj",
+        choices=("trajGR", "get_traj"),
+        help="Trajectory source for NUFFT and simulated k-space/GRASP filenames.",
+    )
+    parser.add_argument(
         "--dro_espirit_csmaps_dir",
         default=None,
         help="Override ESPIRiT csmaps dir (default: <dro_root>/csmaps_espirit).",
+    )
+    parser.add_argument(
+        "--dro_noise_level",
+        type=float,
+        default=0.05,
+        help="DRO noise level to use for inference (set 0 for no noise).",
     )
     parser.add_argument("--diagnostics", action="store_true", help="Enable diagnostic plots per sample.")
     parser.add_argument("--diag_topk", type=int, default=16, help="Top-K pixels to plot in diagnostic curves.")
@@ -144,6 +176,66 @@ def parse_args():
         action="store_true",
         help="Normalize pixel curves by baseline (t=0) reference intensity.",
     )
+    parser.add_argument(
+        "--baseline_mode",
+        default="seconds",
+        choices=("seconds", "fraction"),
+        help="Baseline window selection mode for temporal metrics/plots.",
+    )
+    parser.add_argument(
+        "--baseline_seconds",
+        type=float,
+        default=20.0,
+        help="Baseline duration in seconds when baseline_mode=seconds.",
+    )
+    parser.add_argument(
+        "--baseline_fraction",
+        type=float,
+        default=0.1,
+        help="Baseline fraction of frames when baseline_mode=fraction.",
+    )
+    parser.add_argument(
+        "--baseline_min_frames",
+        type=int,
+        default=1,
+        help="Minimum baseline frames to use.",
+    )
+    parser.add_argument(
+        "--baseline_max_frames",
+        type=int,
+        default=10,
+        help="Maximum baseline frames when baseline_mode=fraction.",
+    )
+    parser.add_argument(
+        "--total_scan_seconds",
+        type=float,
+        default=150.0,
+        help="Total scan duration in seconds for temporal plots/metrics.",
+    )
+    parser.add_argument(
+        "--arrival_k",
+        type=float,
+        default=2.0,
+        help="Arrival threshold factor k for mu + k*sigma.",
+    )
+    parser.add_argument(
+        "--early_seconds",
+        type=float,
+        default=35.0,
+        help="Early enhancement window length in seconds after arrival.",
+    )
+    parser.add_argument(
+        "--early_min_frames",
+        type=int,
+        default=1,
+        help="Minimum early enhancement window frames.",
+    )
+    parser.add_argument(
+        "--early_max_frames",
+        type=int,
+        default=None,
+        help="Maximum early enhancement window frames (omit for no max).",
+    )
     parser.add_argument("--seed", type=int, default=12, help="Random seed.")
     return parser.parse_args()
 
@@ -157,11 +249,13 @@ def _write_inference_metadata(
     device,
     eval_spokes: int,
     eval_frames: int,
+    inference_settings: dict | None = None,
+    resolved_args: dict | None = None,
 ):
     metadata = {
         "argv": sys.argv,
         "command": " ".join([shlex.quote(sys.executable)] + [shlex.quote(arg) for arg in sys.argv]),
-        "args": vars(args),
+        "args": resolved_args or vars(args),
         "config_path": config_path,
         "checkpoint_path": ckpt_path,
         "resolved_device": str(device),
@@ -169,6 +263,8 @@ def _write_inference_metadata(
         "resolved_eval_frames": int(eval_frames),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if inference_settings:
+        metadata["inference_settings"] = inference_settings
     with open(os.path.join(inference_dir, "run_args.json"), "w") as f:
         json.dump(metadata, f, indent=2, sort_keys=True)
     with open(os.path.join(inference_dir, "config_resolved.yaml"), "w") as f:
@@ -302,11 +398,21 @@ def save_diagnostics(
         ],
         dtype=np.float32,
     )
-    baseline_t = 0
-    if not np.isfinite(ref_roi_mean[baseline_t]):
-        baseline_t = int(np.nanargmax(ref_roi_mean)) if np.isfinite(ref_roi_mean).any() else 0
-
-    background = ref_np[baseline_t]
+    time_points = np.linspace(0, args.total_scan_seconds, T)
+    n_baseline = _resolve_baseline_frames(
+        num_frames=T,
+        time_points=time_points,
+        baseline_mode=args.baseline_mode,
+        baseline_seconds=args.baseline_seconds,
+        baseline_fraction=args.baseline_fraction,
+        baseline_min_frames=args.baseline_min_frames,
+        baseline_max_frames=args.baseline_max_frames,
+    )
+    baseline_idx = list(range(min(max(n_baseline, 1), T)))
+    background = np.nanmean(ref_np[baseline_idx], axis=0)
+    if not np.isfinite(background).any():
+        fallback_idx = int(np.nanargmax(ref_roi_mean)) if np.isfinite(ref_roi_mean).any() else 0
+        background = ref_np[fallback_idx]
     pad = max(4, int(0.05 * max(H, W)))
     y0, y1, x0, x1 = _mask_bbox(mask_union, pad, H, W)
 
@@ -378,12 +484,21 @@ def main():
     config_path = args.config or os.path.join(args.exp_dir, "config.yaml")
     if args.checkpoint:
         ckpt_path = args.checkpoint
-    else:
+    elif args.use_best_checkpoint:
         best_ckpt_path = os.path.join(args.exp_dir, f"{exp_name}_best_model.pth")
         if os.path.exists(best_ckpt_path):
             ckpt_path = best_ckpt_path
         else:
             ckpt_path = os.path.join(args.exp_dir, f"{exp_name}_model.pth")
+    else:
+        ckpt_path = os.path.join(args.exp_dir, f"{exp_name}_model.pth")
+
+    ckpt_meta = None
+    try:
+        ckpt_meta = torch.load(ckpt_path, map_location="cpu")
+    except Exception as exc:
+        print(f"Warning: unable to load checkpoint metadata from {ckpt_path}: {exc}")
+    trained_epochs = ckpt_meta.get("epoch") - 1 if isinstance(ckpt_meta, dict) else None
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -410,24 +525,76 @@ def main():
         config, spokes=args.eval_spokes, frames=args.eval_frames, phase_idx=args.phase_index
     )
 
-    _write_inference_metadata(
-        inference_dir=inference_dir,
-        args=args,
-        config=config,
-        config_path=config_path,
-        ckpt_path=ckpt_path,
-        device=device,
-        eval_spokes=N_spokes_eval,
-        eval_frames=N_time_eval,
-    )
+    eval_chunk_size = config.get("evaluation", {}).get("chunk_size", N_time_eval)
+    eval_chunk_overlap = config.get("evaluation", {}).get("chunk_overlap", 0)
+    compute_ssdu = config.get("evaluation", {}).get("compute_ssdu", True)
+    if args.disable_ssdu:
+        compute_ssdu = False
+
+    ssdu_k_folds = config.get("evaluation", {}).get("ssdu_k_folds", 4)
+    ssdu_grasp_k_folds = config.get("evaluation", {}).get("ssdu_grasp_k_folds", ssdu_k_folds)
+    ssdu_weighting = config.get("evaluation", {}).get("ssdu_weighting", "sqrt_dcomp")
+    val_noise_level = args.dro_noise_level if args.dro_noise_level is not None else config.get("evaluation", {}).get("val_noise_level", 0)
+
+    inference_settings = {
+        "csmaps_style": args.dro_csmaps_source,
+        "dro_espirit_csmaps_dir": args.dro_espirit_csmaps_dir,
+        "traj_method": args.traj_method,
+        "baseline": {
+            "mode": args.baseline_mode,
+            "seconds": args.baseline_seconds,
+            "fraction": args.baseline_fraction,
+            "min_frames": args.baseline_min_frames,
+            "max_frames": args.baseline_max_frames,
+            "total_scan_seconds": args.total_scan_seconds,
+        },
+        "arrival_k": args.arrival_k,
+        "early_window": {
+            "mode": "seconds_after_arrival",
+            "seconds": args.early_seconds,
+            "min_frames": args.early_min_frames,
+            "max_frames": args.early_max_frames,
+        },
+        "windowing": {
+            "chunk_size": int(eval_chunk_size),
+            "chunk_overlap": int(eval_chunk_overlap),
+            "compute_ssdu": bool(compute_ssdu),
+            "ssdu_k_folds": int(ssdu_k_folds),
+            "ssdu_grasp_k_folds": int(ssdu_grasp_k_folds),
+            "ssdu_weighting": ssdu_weighting,
+        },
+        "normalization": {
+            "model_norm": config["model"]["norm"],
+            "rescale": bool(rescale),
+            "diag_normalize": bool(args.diag_normalize),
+        },
+        "dro_noise_level": val_noise_level,
+        "eval_params": {
+            "spokes_per_frame": int(N_spokes_eval),
+            "num_frames": int(N_time_eval),
+            "phase_index": args.phase_index,
+        },
+        "data": {
+            "dro_dataset_root": "/net/scratch2/rachelgordon/dro_dataset_frontpad",
+            "raw_kspace_root": config["data"]["root_dir"],
+            "dataset_key": config["data"]["dataset_key"],
+            "raw_grasp_slice_idx": raw_grasp_slice_idx,
+        },
+        "model": {
+            "name": config["model"]["name"],
+            "encode_acceleration": bool(config["model"]["encode_acceleration"]),
+            "encode_time_index": bool(config["model"]["encode_time_index"]),
+        },
+    }
 
     data_dir = config["data"]["root_dir"]
     model_type = config["model"]["name"]
-    traj_method = config.get("data", {}).get("traj_method", "trajGR")
+    traj_method = args.traj_method
+    dro_dataset_root = "/net/scratch2/rachelgordon/dro_dataset_frontpad"
 
     val_dataset = SimulatedDataset(
         # root_dir=config["evaluation"]["simulated_dataset_path"],
-        root_dir="/net/scratch2/rachelgordon/dro_dataset_frontpad",
+        root_dir=dro_dataset_root,
         raw_kspace_path=data_dir,
         model_type=model_type,
         patient_ids=val_ids,
@@ -435,6 +602,7 @@ def main():
         spokes_per_frame=N_spokes_eval,
         num_frames=N_time_eval,
         traj_method=traj_method,
+        noise_level=val_noise_level,
         grasp_slice_idx=raw_grasp_slice_idx,
         dro_csmaps_source=args.dro_csmaps_source,
         espirit_csmaps_dir=args.dro_espirit_csmaps_dir,
@@ -451,6 +619,54 @@ def main():
     num_samples = args.num_samples or config.get("evaluation", {}).get("num_samples", len(val_dataset))
     num_samples = min(num_samples, len(val_dataset))
 
+    resolved_phase_index = args.phase_index
+    curriculum_cfg = config.get("training", {}).get("curriculum_learning", {})
+    phases = curriculum_cfg.get("phases", [])
+    if resolved_phase_index is None and curriculum_cfg.get("enabled") and phases:
+        resolved_phase_index = len(phases) - 1
+
+    resolved_espirit_dir = args.dro_espirit_csmaps_dir or os.path.join(dro_dataset_root, "csmaps_espirit")
+
+    resolved_args = dict(vars(args))
+    resolved_args.update(
+        {
+            "checkpoint": ckpt_path,
+            "config": config_path,
+            "device": str(device),
+            "eval_spokes": int(N_spokes_eval),
+            "eval_frames": int(N_time_eval),
+            "num_samples": int(num_samples),
+            "phase_index": resolved_phase_index if resolved_phase_index is not None else "none",
+            "dro_espirit_csmaps_dir": resolved_espirit_dir,
+            "early_max_frames": (
+                args.early_max_frames if args.early_max_frames is not None else "no_max"
+            ),
+        }
+    )
+
+    inference_settings["data"]["dro_dataset_root"] = dro_dataset_root
+    inference_settings["dro_espirit_csmaps_dir"] = resolved_espirit_dir
+    inference_settings["eval_params"]["phase_index"] = (
+        resolved_phase_index if resolved_phase_index is not None else "none"
+    )
+    inference_settings["eval_params"]["num_samples"] = int(num_samples)
+    inference_settings["early_window"]["max_frames"] = (
+        args.early_max_frames if args.early_max_frames is not None else "no_max"
+    )
+
+    _write_inference_metadata(
+        inference_dir=inference_dir,
+        args=args,
+        config=config,
+        config_path=config_path,
+        ckpt_path=ckpt_path,
+        device=device,
+        eval_spokes=N_spokes_eval,
+        eval_frames=N_time_eval,
+        inference_settings=inference_settings,
+        resolved_args=resolved_args,
+    )
+
     # Prep physics for inference.
     N_samples = config["data"]["samples"]
     H, W = config["data"]["height"], config["data"]["width"]
@@ -464,16 +680,6 @@ def main():
     eval_nufft_ob = eval_nufft_ob.to(device)
     eval_adjnufft_ob = eval_adjnufft_ob.to(device)
     eval_physics = MCNUFFT(eval_nufft_ob, eval_adjnufft_ob, eval_ktraj, eval_dcomp)
-
-    eval_chunk_size = config.get("evaluation", {}).get("chunk_size", N_time_eval)
-    eval_chunk_overlap = config.get("evaluation", {}).get("chunk_overlap", 0)
-    compute_ssdu = config.get("evaluation", {}).get("compute_ssdu", True)
-    if args.disable_ssdu:
-        compute_ssdu = False
-
-    ssdu_k_folds = config.get("evaluation", {}).get("ssdu_k_folds", 4)
-    ssdu_grasp_k_folds = config.get("evaluation", {}).get("ssdu_grasp_k_folds", ssdu_k_folds)
-    ssdu_weighting = config.get("evaluation", {}).get("ssdu_weighting", "sqrt_dcomp")
 
     # Build and load model.
     block_dir = os.path.join(output_dir, "block_outputs")
@@ -686,6 +892,16 @@ def main():
                 dro_eval=True,
                 grasp_path=grasp_path,
                 rescale=rescale,
+                baseline_mode=args.baseline_mode,
+                baseline_seconds=args.baseline_seconds,
+                baseline_fraction=args.baseline_fraction,
+                baseline_min_frames=args.baseline_min_frames,
+                baseline_max_frames=args.baseline_max_frames,
+                arrival_k=args.arrival_k,
+                early_seconds=args.early_seconds,
+                early_min_frames=args.early_min_frames,
+                early_max_frames=args.early_max_frames,
+                total_scan_seconds=args.total_scan_seconds,
             )
 
             grasp_metrics = eval_grasp(
@@ -717,6 +933,16 @@ def main():
                 grasp_path=grasp_path,
                 raw_slice_idx=raw_grasp_slice_idx,
                 rescale=rescale,
+                baseline_mode=args.baseline_mode,
+                baseline_seconds=args.baseline_seconds,
+                baseline_fraction=args.baseline_fraction,
+                baseline_min_frames=args.baseline_min_frames,
+                baseline_max_frames=args.baseline_max_frames,
+                arrival_k=args.arrival_k,
+                early_seconds=args.early_seconds,
+                early_min_frames=args.early_min_frames,
+                early_max_frames=args.early_max_frames,
+                total_scan_seconds=args.total_scan_seconds,
             )
             raw_grasp_dc_mse, raw_grasp_dc_mae = eval_grasp(
                 raw_kspace,
@@ -769,6 +995,8 @@ def main():
                 )
             )
 
+    mean_infer = None
+    std_infer = None
     if inference_times:
         mean_infer = sum(inference_times) / len(inference_times)
         std_infer = statistics.stdev(inference_times) if len(inference_times) > 1 else 0.0
@@ -995,6 +1223,150 @@ def main():
     print("----- Temporal Fidelity Metrics (mean ± std) -----")
     _print_temporal_table("Malignant", prefix="")
     _print_temporal_table("Benign", prefix="benign_")
+
+    if args.store_logs:
+        log_path = os.path.join(os.path.dirname(__file__), "val_inference_logs.json")
+        accel_factor = float(acceleration_val.item())
+        seconds_per_frame = (
+            float(args.total_scan_seconds) / float(N_time_eval - 1)
+            if N_time_eval > 1 else float(args.total_scan_seconds)
+        )
+        sliding_window_used = bool(N_time_eval > eval_chunk_size)
+
+        def _extract_mean_std(mean_std):
+            if not mean_std:
+                return {"mean": None, "std": None}
+            mean, std = mean_std
+            return {
+                "mean": None if mean is None else float(mean),
+                "std": None if std is None else float(std),
+            }
+
+        log_row = {
+            "type": "BRISKNet",
+            "exp_name": exp_name,
+            "inference_dir": inference_dir,
+            "spokes_per_frame": int(N_spokes_eval),
+            "num_frames": int(N_time_eval),
+            "acceleration": accel_factor,
+            "seconds_per_frame": seconds_per_frame,
+            "DRO_noise_level": val_noise_level,
+            "avg_inference_time": None if mean_infer is None else float(mean_infer),
+            "num_samples": int(num_samples),
+            "training_epochs": None if trained_epochs is None else int(trained_epochs),
+            "spatial_metrics": {},
+            "dc_metrics": {},
+            "temporal_metrics": {},
+        }
+
+        grasp_agg_row = {
+            "type": "GRASP",
+            "spokes_per_frame": int(N_spokes_eval),
+            "num_frames": int(N_time_eval),
+            "acceleration": accel_factor,
+            "seconds_per_frame": seconds_per_frame,
+            "DRO_noise_level": val_noise_level,
+            "num_samples": int(len(grasp_results)),
+            "spatial_metrics": {},
+            "dc_metrics": {},
+            "temporal_metrics": {},
+        }
+
+        spatial_keys = ["ssim", "psnr", "mse", "lpips"]
+        for metric in spatial_keys:
+            dl_mean_std = _extract_mean_std(dl_summary.get(metric))
+            grasp_mean_std = _extract_mean_std(grasp_summary.get(metric))
+            log_row["spatial_metrics"][f"{metric}_mean"] = dl_mean_std["mean"]
+            log_row["spatial_metrics"][f"{metric}_stddev"] = dl_mean_std["std"]
+            grasp_agg_row["spatial_metrics"][f"{metric}_mean"] = grasp_mean_std["mean"]
+            grasp_agg_row["spatial_metrics"][f"{metric}_stddev"] = grasp_mean_std["std"]
+
+        dl_dc_mae = _extract_mean_std(dl_summary.get("dc_mae"))
+        dl_dc_mse = _extract_mean_std(dl_summary.get("dc_mse"))
+        grasp_dc_mae = _extract_mean_std(grasp_summary.get("dc_mae"))
+        grasp_dc_mse = _extract_mean_std(grasp_summary.get("dc_mse"))
+        raw_dc_mae = _extract_mean_std(raw_summary.get("raw_dc_mae"))
+        raw_dc_mse = _extract_mean_std(raw_summary.get("raw_dc_mse"))
+        raw_grasp_dc_mae = _extract_mean_std(raw_summary.get("raw_grasp_dc_mae"))
+        raw_grasp_dc_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_mse"))
+
+        log_row["dc_metrics"] = {
+            "dro_dc_mae_mean": dl_dc_mae["mean"],
+            "dro_dc_mae_stddev": dl_dc_mae["std"],
+            "dro_dc_mse_mean": dl_dc_mse["mean"],
+            "dro_dc_mse_stddev": dl_dc_mse["std"],
+            "raw_dc_mae_mean": raw_dc_mae["mean"],
+            "raw_dc_mae_stddev": raw_dc_mae["std"],
+            "raw_dc_mse_mean": raw_dc_mse["mean"],
+            "raw_dc_mse_stddev": raw_dc_mse["std"],
+        }
+        grasp_agg_row["dc_metrics"] = {
+            "dro_dc_mae_mean": grasp_dc_mae["mean"],
+            "dro_dc_mae_stddev": grasp_dc_mae["std"],
+            "dro_dc_mse_mean": grasp_dc_mse["mean"],
+            "dro_dc_mse_stddev": grasp_dc_mse["std"],
+            "raw_dc_mae_mean": raw_grasp_dc_mae["mean"],
+            "raw_dc_mae_stddev": raw_grasp_dc_mae["std"],
+            "raw_dc_mse_mean": raw_grasp_dc_mse["mean"],
+            "raw_dc_mse_stddev": raw_grasp_dc_mse["std"],
+        }
+
+        temporal_blocks = [
+            ("all_pixels_malignant", "", "all"),
+            ("all_pixels_benign", "benign_", "all"),
+            ("top20_malignant", "", "top20"),
+            ("top20_benign", "benign_", "top20"),
+            ("top10_malignant", "", "top10"),
+            ("top10_benign", "benign_", "top10"),
+        ]
+        for block_name, prefix, subset in temporal_blocks:
+            log_row["temporal_metrics"][block_name] = {}
+            grasp_agg_row["temporal_metrics"][block_name] = {}
+            for metric in metric_names:
+                dl_key = f"{prefix}dl_{subset}_{metric}"
+                grasp_key = f"{prefix}grasp_{subset}_{metric}"
+                dl_mean_std = _extract_mean_std(_mean_std(results, dl_key))
+                grasp_mean_std = _extract_mean_std(_mean_std(results, grasp_key))
+                log_row["temporal_metrics"][block_name][f"{metric}_mean"] = dl_mean_std["mean"]
+                log_row["temporal_metrics"][block_name][f"{metric}_stddev"] = dl_mean_std["std"]
+                grasp_agg_row["temporal_metrics"][block_name][f"{metric}_mean"] = grasp_mean_std["mean"]
+                grasp_agg_row["temporal_metrics"][block_name][f"{metric}_stddev"] = grasp_mean_std["std"]
+
+        existing_rows = []
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "r") as f:
+                    payload = json.load(f)
+                if isinstance(payload, list):
+                    existing_rows = payload
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"Warning: could not read {log_path}: {exc}")
+
+        filtered_rows = []
+        brisk_exists = False
+        grasp_exists = False
+        for row in existing_rows:
+            row_type = row.get("type")
+            if row_type == "BRISKNet" and row.get("exp_name") == exp_name:
+                brisk_exists = True
+            if row_type == "GRASP":
+                if (
+                    str(row.get("spokes_per_frame")) == str(int(N_spokes_eval))
+                    and str(row.get("num_frames")) == str(int(N_time_eval))
+                    and str(row.get("DRO_noise_level")) == str(val_noise_level)
+                    and str(row.get("acceleration")) == str(accel_factor)
+                ):
+                    grasp_exists = True
+            filtered_rows.append(row)
+
+        if not brisk_exists:
+            filtered_rows.append(log_row)
+        if not grasp_exists:
+            filtered_rows.append(grasp_agg_row)
+
+        with open(log_path, "w") as f:
+            json.dump(filtered_rows, f, indent=2, sort_keys=False)
+
     print(f"Inference complete. Results saved to {inference_dir}")
 
 

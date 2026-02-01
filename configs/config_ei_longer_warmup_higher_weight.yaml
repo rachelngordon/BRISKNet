@@ -86,8 +86,8 @@ model:
       spatial_transform: "all"
       rotate_range: 20
       weight: 50000
-      warmup: 150
-      duration: 50
+      warmup: 50
+      duration: 10
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6

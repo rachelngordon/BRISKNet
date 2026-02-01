@@ -44,7 +44,7 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_enh_scale_warmup150_36spf"
+    job_name = "ei_enh_scale_warmup50_36spf"
     config_path = 'configs/config_ei_longer_warmup.yaml'
     num_gpus = 4
 
