@@ -24,6 +24,40 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 REPO_ROOT = Path(__file__).resolve().parent
 SLICE_MAP_PATH = REPO_ROOT / "data" / "largest_tumor_slices.csv"
 
+def _get_distributed_rank() -> int:
+    """Best-effort rank detection for DDP/SLURM/PMI setups."""
+    for key in ("RANK", "SLURM_PROCID", "PMI_RANK", "LOCAL_RANK"):
+        val = os.environ.get(key)
+        if val is None:
+            continue
+        try:
+            return int(val)
+        except ValueError:
+            continue
+    return 0
+
+
+def _should_log_once(dataset_obj: object, flag_attr: str) -> bool:
+    """
+    Log a noisy dataloader message at most once per dataset instance, and only
+    from rank 0 / worker 0 (when applicable).
+    """
+    if getattr(dataset_obj, flag_attr, False):
+        return False
+
+    # Avoid multi-GPU spam.
+    if _get_distributed_rank() != 0:
+        return False
+
+    # Avoid multi-worker spam.
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is not None and worker_info.id != 0:
+        return False
+
+    setattr(dataset_obj, flag_attr, True)
+    return True
+
+
 def _compute_slice_sampling_scores(
     file_path: str,
     dataset_key: str,
@@ -67,14 +101,14 @@ def _write_slice_sampling_cache(
     metadata: dict,
 ) -> None:
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    tmp_path = f"{cache_path}.tmp.npz"
+    tmp_base = f"{cache_path}.tmp"
     np.savez_compressed(
-        tmp_path,
+        tmp_base,
         background=background.astype(np.float32),
         enhancement=enhancement.astype(np.float32),
         **metadata,
     )
-    os.replace(tmp_path, cache_path)
+    os.replace(f"{tmp_base}.npz", cache_path)
 
 
 def _compute_and_cache_slice_scores(args: tuple) -> str:
@@ -143,6 +177,8 @@ class ZFSliceDataset(Dataset):
         slice_sampling_no_replacement: bool = False,
         slice_sampling_cache_dir: Optional[str] = None,
         slice_sampling_cache_workers: int = 0,
+        slice_sampling_cache_rank: Optional[int] = None,
+        slice_sampling_cache_rank_only: Optional[int] = None,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -183,6 +219,8 @@ class ZFSliceDataset(Dataset):
         self.slice_sampling_no_replacement = bool(slice_sampling_no_replacement)
         self.slice_sampling_cache_dir = slice_sampling_cache_dir
         self.slice_sampling_cache_workers = int(slice_sampling_cache_workers)
+        self.slice_sampling_cache_rank = slice_sampling_cache_rank
+        self.slice_sampling_cache_rank_only = slice_sampling_cache_rank_only
         self._slice_score_cache = {}
         self._slice_remaining = {}
         self._slice_score_cache_ready = False
@@ -315,6 +353,12 @@ class ZFSliceDataset(Dataset):
             return
         if not hasattr(self, "volume_map"):
             return
+        if (
+            self.slice_sampling_cache_rank_only is not None
+            and self.slice_sampling_cache_rank is not None
+            and self.slice_sampling_cache_rank != self.slice_sampling_cache_rank_only
+        ):
+            return
         iterator = self.volume_map
         if self.slice_sampling_cache_dir and self.slice_sampling_cache_workers and self.slice_sampling_cache_workers > 1:
             cache_jobs = []
@@ -417,6 +461,12 @@ class ZFSliceDataset(Dataset):
         num_spokes: int,
         num_samples: int,
     ) -> None:
+        if (
+            self.slice_sampling_cache_rank_only is not None
+            and self.slice_sampling_cache_rank is not None
+            and self.slice_sampling_cache_rank != self.slice_sampling_cache_rank_only
+        ):
+            return
         cache_path = self._cache_path(file_path)
         if cache_path is None:
             return
@@ -557,11 +607,13 @@ class ZFSliceDataset(Dataset):
 
         # if aug, select random spokes per frame
         if self.spf_aug:
-            print("setting random spokes per frame...")
+            if _should_log_once(self, "_logged_spf_aug_msg"):
+                print("setting random spokes per frame...")
             spokes_per_frame = random.choices(self.spokes_range, self.spf_weights, k=1)[0]
         else:
             spokes_per_frame = self.spokes_per_frame
-            print(f"training with fixed spokes per frame ({spokes_per_frame})")
+            if _should_log_once(self, "_logged_fixed_spf_msg"):
+                print(f"training with fixed spokes per frame ({spokes_per_frame})")
 
     
         # bin k-space according to desired spokes per frame (desired final shape (T, C, Sp, Sam))
@@ -615,6 +667,8 @@ class SliceDataset(Dataset):
         slice_sampling_no_replacement: bool = False,
         slice_sampling_cache_dir: Optional[str] = None,
         slice_sampling_cache_workers: int = 0,
+        slice_sampling_cache_rank: Optional[int] = None,
+        slice_sampling_cache_rank_only: Optional[int] = None,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -655,6 +709,8 @@ class SliceDataset(Dataset):
         self.slice_sampling_no_replacement = bool(slice_sampling_no_replacement)
         self.slice_sampling_cache_dir = slice_sampling_cache_dir
         self.slice_sampling_cache_workers = int(slice_sampling_cache_workers)
+        self.slice_sampling_cache_rank = slice_sampling_cache_rank
+        self.slice_sampling_cache_rank_only = slice_sampling_cache_rank_only
         self._slice_score_cache = {}
         self._slice_remaining = {}
         self._slice_score_cache_ready = False
@@ -788,6 +844,12 @@ class SliceDataset(Dataset):
             return
         if not hasattr(self, "volume_map"):
             return
+        if (
+            self.slice_sampling_cache_rank_only is not None
+            and self.slice_sampling_cache_rank is not None
+            and self.slice_sampling_cache_rank != self.slice_sampling_cache_rank_only
+        ):
+            return
         iterator = self.volume_map
         if self.slice_sampling_cache_dir and self.slice_sampling_cache_workers and self.slice_sampling_cache_workers > 1:
             cache_jobs = []
@@ -890,6 +952,12 @@ class SliceDataset(Dataset):
         num_spokes: int,
         num_samples: int,
     ) -> None:
+        if (
+            self.slice_sampling_cache_rank_only is not None
+            and self.slice_sampling_cache_rank is not None
+            and self.slice_sampling_cache_rank != self.slice_sampling_cache_rank_only
+        ):
+            return
         cache_path = self._cache_path(file_path)
         if cache_path is None:
             return
@@ -1031,7 +1099,8 @@ class SliceDataset(Dataset):
 
             kspace_slice = torch.tensor(f[self.dataset_key][current_slice_idx])
 
-        print("loaded kspace shape: ", kspace_slice.shape) # torch.Size([8, 16, 36, 640])
+        if _should_log_once(self, "_logged_kspace_shape_msg"):
+            print("loaded kspace shape: ", kspace_slice.shape) # torch.Size([8, 16, 36, 640])
 
 
 
@@ -1044,11 +1113,13 @@ class SliceDataset(Dataset):
             # kspace_flat = kspace.contiguous().reshape(total_spokes, self.N_coils, N_samples)
 
             if self.spf_aug:
-                print("setting random spokes per frame...")
+                if _should_log_once(self, "_logged_spf_aug_msg"):
+                    print("setting random spokes per frame...")
                 spokes_per_frame = random.choices(self.spokes_range, self.spf_weights, k=1)[0]
             else:
                 spokes_per_frame = self.spokes_per_frame
-                print(f"training with fixed spokes per frame ({spokes_per_frame})")
+                if _should_log_once(self, "_logged_fixed_spf_msg"):
+                    print(f"training with fixed spokes per frame ({spokes_per_frame})")
 
             N_time = total_spokes // spokes_per_frame
             kspace_binned = kspace_flat.view(N_time, spokes_per_frame, self.N_coils, N_samples)

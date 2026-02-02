@@ -279,6 +279,8 @@ def main():
     slice_sampling_no_replacement = config["dataloader"].get("slice_sampling_no_replacement", False)
     slice_sampling_cache_dir = config["dataloader"].get("slice_sampling_cache_dir", None)
     slice_sampling_cache_workers = config["dataloader"].get("slice_sampling_cache_workers", 0)
+    slice_sampling_cache_rank = global_rank if config['training']['multigpu'] else None
+    slice_sampling_cache_rank_only = 0 if config['training']['multigpu'] else None
 
     initial_lambdas = {'lambda_L': config['model']['lambda_L'], 
                     'lambda_S': config['model']['lambda_S'], 
@@ -390,6 +392,8 @@ def main():
             slice_sampling_no_replacement=slice_sampling_no_replacement,
             slice_sampling_cache_dir=slice_sampling_cache_dir,
             slice_sampling_cache_workers=slice_sampling_cache_workers,
+            slice_sampling_cache_rank=slice_sampling_cache_rank,
+            slice_sampling_cache_rank_only=slice_sampling_cache_rank_only,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],
@@ -413,6 +417,8 @@ def main():
             slice_sampling_no_replacement=slice_sampling_no_replacement,
             slice_sampling_cache_dir=slice_sampling_cache_dir,
             slice_sampling_cache_workers=slice_sampling_cache_workers,
+            slice_sampling_cache_rank=slice_sampling_cache_rank,
+            slice_sampling_cache_rank_only=slice_sampling_cache_rank_only,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],
@@ -884,6 +890,10 @@ def main():
 
     # Step 0: Evaluate the untrained model
     step0_do_val = config.get("debugging", {}).get("calc_step_0_val", True)
+    # Optional debug knobs to cap expensive evaluation loops.
+    max_step0_train_batches = config.get("debugging", {}).get("max_step0_train_batches", None)
+    max_step0_val_batches = config.get("debugging", {}).get("max_step0_val_batches", None)
+    max_val_batches = config.get("debugging", {}).get("max_val_batches", None)
     if args.from_checkpoint == False and config['debugging']['calc_step_0'] == True:
         model.eval()
         initial_train_mc_loss = 0.0
@@ -910,6 +920,7 @@ def main():
         with torch.no_grad():
 
             # Evaluate on training data
+            step0_train_batches = 0
             for measured_kspace, csmap, N_samples, N_spokes, N_time in tqdm(train_loader, desc="Step 0 Training Evaluation"):
 
                 # prepare inputs
@@ -976,15 +987,19 @@ def main():
 
                         initial_train_ei_loss += ei_loss.item()
 
+                step0_train_batches += 1
+                if max_step0_train_batches is not None and step0_train_batches >= int(max_step0_train_batches):
+                    break
                     
             # record losses
-            step0_train_mc_loss = initial_train_mc_loss / len(train_loader)
+            denom = step0_train_batches if step0_train_batches > 0 else len(train_loader)
+            step0_train_mc_loss = initial_train_mc_loss / denom
             train_mc_losses.append(step0_train_mc_loss)
 
-            step0_train_ei_loss = initial_train_ei_loss / len(train_loader)
+            step0_train_ei_loss = initial_train_ei_loss / denom
             train_ei_losses.append(step0_train_ei_loss)
 
-            step0_train_adj_loss = initial_train_adj_loss / len(train_loader)
+            step0_train_adj_loss = initial_train_adj_loss / denom
             train_adj_losses.append(step0_train_adj_loss)
 
 
@@ -1005,6 +1020,7 @@ def main():
 
             # Evaluate on validation data
             if step0_do_val:
+                step0_val_batches = 0
                 for dro_kspace, csmap, ground_truth, dro_grasp_img, mask, grasp_path, raw_kspace, raw_grasp_img, raw_csmaps in tqdm(val_dro_loader, desc="Step 0 Validation Evaluation"):
     
                     csmap = csmap.squeeze(0).to(device)   # Remove batch dim
@@ -1123,16 +1139,21 @@ def main():
                         raw_grasp_dc_maes.append(dc_mae_raw_grasp)
                         initial_eval_raw_dc_mses.append(dc_mse_raw)
                         initial_eval_raw_dc_maes.append(dc_mae_raw)
+
+                    step0_val_batches += 1
+                    if max_step0_val_batches is not None and step0_val_batches >= int(max_step0_val_batches):
+                        break
     
     
             if step0_do_val:
-                step0_val_mc_loss = initial_val_mc_loss / len(val_dro_loader)
+                denom = step0_val_batches if step0_val_batches > 0 else len(val_dro_loader)
+                step0_val_mc_loss = initial_val_mc_loss / denom
                 val_mc_losses.append(step0_val_mc_loss)
 
-                step0_val_ei_loss = initial_val_ei_loss / len(val_dro_loader)
+                step0_val_ei_loss = initial_val_ei_loss / denom
                 val_ei_losses.append(step0_val_ei_loss)
 
-                step0_val_adj_loss = initial_val_adj_loss / len(val_dro_loader)
+                step0_val_adj_loss = initial_val_adj_loss / denom
                 val_adj_losses.append(step0_val_adj_loss)
 
 
@@ -1603,6 +1624,7 @@ def main():
                     leave=False,
                 )
                 with torch.no_grad():
+                    val_batches = 0
                     for val_dro_kspace_batch, val_csmap, val_ground_truth, val_dro_grasp_img, val_mask, grasp_path, val_raw_kspace, val_raw_grasp_img, val_raw_csmaps in tqdm(val_dro_loader):
 
                         val_csmap = val_csmap.squeeze(0).to(device)   # Remove batch dim
@@ -1718,6 +1740,10 @@ def main():
                                 epoch_eval_raw_dc_mses.append(dc_mse_raw)
                                 epoch_eval_raw_dc_maes.append(dc_mae_raw)
 
+                            val_batches += 1
+                            if max_val_batches is not None and val_batches >= int(max_val_batches):
+                                break
+                            
                             
                         except RuntimeError as e:
                             # catch only SVD-related failures
@@ -1837,18 +1863,19 @@ def main():
 
 
                 # Calculate and store average validation losses
-                epoch_val_mc_loss = val_running_mc_loss / len(val_dro_loader)
+                denom = val_batches if val_batches > 0 else len(val_dro_loader)
+                epoch_val_mc_loss = val_running_mc_loss / denom
                 val_mc_losses.append(epoch_val_mc_loss)
 
                 if use_ei_loss:
-                    epoch_val_ei_loss = val_running_ei_loss / len(val_dro_loader)
+                    epoch_val_ei_loss = val_running_ei_loss / denom
                 else:
                     epoch_val_ei_loss = 0.0
 
                 val_ei_losses.append(epoch_val_ei_loss)
 
                 if model_type == "LSFPNet":
-                    epoch_val_adj_loss = val_running_adj_loss / len(val_dro_loader)
+                    epoch_val_adj_loss = val_running_adj_loss / denom
                 else:
                     epoch_val_adj_loss = 0.0
                 
