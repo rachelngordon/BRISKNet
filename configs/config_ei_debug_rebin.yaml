@@ -1,8 +1,11 @@
+# Debug config: operator-level rebinning consistency (DDEI-ish) + spatial EI only.
+# Derived from configs/config_ei_debug.yaml.
+
 # Directories for input data
 data:
-  root_dir: "/ess/scratch/scratch1/rachelgordon/zf_data_192_slices/zf_kspace"
+  root_dir: "/net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace"
   dataset_key: "kspace"
-  split_file: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/data/data_split.json"
+  split_file: "/home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json"
   val_split_ratio: 0.2
   height: 320
   width: 320
@@ -20,12 +23,12 @@ data:
   slices_to_eval: 1
   eval_frequency: 1
   flip_kspace: False
-  traj_method: get_traj
+  traj_method: trajGR
 
 # Experiment settings
 experiment:
-  output_dir: "/gpfs/data/karczmar-lab/workspaces/rachelgordon/radial-breast-ddei/output"
-  cluster: "Randi"
+  output_dir: "/home/annawoodard/mri_recon/radial-breast-ddei/output"
+  cluster: "DSI"
 
 # DataLoader settings
 dataloader:
@@ -60,10 +63,10 @@ model:
   lambda_spatial_S: 0.05
   gamma: 0.5
   lambda_step: 0.1
-  encode_acceleration: true
-  encode_time_index: true
+  encode_acceleration: false
+  encode_time_index: false
   kernel_size_L: [3, 3, 5]
-  kernel_size_S: [3, 3, 1]
+  kernel_size_S: [3, 3, 3]
   activation_checkpointing: false
   checkpoint_use_reentrant: false
   optimizer:
@@ -82,23 +85,32 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp_subsample"
+      temporal_transform: "none"
       spatial_transform: "all"
       rotate_range: 20
       weight: 40000
-      warmup: 25
-      duration: 10000
-      subsample_ratio_min: 0.7
-      subsample_ratio_max: 0.95
-      warp_ratio_min: 0.6
-      warp_ratio_max: 0.95
+      warmup: 0
+      duration: 1
+      # DEBUG ANNA
+      # warmup: 25
+      # duration: 10000
+      pre_contrast_baseline: "m_seconds"
+      baseline_seconds: 20
+      total_seconds: 150.0
+      buffer_frames: 0
       no_grad: false
+    rebin_loss:
+      enable: true
+      weight: 10000
+      factor: 2
+      metric: "MSE"
+      time_index_mode: "scaled"
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 3
+  epochs: 2
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -107,36 +119,39 @@ training:
     enabled: False
     dtype: "bf16"
     use_grad_scaler: False
-  edge_time_index_sampling: true
+  edge_time_index_sampling: false
   curriculum_learning:
     enabled: false
     phases:
       - name: "Phase 1: Moderate Accelerations"
         start_epoch: 1
         train_spokes_range: [16, 24, 36]
-        eval_spokes_per_frame: 16       # Validate on the highest acceleration in this phase
-        eval_num_frames: 18 # (16 * 18 = 288 total spokes, assuming a fixed total spoke budget)
+        eval_spokes_per_frame: 16
+        eval_num_frames: 18
       - name: "Phase 2: Higher Accelerations"
         start_epoch: 2
-        train_spokes_range: [8, 16, 24, 36] # Introduces 8 spokes/frame
+        train_spokes_range: [8, 16, 24, 36]
         eval_spokes_per_frame: 8
-        eval_num_frames: 36 # (8 * 36 = 288 total spokes)
+        eval_num_frames: 36
       - name: "Phase 3: Ultra-High Accelerations"
         start_epoch: 3
-        train_spokes_range: [2, 4, 8, 16, 24, 36] # Introduces 2 and 4 spokes/frame
+        train_spokes_range: [2, 4, 8, 16, 24, 36]
         eval_spokes_per_frame: 2
-        eval_num_frames: 144 # (2 * 144 = 288 total spokes)
+        eval_num_frames: 144
 
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/ess/scratch/scratch1/rachelgordon/dro_dataset_frontpad"
-  chunk_size: 12
+  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset"
+  chunk_size: 16
   chunk_overlap: 8
   rescale: False
-  val_noise_level: 0.5
 
 debugging:
   calc_step_0: True
   calc_step_0_val: False
   enable_gradient_monitoring: true
   monitoring_interval: 1
+  save_csmap_pngs: true
+  csmap_plot_max_coils: 16
+  save_block_outputs: True
+  save_enhancement_curve_pngs: True

@@ -7,7 +7,7 @@
 #SBATCH --exclude=''
 #SBATCH --gpus-per-node=1
 #SBATCH --job-name=zero_pad_data
-#SBATCH --mem-per-gpu=80000
+#SBATCH --mem-per-gpu=50000
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --open-mode=append

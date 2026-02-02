@@ -10,7 +10,17 @@ from einops import rearrange
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
-from transform import VideoRotate, VideoDiffeo, SubsampleTime, MonophasicTimeWarp, TemporalShiftJitterAfterBaseline, TemporalNoise, TimeReverse
+from transform import (
+    VideoRotate,
+    VideoDiffeo,
+    SubsampleTime,
+    MonophasicTimeWarp,
+    TemporalShiftJitterAfterBaseline,
+    TemporalNoise,
+    TimeReverse,
+    BolusArrivalTimeShift,
+    BaselineEnhancementScale,
+)
 from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
@@ -20,9 +30,12 @@ from eval import eval_grasp, eval_sample
 import csv
 import math
 import random
-import time 
+import time
+import threading
+import atexit
 import seaborn as sns
 from loss_metrics import LPIPSVideoMetric, SSIMVideoMetric
+from rebin_loss import RebinConsistencyLoss
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
@@ -55,6 +68,22 @@ def _load_run_state(run_state_path):
 def _save_run_state(run_state_path, run_state):
     with open(run_state_path, "w") as file:
         json.dump(run_state, file, indent=2)
+
+def _sync_run_state_totals(run_state):
+    attempt_history = run_state.get("attempt_history", [])
+    cumulative_wall_time_sec = 0.0
+    max_peak_mem_gb = 0.0
+    for item in attempt_history:
+        wall_time = float(item.get("wall_time_sec", 0.0) or 0.0)
+        peak_mem = float(item.get("peak_mem_gb", 0.0) or 0.0)
+        cumulative_wall_time_sec += wall_time
+        if peak_mem > max_peak_mem_gb:
+            max_peak_mem_gb = peak_mem
+    run_state["cumulative_wall_time_sec"] = cumulative_wall_time_sec
+    run_state["max_peak_mem_gb"] = max_peak_mem_gb
+    run_state.setdefault("attempt_count", 0)
+    run_state.setdefault("attempt_history", [])
+    return run_state
 
 def _get_param_counts(model):
     if isinstance(model, DDP):
@@ -95,36 +124,37 @@ def main():
         type=bool,
         required=False,
         default=False,
-        help="Whether to load from a checkpoint",
+        help="Deprecated (ignored). Checkpoints auto-resume based on exp_name.",
     )
     args = parser.parse_args()
 
     # print experiment name and git commit
     exp_name = args.exp_name
 
-    # NOTE: need to change for running on Randi
-    # config_dir = '/net/projects2/annawoodard/rachelgordon/experiments'
-    config_dir = 'output'
+    # Load config and auto-resume if a last checkpoint exists for this exp_name
+    with open(args.config, "r") as file:
+        new_config = yaml.safe_load(file)
+    new_config = apply_cluster_paths(new_config)
 
+    output_dir = os.path.join(new_config["experiment"]["output_dir"], exp_name)
+    checkpoint_file = os.path.join(output_dir, f"{exp_name}_model.pth")
+    resume_from_checkpoint = os.path.isfile(checkpoint_file)
 
-    # Load the configuration file
-    if args.from_checkpoint == True:
-        with open(os.path.join(config_dir, f"{exp_name}/config.yaml"), "r") as file:
-            config = yaml.safe_load(file)
-
-        with open(args.config, "r") as file:
-            new_config = yaml.safe_load(file)
-        
+    if resume_from_checkpoint:
+        config_path = os.path.join(output_dir, "config.yaml")
+        if os.path.isfile(config_path):
+            with open(config_path, "r") as file:
+                config = yaml.safe_load(file)
+        else:
+            config = new_config
+        config = apply_cluster_paths(config)
         epochs = new_config['training']["epochs"]
     else:
-        with open(args.config, "r") as file:
-            config = yaml.safe_load(file)
-
+        config = new_config
         epochs = config['training']["epochs"]
 
-    config = apply_cluster_paths(config)
-    if args.from_checkpoint:
-        new_config = apply_cluster_paths(new_config)
+    # Keep output_dir aligned with the resolved checkpoint location.
+    config.setdefault("experiment", {})["output_dir"] = os.path.dirname(output_dir)
 
     use_edge_time_index_sampling = config.get('training', {}).get('edge_time_index_sampling', False)
     traj_method = config.get("data", {}).get("traj_method", "trajGR")
@@ -137,12 +167,17 @@ def main():
     block_dir = os.path.join(output_dir, "block_outputs") if save_block_outputs else None
     ec_dir = os.path.join(output_dir, "enhancement_curves") if save_enhancement_curves else None
 
-    attempt_start_time = time.time()
+    attempt_start_time_epoch = time.time()
+    attempt_start_time_monotonic = time.monotonic()
     attempt_peak_mem_gb = 0.0
     run_state_path = os.path.join(output_dir, "run_state.json")
     run_state = None
     state_written = False
     attempt_idx = None
+    state_lock = threading.Lock()
+    stop_run_state = threading.Event()
+    run_state_thread = None
+    run_state_heartbeat_sec = float(os.environ.get("RUN_STATE_HEARTBEAT_SEC", "60"))
 
         
 
@@ -191,6 +226,10 @@ def main():
         print(f"Running experiment on Git commit: {commit_hash}")
 
         print(f"Experiment: {exp_name}")
+        if resume_from_checkpoint:
+            print(f"[Checkpoint] Resuming from {checkpoint_file}")
+        else:
+            print("[Checkpoint] No existing checkpoint found; starting new run.")
 
 
 
@@ -204,7 +243,30 @@ def main():
             os.makedirs(ec_dir, exist_ok=True)
 
         run_state = _load_run_state(run_state_path)
+        run_state.setdefault("attempt_history", [])
+        run_state.setdefault("attempt_count", 0)
+
+        # If a prior attempt was interrupted before finalization, mark it as such.
+        last_attempt = run_state["attempt_history"][-1] if run_state["attempt_history"] else None
+        if last_attempt is not None and last_attempt.get("status") == "running":
+            last_attempt["status"] = "interrupted"
+            last_attempt.setdefault("reason", "interrupted")
+            last_attempt.setdefault("end_time_epoch", time.time())
+
         attempt_idx = run_state.get("attempt_count", 0) + 1
+        run_state["attempt_count"] = attempt_idx
+        run_state["attempt_history"].append(
+            {
+                "attempt": attempt_idx,
+                "wall_time_sec": 0.0,
+                "peak_mem_gb": 0.0,
+                "status": "running",
+                "reason": "running",
+                "start_time_epoch": attempt_start_time_epoch,
+            }
+        )
+        _sync_run_state_totals(run_state)
+        _save_run_state(run_state_path, run_state)
 
         # Initialize TensorBoard SummaryWriter
         log_dir = os.path.join(output_dir, 'logs')
@@ -213,9 +275,54 @@ def main():
 
 
         # Save the configuration file
-        if args.from_checkpoint == False:
+        if not resume_from_checkpoint:
             with open(os.path.join(output_dir, 'config.yaml'), 'w') as file:
                 yaml.dump(config, file)
+
+    def _update_run_state_progress(reason=None, final=False):
+        nonlocal attempt_peak_mem_gb, run_state
+        if run_state is None or attempt_idx is None:
+            return
+        if global_rank != 0 and config['training']['multigpu']:
+            return
+        with state_lock:
+            wall_time_sec = time.monotonic() - attempt_start_time_monotonic
+            if torch.cuda.is_available():
+                try:
+                    current_peak_gb = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+                except Exception:
+                    current_peak_gb = 0.0
+                attempt_peak_mem_gb = max(attempt_peak_mem_gb, current_peak_gb)
+
+            attempt_entry = None
+            for item in run_state.get("attempt_history", []):
+                if item.get("attempt") == attempt_idx:
+                    attempt_entry = item
+                    break
+            if attempt_entry is None:
+                attempt_entry = {"attempt": attempt_idx}
+                run_state.setdefault("attempt_history", []).append(attempt_entry)
+
+            attempt_entry.setdefault("start_time_epoch", attempt_start_time_epoch)
+            attempt_entry["wall_time_sec"] = wall_time_sec
+            attempt_entry["peak_mem_gb"] = attempt_peak_mem_gb
+            attempt_entry["status"] = "completed" if final else "running"
+            if reason is not None:
+                attempt_entry["reason"] = reason
+            if final:
+                attempt_entry["end_time_epoch"] = time.time()
+
+            run_state["attempt_count"] = max(run_state.get("attempt_count", 0), attempt_idx)
+            _sync_run_state_totals(run_state)
+            _save_run_state(run_state_path, run_state)
+
+    def _run_state_heartbeat():
+        while not stop_run_state.wait(run_state_heartbeat_sec):
+            _update_run_state_progress()
+
+    if run_state is not None:
+        run_state_thread = threading.Thread(target=_run_state_heartbeat, daemon=True)
+        run_state_thread.start()
 
     def _finalize_run_state(reason):
         nonlocal attempt_peak_mem_gb, state_written, run_state
@@ -227,25 +334,13 @@ def main():
         if run_state is None or attempt_idx is None:
             return
 
-        wall_time_sec = time.time() - attempt_start_time
-        cumulative_wall_time_sec = run_state.get("cumulative_wall_time_sec", 0.0) + wall_time_sec
-        max_peak_mem_gb = max(run_state.get("max_peak_mem_gb", 0.0), attempt_peak_mem_gb)
-
-        run_state["attempt_count"] = attempt_idx
-        run_state["cumulative_wall_time_sec"] = cumulative_wall_time_sec
-        run_state["max_peak_mem_gb"] = max_peak_mem_gb
-        run_state.setdefault("attempt_history", []).append(
-            {
-                "attempt": attempt_idx,
-                "wall_time_sec": wall_time_sec,
-                "peak_mem_gb": attempt_peak_mem_gb,
-                "reason": reason,
-            }
-        )
-
-        _save_run_state(run_state_path, run_state)
+        stop_run_state.set()
+        _update_run_state_progress(reason=reason, final=True)
         state_written = True
 
+        wall_time_sec = run_state.get("attempt_history", [{}])[-1].get("wall_time_sec", 0.0)
+        cumulative_wall_time_sec = run_state.get("cumulative_wall_time_sec", 0.0)
+        max_peak_mem_gb = run_state.get("max_peak_mem_gb", 0.0)
         print(f"[RunState] Attempt {attempt_idx} wall time (sec): {wall_time_sec:.2f}")
         print(f"[RunState] Cumulative wall time (hours): {cumulative_wall_time_sec / 3600.0:.2f}")
         print(f"[RunState] Attempt peak GPU memory (GB): {attempt_peak_mem_gb:.2f}")
@@ -264,6 +359,9 @@ def main():
     for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGUSR1", None), getattr(signal, "SIGUSR2", None)):
         if sig is not None:
             signal.signal(sig, _handle_signal)
+
+    if run_state is not None:
+        atexit.register(_finalize_run_state, "exit")
 
 
     # load params
@@ -297,6 +395,13 @@ def main():
     warmup = config["model"]["losses"]["ei_loss"]["warmup"]
     duration = config["model"]["losses"]["ei_loss"]["duration"]
 
+    rebin_cfg = config["model"]["losses"].get("rebin_loss", {})
+    use_rebin_loss = bool(rebin_cfg.get("enable", False))
+    rebin_loss_weight = float(rebin_cfg.get("weight", 0.0))
+    rebin_factor = int(rebin_cfg.get("factor", 2))
+    rebin_metric_name = str(rebin_cfg.get("metric", "MSE"))
+    rebin_time_index_mode = str(rebin_cfg.get("time_index_mode", "none"))
+
     save_interval = config["training"]["save_interval"]
     plot_interval = config["training"]["plot_interval"]
 
@@ -323,6 +428,7 @@ def main():
     eval_chunk_overlap = config["evaluation"]["chunk_overlap"]
 
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
+    val_noise_level = config.get("evaluation", {}).get("val_noise_level", 0)
 
     cluster = config["experiment"].get("cluster", "Randi")
 
@@ -503,7 +609,8 @@ def main():
         spokes_per_frame=N_spokes_eval,
         num_frames=N_time_eval,
         traj_method=traj_method,
-        grasp_slice_idx=raw_grasp_slice_idx)
+        grasp_slice_idx=raw_grasp_slice_idx,
+        noise_level=val_noise_level)
 
 
     val_dro_loader = DataLoader(
@@ -631,9 +738,10 @@ def main():
     if global_rank == 0 or not config['training']['multigpu']:
         if run_state is not None and ("total_params" not in run_state or "trainable_params" not in run_state):
             total_params, trainable_params = _get_param_counts(model)
-            run_state["total_params"] = total_params
-            run_state["trainable_params"] = trainable_params
-            _save_run_state(run_state_path, run_state)
+            with state_lock:
+                run_state["total_params"] = total_params
+                run_state["trainable_params"] = trainable_params
+                _save_run_state(run_state_path, run_state)
             print(f"[RunState] Total parameters: {total_params:,}")
             print(f"[RunState] Trainable parameters: {trainable_params:,}")
 
@@ -648,7 +756,7 @@ def main():
 
 
     # Load the checkpoint to resume training
-    if args.from_checkpoint == True:
+    if resume_from_checkpoint:
         # if global_rank == 0 or config['training']['multigpu'] == False:
         checkpoint_file = os.path.join(output_dir, f'{exp_name}_model.pth')
         model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
@@ -679,18 +787,37 @@ def main():
     ei_checkpoint_mode = config['model']['losses']['ei_loss'].get("checkpoint_mode", "none")
     ei_checkpoint_use_reentrant = config['model']['losses']['ei_loss'].get("checkpoint_use_reentrant", False)
 
+    if use_rebin_loss:
+        if rebin_metric_name.upper() == "MAE":
+            rebin_metric = torch.nn.L1Loss()
+        else:
+            rebin_metric = torch.nn.MSELoss()
+        rebin_loss_fn = RebinConsistencyLoss(
+            factor=rebin_factor,
+            metric=rebin_metric,
+            time_index_mode=rebin_time_index_mode,
+        )
+    else:
+        rebin_loss_fn = None
+
 
     # define EI loss transformations
     if use_ei_loss:
         rotate = VideoRotate(n_trans=1, interpolation_mode="bilinear", degrees=config['model']['losses']['ei_loss'].get("rotate_range", 180))
         diffeo = VideoDiffeo(n_trans=1, device=device)
 
-        subsample = SubsampleTime(n_trans=1, subsample_ratio_range=(config['model']['losses']['ei_loss']['subsample_ratio_min'], config['model']['losses']['ei_loss']['subsample_ratio_max']))
+        subsample = SubsampleTime(
+            n_trans=1,
+            subsample_ratio_range=(
+                config['model']['losses']['ei_loss'].get("subsample_ratio_min", 0.7),
+                config['model']['losses']['ei_loss'].get("subsample_ratio_max", 0.95),
+            ),
+        )
         monophasic_warp = MonophasicTimeWarp(
             n_trans=1,
             warp_ratio_range=(
-                config['model']['losses']['ei_loss']['warp_ratio_min'],
-                config['model']['losses']['ei_loss']['warp_ratio_max'],
+                config['model']['losses']['ei_loss'].get("warp_ratio_min", 0.7),
+                config['model']['losses']['ei_loss'].get("warp_ratio_max", 1.3),
             ),
             pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
             baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
@@ -701,6 +828,26 @@ def main():
             max_shift=config['model']['losses']['ei_loss'].get("shift_jitter_max_shift", 2),
             pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
             baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+            buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
+        )
+        arrival_shift = BolusArrivalTimeShift(
+            n_trans=1,
+            max_shift=config['model']['losses']['ei_loss'].get("arrival_shift_max_shift", 2),
+            percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+            baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+            total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
+        )
+        enh_scale = BaselineEnhancementScale(
+            n_trans=1,
+            scale_range=(
+                config['model']['losses']['ei_loss'].get("enh_scale_min", 0.8),
+                config['model']['losses']['ei_loss'].get("enh_scale_max", 1.2),
+            ),
+            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
+            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+            total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
             buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
         )
         temp_noise = TemporalNoise(n_trans=1, noise_strength=config['model']['losses']['ei_loss'].get("noise_strength", 0.5))
@@ -721,6 +868,16 @@ def main():
                 ei_loss_fn = EILoss(shift_jitter, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
                 ei_loss_fn = EILoss(shift_jitter | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+        elif config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift":
+            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
+                ei_loss_fn = EILoss(arrival_shift, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+            else:
+                ei_loss_fn = EILoss(arrival_shift | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+        elif config['model']['losses']['ei_loss']['temporal_transform'] == "enh_scale":
+            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
+                ei_loss_fn = EILoss(enh_scale, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+            else:
+                ei_loss_fn = EILoss(enh_scale | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "noise":
             ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp_subsample":
@@ -740,7 +897,7 @@ def main():
 
 
 
-    if args.from_checkpoint:
+    if resume_from_checkpoint:
         train_mc_losses = train_curves["train_mc_losses"]
         val_mc_losses = val_curves["val_mc_losses"]
         train_ei_losses = train_curves["train_ei_losses"]
@@ -791,7 +948,7 @@ def main():
 
 
     eval_spf_curves = {}
-    if args.from_checkpoint:
+    if resume_from_checkpoint:
         eval_spf_curves = eval_curves.get("eval_spf_curves", {})
     for spf in low_spf_eval_targets:
         if spf not in eval_spf_curves:
@@ -808,7 +965,7 @@ def main():
     best_checkpoint_path = os.path.join(output_dir, f'{exp_name}_best_model.pth')
     best_psnr = -np.inf
     best_epoch = None
-    if args.from_checkpoint:
+    if resume_from_checkpoint:
         psnr_array = np.array(eval_psnrs, dtype=float)
         if psnr_array.size and np.isfinite(psnr_array).any():
             best_idx = int(np.nanargmax(psnr_array))
@@ -856,6 +1013,10 @@ def main():
         )
         return train_curves, val_curves, eval_curves
 
+    mc_only_checkpoint_saved = True
+    if use_ei_loss and warmup > 0 and start_epoch <= warmup:
+        mc_only_checkpoint_saved = False
+
 
     grasp_ssims = []
     grasp_psnrs = []
@@ -868,7 +1029,7 @@ def main():
     raw_grasp_dc_maes = []
 
     # Defaults so checkpointing works even if Step-0 validation is skipped
-    if not args.from_checkpoint:
+    if not resume_from_checkpoint:
         avg_grasp_ssim = 0.0
         avg_grasp_psnr = 0.0
         avg_grasp_mse = 0.0
@@ -1270,9 +1431,10 @@ def main():
                         f"[Checkpoint] New best PSNR {best_psnr:.4f} at epoch 0. Saved to {best_checkpoint_path}"
                     )
                     if run_state is not None:
-                        run_state["best_checkpoint_epoch"] = int(best_epoch)
-                        run_state["best_checkpoint_psnr"] = float(best_psnr)
-                        _save_run_state(run_state_path, run_state)
+                        with state_lock:
+                            run_state["best_checkpoint_epoch"] = int(best_epoch)
+                            run_state["best_checkpoint_psnr"] = float(best_psnr)
+                            _save_run_state(run_state_path, run_state)
 
 
 
@@ -1292,6 +1454,7 @@ def main():
             running_mc_loss = 0.0
             running_ei_loss = 0.0
             running_adj_loss = 0.0
+            running_rebin_loss = 0.0
             epoch_eval_ssims = []
             epoch_eval_psnrs = []
             epoch_eval_mses = []
@@ -1462,6 +1625,23 @@ def main():
                         mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
                         running_mc_loss += mc_loss.item()
 
+                        if use_rebin_loss:
+                            rebin_loss = rebin_loss_fn(
+                                measured_kspace.to(device),
+                                x_recon,
+                                physics,
+                                model,
+                                csmap,
+                                acceleration_encoding,
+                                start_timepoint_index,
+                                spokes_per_frame=int(N_spokes),
+                                samples_per_spoke=int(N_samples),
+                                norm=config['model']['norm'],
+                            )
+                            running_rebin_loss += rebin_loss.item()
+                        else:
+                            rebin_loss = None
+
                         if use_ei_loss and compute_ei_this_epoch:
                             ei_loss, t_img = ei_loss_fn(
                                 x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
@@ -1469,16 +1649,23 @@ def main():
 
                             running_ei_loss += ei_loss.item()
                             total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
+                            if rebin_loss is not None and rebin_loss_weight > 0:
+                                total_loss = total_loss + rebin_loss * rebin_loss_weight
                             train_loader_tqdm.set_postfix(
-                                mc_loss=mc_loss.item(), ei_loss=ei_loss.item(), ei_w=ei_loss_weight
+                                mc_loss=mc_loss.item(),
+                                ei_loss=ei_loss.item(),
+                                rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
                             )
 
                         else:
                             total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                            if use_ei_loss:
-                                train_loader_tqdm.set_postfix(mc_loss=mc_loss.item(), ei_w=ei_loss_weight)
-                            else:
-                                train_loader_tqdm.set_postfix(mc_loss=mc_loss.item())
+
+                            if rebin_loss is not None and rebin_loss_weight > 0:
+                                total_loss = total_loss + rebin_loss * rebin_loss_weight
+                            train_loader_tqdm.set_postfix(
+                                mc_loss=mc_loss.item(),
+                                rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
+                            )
 
                     if torch.isnan(total_loss):
                         print(
@@ -1493,7 +1680,8 @@ def main():
                         total_loss.backward()
 
 
-                    if config["debugging"]["enable_gradient_monitoring"] == True and iteration_count % config["debugging"]["monitoring_interval"] == 0:
+                    debug_cfg = config.get("debugging", {})
+                    if debug_cfg.get("enable_gradient_monitoring", False) and iteration_count % int(debug_cfg.get("monitoring_interval", 100)) == 0:
                     
                         log_gradient_stats(
                             model=model,
@@ -1596,11 +1784,19 @@ def main():
             train_adj_losses.append(epoch_train_adj_loss)
             weighted_train_adj_losses.append(epoch_train_adj_loss*adj_loss_weight)
 
+            if use_rebin_loss:
+                epoch_train_rebin_loss = running_rebin_loss / len(train_loader)
+            else:
+                epoch_train_rebin_loss = 0.0
+
 
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('Loss/Train_MC', epoch_train_mc_loss, epoch)
                 writer.add_scalar('Loss/Train_EI', epoch_train_ei_loss, epoch)
                 writer.add_scalar('Loss/Train_Adj', epoch_train_adj_loss, epoch)
+                if use_rebin_loss:
+                    writer.add_scalar('Loss/Train_Rebin', epoch_train_rebin_loss, epoch)
+                    writer.add_scalar('Loss/Train_Weighted_Rebin', epoch_train_rebin_loss * rebin_loss_weight, epoch)
 
 
             lambda_Ls.append(lambda_L.item())
@@ -1915,9 +2111,10 @@ def main():
                             f"[Checkpoint] New best PSNR {best_psnr:.4f} at epoch {epoch}. Saved to {best_checkpoint_path}"
                         )
                         if run_state is not None:
-                            run_state["best_checkpoint_epoch"] = int(best_epoch)
-                            run_state["best_checkpoint_psnr"] = float(best_psnr)
-                            _save_run_state(run_state_path, run_state)
+                            with state_lock:
+                                run_state["best_checkpoint_epoch"] = int(best_epoch)
+                                run_state["best_checkpoint_psnr"] = float(best_psnr)
+                                _save_run_state(run_state_path, run_state)
 
 
 
@@ -2302,6 +2499,44 @@ def main():
                     print(f"GRASP DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {np.std(raw_grasp_dc_maes):.4f}")
                     print(f"GRASP DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {np.std(raw_grasp_dc_mses):.4f}")
                     print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {np.std(grasp_curve_corrs):.4f}")
+
+            if (
+                not mc_only_checkpoint_saved
+                and use_ei_loss
+                and warmup > 0
+                and epoch == warmup
+            ):
+                if global_rank == 0 or not config['training']['multigpu']:
+                    train_curves, val_curves, eval_curves = _build_checkpoint_curves()
+                    mc_only_epochs = epoch
+                    mc_only_checkpoint_path = os.path.join(
+                        output_dir, f"{exp_name}_mc_{mc_only_epochs}epochs.pth"
+                    )
+                    save_checkpoint(
+                        model,
+                        optimizer,
+                        epoch + 1,
+                        train_curves,
+                        val_curves,
+                        eval_curves,
+                        target_w_ei,
+                        step0_train_ei_loss,
+                        epoch_train_mc_loss,
+                        avg_grasp_ssim,
+                        avg_grasp_psnr,
+                        avg_grasp_mse,
+                        avg_grasp_lpips,
+                        avg_grasp_dc_mse,
+                        avg_grasp_dc_mae,
+                        avg_grasp_curve_corr,
+                        avg_grasp_raw_dc_mae,
+                        avg_grasp_raw_dc_mse,
+                        mc_only_checkpoint_path,
+                    )
+                    print(
+                        f"[Checkpoint] MC-only checkpoint saved to {mc_only_checkpoint_path}"
+                    )
+                mc_only_checkpoint_saved = True
 
             if torch.cuda.is_available():
                 torch.cuda.synchronize(device)

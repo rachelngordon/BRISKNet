@@ -98,7 +98,7 @@ model:
 
 # Training settings
 training:
-  epochs: 40
+  epochs: 350
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -129,6 +129,7 @@ evaluation:
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
+  val_noise_level: 0
 
 debugging:
   calc_step_0: True

@@ -687,3 +687,225 @@ class TimeReverse(Transform):
         # B, C, T, H, W
         # 0, 1, 2, 3, 4
         return torch.flip(x, dims=[2])
+
+
+class BolusArrivalTimeShift(Transform):
+    r"""
+    Breast DCE temporal augmentation: jitter the sequence in time, but *anchored* to
+    an estimated bolus-arrival (contrast arrival) index within the current window.
+
+    Unlike MonophasicTimeWarp/SubsampleTime, this does **not** resample in time
+    (no interpolation). It applies an integer-frame shift with edge padding.
+
+    This is meant to model nuisance misalignment between acquisition window start
+    and contrast arrival, without changing the enhancement curve shape.
+
+    Notes:
+      - Expects 5D video tensor (B, C, T, H, W) with C=2 (real/imag).
+      - Assumes batch size B==1 (matches current training setup).
+
+    Params:
+      max_shift: maximum absolute jitter (frames) around the detected arrival.
+      percentile: quantile (0..1) used to build a robust global curve from bright tissue.
+      baseline_k: threshold is baseline_mean + baseline_k * baseline_std.
+      pre_contrast_baseline/baseline_seconds: same conventions as other temporal transforms.
+    """
+
+    def __init__(
+        self,
+        *args,
+        max_shift: int = 2,
+        percentile: float = 0.95,
+        baseline_k: float = 2.0,
+        pre_contrast_baseline: str = "n_frames",
+        baseline_seconds: float = 20.0,
+        total_seconds: float = 150.0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.flatten_video_input = False
+        self.max_shift = max(0, int(max_shift))
+        self.percentile = float(percentile)
+        self.baseline_k = float(baseline_k)
+        self.pre_contrast_baseline = pre_contrast_baseline
+        self.baseline_seconds = float(baseline_seconds)
+        self.total_seconds = float(total_seconds)
+
+    def _baseline_len(self, T: int) -> int:
+        if self.pre_contrast_baseline == "n_frames":
+            n_base = int(round(0.1 * T))
+            n_base = max(4, min(10, n_base))
+        elif self.pre_contrast_baseline == "m_seconds":
+            seconds_per_frame = self.total_seconds / max(T, 1)
+            n_base = int(round(self.baseline_seconds / max(seconds_per_frame, 1e-6)))
+            n_base = max(1, n_base)
+        else:
+            n_base = 1
+        return min(n_base, max(T, 1))
+
+    @staticmethod
+    def _magnitude(x: torch.Tensor) -> torch.Tensor:
+        # x: (B, 2, T, H, W) -> mag: (B, T, H, W)
+        return torch.sqrt(x[:, 0, ...] ** 2 + x[:, 1, ...] ** 2 + 1e-8)
+
+    def _estimate_arrival_index(self, x: torch.Tensor) -> int:
+        """
+        Returns an integer arrival index in [0, T-1] estimated from a robust
+        global curve (top-percentile intensity).
+        """
+        B, C, T, H, W = x.shape
+        if T <= 1:
+            return 0
+
+        mag = self._magnitude(x)  # (B, T, H, W)
+        flat = mag.reshape(B, T, -1)
+        q = float(self.percentile)
+        q = min(max(q, 0.0), 1.0)
+
+        thr = torch.quantile(flat, q, dim=-1, keepdim=True)  # (B, T, 1)
+        mask = flat > thr
+        # Mean of "bright" voxels per frame; if mask is empty, fall back to the quantile.
+        bright_sum = (flat * mask).sum(dim=-1)
+        bright_count = mask.sum(dim=-1)
+        curve = torch.where(
+            bright_count > 0,
+            bright_sum / bright_count.clamp_min(1),
+            thr.squeeze(-1),
+        )  # (B, T)
+
+        n_base = self._baseline_len(T)
+        baseline = curve[:, :n_base]
+        mu = baseline.mean(dim=1)
+        sigma = baseline.std(dim=1)
+        thr_curve = mu + self.baseline_k * sigma
+
+        above = curve[0] > thr_curve[0]
+        if torch.any(above):
+            return int(torch.argmax(above.int()).item())
+
+        # Fallback: max derivative index (wash-in onset proxy)
+        d = curve[0, 1:] - curve[0, :-1]
+        if d.numel() == 0:
+            return 0
+        return int(torch.argmax(d).item() + 1)
+
+    def _get_params(self, x: torch.Tensor) -> dict:
+        if self.max_shift == 0:
+            shifts = [0 for _ in range(self.n_trans)]
+            return {"shifts": shifts}
+
+        arrival_idx = self._estimate_arrival_index(x)
+        shifts = []
+        for _ in range(self.n_trans):
+            delta = int(
+                torch.randint(
+                    low=-self.max_shift,
+                    high=self.max_shift + 1,
+                    size=(1,),
+                    generator=self.rng,
+                ).item()
+            )
+            # Clamp the target index to valid range, then convert to an actual shift.
+            T = x.shape[2]
+            target = min(max(arrival_idx + delta, 0), max(T - 1, 0))
+            shifts.append(int(target - arrival_idx))
+        return {"shifts": shifts}
+
+    def _transform(self, x: torch.Tensor, shifts: list[int], **kwargs) -> torch.Tensor:
+        if len(x.shape) != 5:
+            raise ValueError(f"BolusArrivalTimeShift expects 5D tensor, got {x.shape}.")
+        assert x.shape[0] == 1, "This transform assumes batch size 1."
+
+        B, C, T, H, W = x.shape
+        if T <= 1:
+            return x.repeat(self.n_trans, 1, 1, 1, 1)
+
+        out = []
+        for shift in shifts:
+            s = int(shift)
+            if s == 0:
+                out.append(x)
+                continue
+            if s > 0:
+                pad = x[:, :, :1, :, :].repeat(1, 1, s, 1, 1)
+                out.append(torch.cat([pad, x[:, :, : T - s, :, :]], dim=2))
+            else:
+                s_abs = -s
+                pad = x[:, :, -1:, :, :].repeat(1, 1, s_abs, 1, 1)
+                out.append(torch.cat([x[:, :, s_abs:, :, :], pad], dim=2))
+        return torch.cat(out, dim=0)
+
+
+class BaselineEnhancementScale(Transform):
+    r"""
+    Breast DCE augmentation: scale *enhancement above baseline* by a positive scalar.
+
+    x'(t) = B + a * (x(t) - B)  for t >= baseline_end
+
+    This preserves temporal kinetics shape (slopes/peak timing) and models nuisance
+    gain/dose/B1 variation more plausibly than time resampling.
+
+    Expects 5D tensor (B, C, T, H, W) with C=2 (real/imag) and batch size B==1.
+    """
+
+    def __init__(
+        self,
+        *args,
+        scale_range: tuple[float, float] = (0.8, 1.2),
+        pre_contrast_baseline: str = "first_frame",
+        baseline_seconds: float = 20.0,
+        total_seconds: float = 150.0,
+        buffer_frames: int = 0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.flatten_video_input = False
+        self.scale_range = (float(scale_range[0]), float(scale_range[1]))
+        self.pre_contrast_baseline = pre_contrast_baseline
+        self.baseline_seconds = float(baseline_seconds)
+        self.total_seconds = float(total_seconds)
+        self.buffer_frames = max(0, int(buffer_frames))
+
+    def _baseline_len(self, T: int) -> int:
+        if self.pre_contrast_baseline == "n_frames":
+            n_base = int(round(0.1 * T))
+            n_base = max(4, min(10, n_base))
+        elif self.pre_contrast_baseline == "m_seconds":
+            seconds_per_frame = self.total_seconds / max(T, 1)
+            n_base = int(round(self.baseline_seconds / max(seconds_per_frame, 1e-6)))
+            n_base = max(1, n_base)
+        else:
+            n_base = 1
+        return min(n_base, max(T, 1))
+
+    def _get_params(self, x: torch.Tensor) -> dict:
+        lo, hi = self.scale_range
+        lo, hi = (min(lo, hi), max(lo, hi))
+        scales = [float(lo + (hi - lo) * torch.rand(1, generator=self.rng).item()) for _ in range(self.n_trans)]
+        return {"scales": scales}
+
+    def _transform(self, x: torch.Tensor, scales: list[float], **kwargs) -> torch.Tensor:
+        if len(x.shape) != 5:
+            raise ValueError(f"BaselineEnhancementScale expects 5D tensor, got {x.shape}.")
+        assert x.shape[0] == 1, "This transform assumes batch size 1."
+
+        B, C, T, H, W = x.shape
+        if T <= 1:
+            return x.repeat(self.n_trans, 1, 1, 1, 1)
+
+        n_base = self._baseline_len(T)
+        buffer_len = min(self.buffer_frames, max(0, T - n_base))
+        enh_start = n_base + buffer_len
+
+        # Baseline image (complex, per-pixel)
+        baseline = x[:, :, :n_base, :, :].mean(dim=2, keepdim=True)  # (1, C, 1, H, W)
+
+        out = []
+        for a in scales:
+            a_t = torch.tensor(a, dtype=x.dtype, device=x.device)
+            x_new = x.clone()
+            if enh_start < T:
+                enh = x_new[:, :, enh_start:, :, :]
+                x_new[:, :, enh_start:, :, :] = baseline + a_t * (enh - baseline)
+            out.append(x_new)
+        return torch.cat(out, dim=0)
