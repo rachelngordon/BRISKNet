@@ -1,7 +1,10 @@
 import argparse
 import json
+import os
 from collections import defaultdict
 from typing import Iterable, List, Dict, Tuple
+
+import yaml
 
 
 SPATIAL_METRICS = ["ssim", "psnr", "mse", "lpips"]
@@ -25,6 +28,21 @@ def _parse_list(value: str) -> List[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+def _parse_config_cols(value: str) -> List[Tuple[str, str]]:
+    cols = []
+    for item in _parse_list(value):
+        if ":" in item:
+            header, path = item.split(":", 1)
+            header = header.strip()
+            path = path.strip()
+        else:
+            path = item.strip()
+            header = path.split(".")[-1] if path else ""
+        if path:
+            cols.append((header, path))
+    return cols
+
+
 def _to_float(value):
     try:
         if value is None or value == "":
@@ -39,11 +57,60 @@ def _format_mean_std(mean, std, decimals: int) -> str:
         return ""
     if std is None:
         return f"{mean:.{decimals}f}"
-    return f"{mean:.{decimals}f} \\pm {std:.{decimals}f}"
+    return f"${mean:.{decimals}f} \\pm {std:.{decimals}f}$"
 
 
 def _extract_mean_std_flat(row: Dict[str, str], prefix: str) -> Tuple[float | None, float | None]:
     return _to_float(row.get(f"{prefix}_mean")), _to_float(row.get(f"{prefix}_std"))
+
+
+def _format_one_decimal(value) -> str:
+    value = _to_float(value)
+    if value is None:
+        return ""
+    return f"{value:.1f}"
+
+
+def _load_config(exp_name: str, exp_base_dirs: List[str], cache: Dict[str, Dict]) -> Dict | None:
+    if not exp_name:
+        return None
+    if exp_name in cache:
+        return cache[exp_name]
+    cfg = None
+    for base_dir in exp_base_dirs:
+        config_path = os.path.join(base_dir, exp_name, "config.yaml")
+        if not os.path.exists(config_path):
+            continue
+        with open(config_path, "r") as f:
+            cfg = yaml.safe_load(f)
+        break
+    cache[exp_name] = cfg
+    return cfg
+
+
+def _get_config_value(cfg: Dict | None, path: str):
+    if not cfg or not path:
+        return None
+    current = cfg
+    for part in path.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit():
+            idx = int(part)
+            if idx < 0 or idx >= len(current):
+                return None
+            current = current[idx]
+        else:
+            return None
+    return current
+
+
+def _format_config_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
 
 
 def _extract_mean_std_structured(node: Dict[str, str]) -> Tuple[float | None, float | None]:
@@ -169,8 +236,13 @@ def _collect_metric_values(row: Dict[str, str], model_prefix: str, metric_type: 
 
 def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, str, str], Dict[str, str]],
                 metric_type: str, temporal_metrics: List[str], temporal_subset: str, temporal_region: str,
-                decimals: int, caption: str, label: str) -> str:
-    header_cols = ["Method", "AF", "Seconds/Frame"] + _metric_columns(metric_type, temporal_metrics)
+                decimals: int, caption: str, label: str, config_cols: List[Tuple[str, str]],
+                exp_base_dirs: List[str], config_cache: Dict[str, Dict]) -> str:
+    if config_cols:
+        header_cols = ["Method"] + [col for col, _ in config_cols] + ["AF", "Seconds/Frame"]
+    else:
+        header_cols = ["Method", "Exp", "AF", "Seconds/Frame"]
+    header_cols += _metric_columns(metric_type, temporal_metrics)
     col_spec = "|" + "|".join(["l"] + ["c"] * (len(header_cols) - 1)) + "|"
 
     lines = []
@@ -183,9 +255,11 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
     lines.append("\\hline")
 
     sorted_rows = sorted(rows, key=_row_key)
+    unique_grasp_rows = {}
     for row in sorted_rows:
-        accel = row.get("acceleration_factor") or row.get("acceleration") or ""
-        sec_per_frame = row.get("seconds_per_frame") or ""
+        accel = _format_one_decimal(row.get("acceleration_factor") or row.get("acceleration"))
+        sec_per_frame = _format_one_decimal(row.get("seconds_per_frame"))
+        exp_name = row.get("exp_name") or ""
         key = (
             row.get("acceleration_factor") or row.get("acceleration"),
             row.get("spokes_per_frame"),
@@ -193,6 +267,19 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
             row.get("dro_noise_level") or row.get("DRO_noise_level"),
         )
         grasp_row = grasp_index.get(key, row)
+
+        accel_key = _to_float(row.get("acceleration_factor") or row.get("acceleration") or grasp_row.get("acceleration")) or 0.0
+        if accel_key not in unique_grasp_rows:
+            unique_grasp_rows[accel_key] = grasp_row
+
+        if config_cols:
+            cfg = _load_config(exp_name, exp_base_dirs, config_cache)
+            config_vals = [
+                _format_config_value(_get_config_value(cfg, path))
+                for _, path in config_cols
+            ]
+        else:
+            config_vals = [exp_name]
 
         brisk_vals = _collect_metric_values(
             row,
@@ -203,20 +290,26 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
             temporal_region,
             decimals,
         )
-        grasp_vals = _collect_metric_values(
-            grasp_row,
-            "grasp",
-            metric_type,
-            temporal_metrics,
-            temporal_subset,
-            temporal_region,
-            decimals,
-        )
+        lines.append(_format_row(["BRISKNet"] + config_vals + [str(accel), str(sec_per_frame)] + brisk_vals))
+        lines.append("\\hline")
 
-        lines.append(_format_row(["BRISKNet", str(accel), str(sec_per_frame)] + brisk_vals))
-        lines.append("\\hline")
-        lines.append(_format_row(["GRASP", str(accel), str(sec_per_frame)] + grasp_vals))
-        lines.append("\\hline")
+    if unique_grasp_rows:
+        empty_config_vals = [""] * (len(config_cols) if config_cols else 1)
+        for accel_key in sorted(unique_grasp_rows):
+            grasp_row = unique_grasp_rows[accel_key]
+            grasp_accel = _format_one_decimal(grasp_row.get("acceleration_factor") or grasp_row.get("acceleration"))
+            grasp_sec_per_frame = _format_one_decimal(grasp_row.get("seconds_per_frame"))
+            grasp_vals = _collect_metric_values(
+                grasp_row,
+                "grasp",
+                metric_type,
+                temporal_metrics,
+                temporal_subset,
+                temporal_region,
+                decimals,
+            )
+            lines.append(_format_row(["GRASP"] + empty_config_vals + [str(grasp_accel), str(grasp_sec_per_frame)] + grasp_vals))
+            lines.append("\\hline")
 
     lines.append("\\end{tabular}")
     lines.append("}")
@@ -253,13 +346,35 @@ def main():
         default=",".join(TEMPORAL_METRICS),
         help="Comma-separated temporal metrics to include (overrides defaults).",
     )
-    parser.add_argument("--decimals", type=int, default=4, help="Decimal places for mean/std.")
+    parser.add_argument("--decimals", type=int, default=2, help="Decimal places for mean/std.")
     parser.add_argument("--caption", default="", help="LaTeX table caption.")
     parser.add_argument("--label", default="", help="LaTeX table label.")
+    parser.add_argument(
+        "--exp_base_dir",
+        default="output",
+        help=(
+            "Comma-separated base directories containing experiment configs "
+            "(default: output)."
+        ),
+    )
+    parser.add_argument(
+        "--config_keys",
+        default="",
+        help=(
+            "Comma-separated config paths to include as columns. "
+            "Use Header:Path to override the column header."
+        ),
+    )
     args = parser.parse_args()
 
     exp_names = set(_parse_list(args.exp_names))
     temporal_metrics = _parse_list(args.temporal_metrics) or TEMPORAL_METRICS
+    config_cols = _parse_config_cols(args.config_keys)
+    exp_base_dirs = _parse_list(args.exp_base_dir) or ["output"]
+    fallback_dir = "/net/projects2/annawoodard/rachelgordon/experiments"
+    if fallback_dir not in exp_base_dirs:
+        exp_base_dirs.append(fallback_dir)
+    config_cache = {}
 
     rows = _load_rows(args.log_file)
     exp_rows, grasp_index = _group_rows(rows)
@@ -277,6 +392,9 @@ def main():
                 args.decimals,
                 args.caption,
                 args.label,
+                config_cols,
+                exp_base_dirs,
+                config_cache,
             )
         )
         return
@@ -295,6 +413,9 @@ def main():
                 args.decimals,
                 args.caption,
                 args.label,
+                config_cols,
+                exp_base_dirs,
+                config_cache,
             )
         )
     print("\n\n".join(outputs))
