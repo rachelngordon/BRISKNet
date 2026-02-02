@@ -878,6 +878,8 @@ def main():
                 ei_loss_fn = EILoss(enh_scale, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
                 ei_loss_fn = EILoss(enh_scale | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+        elif config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift_enh_scale":
+            ei_loss_fn = EILoss((arrival_shift | enh_scale) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "noise":
             ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp_subsample":

@@ -23,13 +23,13 @@ data:
 dataloader:
   batch_size: 1
   max_subjects: 300
-  num_random_slices: 4
+  num_random_slices: 1
   num_workers: 2
   shuffle: true
   slice_idx: 41
   slice_range_end: None
   slice_range_start: None
-  slice_sampling_mode: background
+  slice_sampling_mode: nonenhancing
   slice_sampling_uniform_fraction: 0.7
   slice_sampling_filter_quantile: 0.2
   slice_sampling_no_replacement: true
@@ -145,7 +145,7 @@ training:
       - 36
   device: cuda
   edge_time_index_sampling: false
-  epochs: 40
+  epochs: 300
   multigpu: true
   plot_interval: 20
   save_interval: 1
