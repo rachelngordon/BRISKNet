@@ -3,6 +3,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 
 
 def _parse_list(value: str) -> list[str]:
@@ -40,6 +41,12 @@ def main() -> int:
         help="Max concurrent runs (default: number of GPUs).",
     )
     parser.add_argument(
+        "--dro_sim_source",
+        default="espirit",
+        choices=("original", "espirit"),
+        help="DRO simulated k-space/GRASP source to pass to run_inference (default: espirit).",
+    )
+    parser.add_argument(
         "--dry_run",
         action="store_true",
         help="Print commands without executing them.",
@@ -66,7 +73,16 @@ def main() -> int:
 
     def _launch(exp_name: str, gpu_id: str) -> subprocess.Popen:
         exp_dir = os.path.join(args.exp_base_dir, exp_name)
-        cmd = [args.python, "run_inference.py", "--exp_dir", exp_dir, "--device", f"cuda:{gpu_id}"] + passthrough
+        cmd = [
+            args.python,
+            "run_inference.py",
+            "--exp_dir",
+            exp_dir,
+            "--device",
+            f"cuda:{gpu_id}",
+            "--dro_sim_source",
+            args.dro_sim_source,
+        ] + passthrough
         print("Running:", " ".join(shlex.quote(c) for c in cmd))
         if args.dry_run:
             return None
@@ -107,9 +123,8 @@ def main() -> int:
                 break
 
         if finished_idx is None:
-            # Avoid busy-wait
-            for proc, _ in running:
-                proc.wait(timeout=0.1)
+            # Avoid busy-wait; no need to wait on each proc with a timeout.
+            time.sleep(0.1)
         else:
             running.pop(finished_idx)
 

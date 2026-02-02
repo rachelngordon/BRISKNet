@@ -552,6 +552,7 @@ class SimulatedDataset(Dataset):
         noise_level=0,
         dro_csmaps_source="original",
         espirit_csmaps_dir=None,
+        dro_sim_source="original",
     ):
 
         self.root_dir = root_dir
@@ -573,6 +574,23 @@ class SimulatedDataset(Dataset):
                 f"Unsupported dro_csmaps_source '{self.dro_csmaps_source}'. "
                 "Expected 'original' or 'espirit'."
             )
+        self.dro_sim_source = dro_sim_source
+        if self.dro_sim_source not in ("original", "espirit"):
+            raise ValueError(
+                f"Unsupported dro_sim_source '{self.dro_sim_source}'. "
+                "Expected 'original' or 'espirit'."
+            )
+        if self.dro_sim_source == "espirit":
+            if self.traj_method != "get_traj":
+                print(
+                    "SimulatedDataset: dro_sim_source=espirit expects traj_method='get_traj' "
+                    f"for _correct_traj filenames (got {self.traj_method})."
+                )
+            if abs(self.noise_level_value - 0.05) > 1e-8:
+                print(
+                    "SimulatedDataset: dro_sim_source=espirit expects noise_level=0.05 "
+                    f"for _correct_traj_n0.05 filenames (got {self.noise_level_label})."
+                )
         self.slice_map = load_slice_map(SLICE_MAP_PATH)
         self._update_sample_paths()
 
@@ -625,10 +643,14 @@ class SimulatedDataset(Dataset):
 
     def _traj_suffix(self):
         if self.traj_method != "get_traj":
-            return ".npy"
-        if self.noise_level_value > 0:
-            return f"_correct_traj_n{self.noise_level_label}.npy"
-        return "_correct_traj.npy"
+            suffix = ".npy"
+        elif self.noise_level_value > 0:
+            suffix = f"_correct_traj_n{self.noise_level_label}.npy"
+        else:
+            suffix = "_correct_traj.npy"
+        if self.dro_sim_source == "espirit" and suffix.endswith(".npy"):
+            suffix = suffix[:-4] + "_espirit.npy"
+        return suffix
 
     def _load_dro_csmaps(self, sample_dir):
         if self.dro_csmaps_source == "original":

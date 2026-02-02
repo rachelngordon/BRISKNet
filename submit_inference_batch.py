@@ -60,7 +60,7 @@ def main():
         tasks_per_node=1,
         cpus_per_task=8,
         slurm_gres=f"gpu:{num_gpus}",
-        timeout_min=600,
+        timeout_min=200,
         slurm_additional_parameters={"requeue": True},
         qos="burst",
         srun_args=["--cpu-bind=none"],

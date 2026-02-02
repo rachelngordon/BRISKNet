@@ -146,6 +146,15 @@ def parse_args():
         help="Use DRO csmaps from the sample directory (original) or ESPIRiT maps (espirit).",
     )
     parser.add_argument(
+        "--dro_sim_source",
+        default="espirit",
+        choices=("original", "espirit"),
+        help=(
+            "Use DRO simulated k-space/GRASP files from the sample directory (original) or "
+            "ESPIRiT variants (espirit, suffix _espirit)."
+        ),
+    )
+    parser.add_argument(
         "--traj_method",
         default="get_traj",
         choices=("trajGR", "get_traj"),
@@ -538,6 +547,7 @@ def main():
 
     inference_settings = {
         "csmaps_style": args.dro_csmaps_source,
+        "dro_sim_source": args.dro_sim_source,
         "dro_espirit_csmaps_dir": args.dro_espirit_csmaps_dir,
         "traj_method": args.traj_method,
         "baseline": {
@@ -606,6 +616,7 @@ def main():
         grasp_slice_idx=raw_grasp_slice_idx,
         dro_csmaps_source=args.dro_csmaps_source,
         espirit_csmaps_dir=args.dro_espirit_csmaps_dir,
+        dro_sim_source=args.dro_sim_source,
     )
 
     val_loader = DataLoader(
