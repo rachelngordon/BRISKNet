@@ -44,8 +44,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "mc_36spf_overfit"
-    config_path = 'configs/config_mc_36spf.yaml'
+    job_name = "ei_2spf_arrival_shift_enh_scale"
+    config_path = 'configs/config_ei_2spf.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"

@@ -734,11 +734,10 @@ def main():
             acceleration_encoding = acceleration_val if config["model"]["encode_acceleration"] else None
             start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device) if config["model"]["encode_time_index"] else None
 
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            infer_start = time.perf_counter()
-
             if N_time_eval > eval_chunk_size:
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                infer_start = time.perf_counter()
                 x_recon, _ = sliding_window_inference(
                     H,
                     W,
@@ -757,6 +756,13 @@ def main():
                     epoch="inference",
                     device=device,
                     norm=config["model"]["norm"],
+                )
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                infer_time = time.perf_counter() - infer_start
+                inference_times.append(infer_time)
+                tqdm.write(
+                    f"[Timing] {label}: DRO recon-only inference time = {infer_time:.3f}s"
                 )
                 raw_x_recon, _ = sliding_window_inference(
                     H,
@@ -778,20 +784,22 @@ def main():
                     norm=config["model"]["norm"],
                 )
             else:
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                infer_start = time.perf_counter()
                 x_recon, *_ = model(
                     dro_kspace, eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="inference", norm="none"#config["model"]["norm"]
+                )
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                infer_time = time.perf_counter() - infer_start
+                inference_times.append(infer_time)
+                tqdm.write(
+                    f"[Timing] {label}: DRO recon-only inference time = {infer_time:.3f}s"
                 )
                 raw_x_recon, *_ = model(
                     raw_kspace, eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm="none"#config["model"]["norm"]
                 )
-
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            infer_time = time.perf_counter() - infer_start
-            inference_times.append(infer_time)
-            tqdm.write(
-                f"[Timing] {label}: recon-only inference time = {infer_time:.3f}s"
-            )
 
             sample_dir = os.path.join(inference_dir, f"sample_{idx:02d}")
             os.makedirs(sample_dir, exist_ok=True)
@@ -923,6 +931,7 @@ def main():
                 eval_physics,
                 device,
                 sample_dir,
+                rescale=rescale,
                 dro_eval=True,
             )
 
@@ -963,6 +972,7 @@ def main():
                 eval_physics,
                 device,
                 sample_dir,
+                rescale=rescale,
                 dro_eval=False,
             )
 

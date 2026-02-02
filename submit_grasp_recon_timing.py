@@ -7,9 +7,8 @@ class Trainer(submitit.helpers.Checkpointable):
     """
     A Checkpointable class to handle training and resubmission.
     """
-    def __init__(self, exp_name, config_path, num_gpus):
+    def __init__(self, exp_name, num_gpus):
         self.exp_name = exp_name
-        self.config_path = config_path
         self.num_gpus = num_gpus
 
     def __call__(self):
@@ -24,11 +23,14 @@ class Trainer(submitit.helpers.Checkpointable):
         command_str = (
             f"source {micromamba_path} && "
             f"micromamba activate {env_name} && "
-            f"torchrun --rdzv-backend=c10d --rdzv-endpoint=localhost:0 "
-            f"--nproc_per_node={self.num_gpus} "
-            f"train_zf.py "
-            f"--config {self.config_path} "
-            f"--exp_name {self.exp_name} "
+            f"python calc_grasp_recon_times.py "
+            f"--dro_sim_source espirit "
+            f"--dro_csmaps_source espirit "
+            # f"torchrun --rdzv-backend=c10d --rdzv-endpoint=localhost:0 "
+            # f"--nproc_per_node={self.num_gpus} "
+            # f"train_zf.py "
+            # f"--config {self.config_path} "
+            # f"--exp_name {self.exp_name} "
         )
 
         # Using shell=True to handle the source and && operators
@@ -39,14 +41,14 @@ class Trainer(submitit.helpers.Checkpointable):
         This method is called by submitit when the job is about to time out.
         It returns a DelayedSubmission object for proper requeueing.
         """
-        new_trainer_instance = Trainer(exp_name=self.exp_name, config_path=self.config_path, num_gpus=self.num_gpus)
+        new_trainer_instance = Trainer(exp_name=self.exp_name, num_gpus=self.num_gpus)
         return submitit.helpers.DelayedSubmission(new_trainer_instance)
 
 def main():
     # --- Executor Configuration ---
-    job_name = "mc_36spf_overfit"
-    config_path = 'configs/config_mc_36spf.yaml'
-    num_gpus = 4
+    job_name = "calc_grasp_recon_times"
+    # config_path = 'configs/config_ei_spatial.yaml'
+    num_gpus = 1
 
     log_dir = f"submitit_logs/{job_name}"
     os.makedirs(log_dir, exist_ok=True)
@@ -63,8 +65,7 @@ def main():
         slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
         timeout_min=200,
         # Mark job requeueable so submitit can restart it at timeout.
-        slurm_additional_parameters={"requeue": True,
-                                     "exclude": "k002",},
+        slurm_additional_parameters={"requeue": True},
         qos="burst",
 
         # IMPORTANT: no cpu_bind here anymore, this only affects sbatch
@@ -76,7 +77,7 @@ def main():
     )
 
     # --- Job Submission ---
-    initial_trainer = Trainer(exp_name=job_name, config_path=config_path, num_gpus=num_gpus)
+    initial_trainer = Trainer(exp_name=job_name, num_gpus=num_gpus)
     job = executor.submit(initial_trainer)
 
     print(f"Submitted job with ID: {job.job_id}")

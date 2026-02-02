@@ -303,7 +303,10 @@
         "ttpeak_err_sec_mean": 0.5844155844155849,
         "ttpeak_err_sec_stddev": 1.8480843468516517
       }
-    }
+    },
+    "avg_grasp_recon_time": 11.20540136002625,
+    "std_grasp_recon_time": 0.055494965958862726,
+    "grasp_recon_time_num_samples": 15
   },
   {
     "type": "BRISKNet",
@@ -1389,5 +1392,80 @@
         "ttpeak_err_sec_stddev": 11.070136820218194
       }
     }
+  },
+  {
+    "type": "GRASP",
+    "spokes_per_frame": 2,
+    "num_frames": 144,
+    "acceleration": 251.32741228718345,
+    "seconds_per_frame": 1.048951048951049,
+    "DRO_noise_level": 0.05,
+    "num_samples": 15,
+    "spatial_metrics": {},
+    "dc_metrics": {},
+    "temporal_metrics": {},
+    "avg_grasp_recon_time": 173.66957889938107,
+    "std_grasp_recon_time": 1.5302906444841058,
+    "grasp_recon_time_num_samples": 15
+  },
+  {
+    "type": "GRASP",
+    "spokes_per_frame": 4,
+    "num_frames": 72,
+    "acceleration": 125.66370614359172,
+    "seconds_per_frame": 2.112676056338028,
+    "DRO_noise_level": 0.05,
+    "num_samples": 15,
+    "spatial_metrics": {},
+    "dc_metrics": {},
+    "temporal_metrics": {},
+    "avg_grasp_recon_time": 87.10353687377646,
+    "std_grasp_recon_time": 0.5921142851558742,
+    "grasp_recon_time_num_samples": 15
+  },
+  {
+    "type": "GRASP",
+    "spokes_per_frame": 8,
+    "num_frames": 36,
+    "acceleration": 62.83185307179586,
+    "seconds_per_frame": 4.285714285714286,
+    "DRO_noise_level": 0.05,
+    "num_samples": 15,
+    "spatial_metrics": {},
+    "dc_metrics": {},
+    "temporal_metrics": {},
+    "avg_grasp_recon_time": 44.63087084420646,
+    "std_grasp_recon_time": 0.4682405222820128,
+    "grasp_recon_time_num_samples": 15
+  },
+  {
+    "type": "GRASP",
+    "spokes_per_frame": 16,
+    "num_frames": 18,
+    "acceleration": 31.41592653589793,
+    "seconds_per_frame": 8.823529411764707,
+    "DRO_noise_level": 0.05,
+    "num_samples": 15,
+    "spatial_metrics": {},
+    "dc_metrics": {},
+    "temporal_metrics": {},
+    "avg_grasp_recon_time": 22.92934074656417,
+    "std_grasp_recon_time": 0.32053779411080346,
+    "grasp_recon_time_num_samples": 15
+  },
+  {
+    "type": "GRASP",
+    "spokes_per_frame": 24,
+    "num_frames": 12,
+    "acceleration": 20.943951023931955,
+    "seconds_per_frame": 13.636363636363637,
+    "DRO_noise_level": 0.05,
+    "num_samples": 15,
+    "spatial_metrics": {},
+    "dc_metrics": {},
+    "temporal_metrics": {},
+    "avg_grasp_recon_time": 16.096398499266556,
+    "std_grasp_recon_time": 0.4444925502144685,
+    "grasp_recon_time_num_samples": 15
   }
 ]

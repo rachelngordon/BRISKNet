@@ -95,6 +95,66 @@ def normalize_for_lpips(image, data_range):
     image_minus1_1 = 2 * image_0_1 - 1
     return image_minus1_1
 
+def _save_side_by_side_png(input_tensor, reference_tensor, data_range, save_path,
+                           batch_idx=0, slice_idx=None, dpi=150):
+    """
+    Saves side-by-side comparison (reference | input) as a PNG.
+
+    input_tensor/reference_tensor:
+      - 4D [N, C, H, W] or 5D [N, C, D, H, W]
+    slice_idx:
+      - if 5D, choose which slice along D to visualize (default: middle)
+    """
+    min_val, max_val = data_range
+
+    # Detach -> CPU for plotting
+    x = input_tensor.detach().float().cpu()
+    y = reference_tensor.detach().float().cpu()
+
+    # Pick slice if volumetric
+    if x.dim() == 5:
+        D = x.shape[2]
+        if slice_idx is None:
+            slice_idx = D // 2
+        x = x[:, :, slice_idx, :, :]  # [N,C,H,W]
+        y = y[:, :, slice_idx, :, :]
+
+    # Pick a batch element
+    x = x[batch_idx]  # [C,H,W]
+    y = y[batch_idx]
+
+    # Convert CHW -> HWC for matplotlib; handle 1ch vs 3ch
+    def to_im(t):
+        if t.shape[0] == 1:
+            im = t[0]  # [H,W]
+            im = torch.clamp(im, min_val, max_val)
+            # Normalize to [0,1] for display
+            im = (im - min_val) / (max_val - min_val + 1e-12)
+            return im.numpy(), "gray"
+        else:
+            im = t[:3].permute(1, 2, 0)  # [H,W,3]
+            im = torch.clamp(im, min_val, max_val)
+            im = (im - min_val) / (max_val - min_val + 1e-12)
+            return im.numpy(), None
+
+    ref_im, ref_cmap = to_im(y)
+    inp_im, inp_cmap = to_im(x)
+
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5), constrained_layout=True)
+    axes[0].imshow(ref_im, cmap=ref_cmap, vmin=0.0, vmax=1.0)
+    axes[0].set_title("Reference (Ground Truth)")
+    axes[0].axis("off")
+
+    axes[1].imshow(inp_im, cmap=inp_cmap, vmin=0.0, vmax=1.0)
+    axes[1].set_title("Input (Prediction)")
+    axes[1].axis("off")
+
+    plt.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
 
 def calc_image_metrics(input, reference, data_range, device):
     """
@@ -142,7 +202,15 @@ def calc_image_metrics(input, reference, data_range, device):
         # Average the scores from all slices
         final_lpips = sum(lpips_scores) / len(lpips_scores)
 
-
+    _save_side_by_side_png(
+            input_tensor=input,
+            reference_tensor=reference,
+            data_range=data_range,
+            save_path='comparison.png',
+            batch_idx=0,
+            slice_idx=0,
+        )
+    
     return ssim.item(), psnr.item(), mse.item(), final_lpips
     
 
@@ -1522,7 +1590,7 @@ def plot_time_series(
 # ==========================================================
 # EVALUATION 
 # ==========================================================
-def eval_grasp(kspace, csmap, ground_truth, grasp_recon, physics, device, output_dir, dro_eval=True):
+def eval_grasp(kspace, csmap, ground_truth, grasp_recon, physics, device, output_dir, rescale, dro_eval=True):
 
 
     # ==========================================================
@@ -1548,9 +1616,11 @@ def eval_grasp(kspace, csmap, ground_truth, grasp_recon, physics, device, output
         grasp_recon_np = grasp_recon.cpu().numpy()
         ground_truth_np = ground_truth.cpu().numpy()
 
-        c = np.dot(grasp_recon_np.flatten(), ground_truth_np.flatten()) / np.dot(grasp_recon_np.flatten(), grasp_recon_np.flatten())
-
-        grasp_recon = torch.tensor(c * grasp_recon_np, device=device)
+        if rescale:
+            c = np.dot(grasp_recon_np.flatten(), ground_truth_np.flatten()) / np.dot(grasp_recon_np.flatten(), grasp_recon_np.flatten())
+            grasp_recon = torch.tensor(c * grasp_recon_np, device=device)
+        else:
+            grasp_recon = torch.tensor(grasp_recon_np, device=device)
 
 
         # Convert complex images to magnitude

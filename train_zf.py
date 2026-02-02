@@ -1243,7 +1243,7 @@ def main():
     
                     # calculate grasp metrics
                     if global_rank == 0 or not config['training']['multigpu']:
-                        ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(dro_kspace, csmap, ground_truth, dro_grasp_img, eval_physics, device, eval_dir, dro_eval=True)
+                        ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(dro_kspace, csmap, ground_truth, dro_grasp_img, eval_physics, device, eval_dir, rescale=config['evaluation']['rescale'], dro_eval=True)
                         grasp_ssims.append(ssim_grasp)
                         grasp_psnrs.append(psnr_grasp)
                         grasp_mses.append(mse_grasp)
@@ -1295,7 +1295,7 @@ def main():
     
                         # raw k-space eval
                         print("performing non-DRO eval...")
-                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, dro_eval=False)
+                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, rescale=config['evaluation']['rescale'], dro_eval=False)
                         dc_mse_raw, dc_mae_raw, _ = eval_sample(raw_kspace, raw_csmaps, ground_truth, raw_x_recon, eval_physics, mask, raw_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
     
                         raw_grasp_dc_mses.append(dc_mse_raw_grasp)
