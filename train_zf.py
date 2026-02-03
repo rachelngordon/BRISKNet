@@ -195,6 +195,21 @@ def main():
         torch.cuda.set_device(local_rank)
         device = local_rank
 
+        # Sanity check: verify collectives across all ranks.
+        try:
+            check_tensor = torch.ones(1, device=device)
+            dist.all_reduce(check_tensor, op=dist.ReduceOp.SUM)
+            expected = float(world_size)
+            got = float(check_tensor.item())
+            if global_rank == 0:
+                if abs(got - expected) < 1e-6:
+                    print(f"[DDP] Sanity check passed: all-reduce sum = {got} across {world_size} ranks.")
+                else:
+                    print(f"[DDP] Sanity check FAILED: all-reduce sum = {got}, expected {expected}.")
+        except Exception as exc:
+            if global_rank == 0:
+                print(f"[DDP] Sanity check FAILED with exception: {exc}")
+
         if global_rank == 0:
             print(f"Starting distributed training with {world_size} GPUs.")
         print(f"  - [Rank {global_rank}] -> Using device cuda:{device}")
