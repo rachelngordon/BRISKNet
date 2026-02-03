@@ -1709,12 +1709,14 @@ def main():
                         optimizer.step()
 
                     # cosine LR with 5-epoch warmup
-                    total = epochs; warm = 5
+                    total = epochs
+                    warm = 5
+                    lr_floor = config.get("training", {}).get("lr_schedule", {}).get("min_lr_factor", 0.2)
                     if epoch <= warm:
                         lr_scale = epoch / warm
                     else:
                         p = (epoch - warm) / max(1, total - warm)
-                        lr_scale = 0.2 + 0.8 * 0.5 * (1 + math.cos(math.pi * p))
+                        lr_scale = lr_floor + (1.0 - lr_floor) * 0.5 * (1 + math.cos(math.pi * p))
                     for pg in optimizer.param_groups:
                         pg['lr'] = config["model"]["optimizer"]["lr"] * lr_scale
 

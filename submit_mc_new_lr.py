@@ -44,8 +44,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_arrival_shift_baseline_seconds_rotate20_36spf"
-    config_path = 'configs/config_ei_arrival_shift_baseline_seconds.yaml'
+    job_name = "mc_36spf_lr0001_decay06"
+    config_path = 'configs/config_mc_new_lr.yaml'
     num_gpus = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -61,10 +61,11 @@ def main():
         tasks_per_node=1,
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
         slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
-        timeout_min=700,
+        timeout_min=200,
         # Mark job requeueable so submitit can restart it at timeout.
         slurm_additional_parameters={"requeue": True,
-                                     "exclude": "k002"},
+                                     "exclude": "k002",},
+        qos="burst",
 
         # IMPORTANT: no cpu_bind here anymore, this only affects sbatch
         # and your sbatch doesn't support --cpu-bind
