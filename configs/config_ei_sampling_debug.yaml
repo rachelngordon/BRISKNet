@@ -22,7 +22,7 @@ data:
   width: 320
 dataloader:
   batch_size: 1
-  max_subjects: 3
+  max_subjects: 300
   num_random_slices: 4
   num_workers: 2
   shuffle: true
@@ -30,8 +30,8 @@ dataloader:
   slice_range_end: None
   slice_range_start: None
   slice_sampling_mode: nonenhancing
-  slice_sampling_uniform_fraction: 0.5
-  slice_sampling_filter_quantile: 0.1
+  slice_sampling_uniform_fraction: 0.6
+  slice_sampling_filter_quantile: 0.3
   slice_sampling_no_replacement: true
   slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
   slice_sampling_cache_workers: 4
