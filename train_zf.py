@@ -1152,7 +1152,7 @@ def main():
     max_step0_train_batches = config.get("debugging", {}).get("max_step0_train_batches", None)
     max_step0_val_batches = config.get("debugging", {}).get("max_step0_val_batches", None)
     max_val_batches = config.get("debugging", {}).get("max_val_batches", None)
-    if args.from_checkpoint == False and config['debugging']['calc_step_0'] == True:
+    if (not resume_from_checkpoint) and config['debugging']['calc_step_0'] == True:
         model.eval()
         initial_train_mc_loss = 0.0
         initial_val_mc_loss = 0.0

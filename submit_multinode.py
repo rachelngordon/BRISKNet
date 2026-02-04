@@ -62,6 +62,7 @@ class Trainer(submitit.helpers.Checkpointable):
         command_str = (
             f"source {micromamba_path} && "
             f"micromamba activate {env_name} && "
+            f"export NCCL_IB_DISABLE=1 && "
             f"torchrun --rdzv-backend=c10d "
             f"--rdzv-endpoint={master_addr}:{master_port} "
             f"--rdzv-id={rdzv_id} "
@@ -109,7 +110,7 @@ def main():
         cpus_per_task=8,
         slurm_gres=f"gpu:{gpus_per_node}",
         timeout_min=700,
-        slurm_additional_parameters={"requeue": True, "exclude": "k002,j001-ds,j005-ds"},
+        slurm_additional_parameters={"requeue": True, "exclude": "k002"},
         srun_args=["--cpu-bind=none"],
     )
 
@@ -127,3 +128,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

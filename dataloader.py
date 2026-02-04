@@ -330,11 +330,31 @@ class ZFSliceDataset(Dataset):
                     self._slice_remaining[file_path] = []
             else:
                 if self.slice_sampling_no_replacement:
-                    pool = self._slice_remaining.get(file_path, [])
-                    if len(pool) < self.num_random_slices:
+                    pool = self._slice_remaining.get(file_path)
+                    if not pool:
                         pool = list(range(num_slices))
-                    selected_slices = self._sample_from_pool(file_path, pool, num_slices, num_spokes, num_samples)
-                    self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
+                    if len(pool) >= self.num_random_slices:
+                        selected_slices = self._sample_from_pool(
+                            file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=self.num_random_slices
+                        )
+                        self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
+                    else:
+                        # Finish the current cycle first, then reset the pool.
+                        selected_slices = self._sample_from_pool(
+                            file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=len(pool)
+                        )
+                        selected_set = set(selected_slices)
+                        reset_pool = [idx for idx in range(num_slices) if idx not in selected_set]
+                        need = self.num_random_slices - len(selected_slices)
+                        if need > 0:
+                            extra = self._sample_from_pool(
+                                file_path, reset_pool, num_slices, num_spokes, num_samples, num_to_sample=need
+                            )
+                            selected_slices = list(selected_slices) + list(extra)
+                            extra_set = set(extra)
+                            self._slice_remaining[file_path] = [idx for idx in reset_pool if idx not in extra_set]
+                        else:
+                            self._slice_remaining[file_path] = reset_pool
                 elif self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
                     selected_slices = random.sample(range(num_slices), self.num_random_slices)
                 else:
@@ -505,10 +525,16 @@ class ZFSliceDataset(Dataset):
         num_slices: int,
         num_spokes: int,
         num_samples: int,
+        num_to_sample: Optional[int] = None,
     ) -> list[int]:
+        if num_to_sample is None:
+            num_to_sample = self.num_random_slices
+        num_to_sample = min(num_to_sample, len(pool))
         if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
-            return random.sample(pool, self.num_random_slices)
-        return self._sample_slices_weighted(file_path, pool, num_slices, num_spokes, num_samples)
+            return random.sample(pool, num_to_sample)
+        return self._sample_slices_weighted(
+            file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=num_to_sample
+        )
 
     def _sample_slices_weighted(
         self,
@@ -517,11 +543,17 @@ class ZFSliceDataset(Dataset):
         num_slices: int,
         num_spokes: int,
         num_samples: int,
+        num_to_sample: Optional[int] = None,
     ) -> list[int]:
+        if num_to_sample is None:
+            num_to_sample = self.num_random_slices
+        num_to_sample = min(num_to_sample, len(pool))
+        if num_to_sample <= 0:
+            return []
         uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
-        n_uniform = int(round(self.num_random_slices * uniform_fraction))
-        n_uniform = min(n_uniform, self.num_random_slices)
-        n_weighted = self.num_random_slices - n_uniform
+        n_uniform = int(round(num_to_sample * uniform_fraction))
+        n_uniform = min(n_uniform, num_to_sample)
+        n_weighted = num_to_sample - n_uniform
 
         selected = set()
         if n_uniform > 0 and pool:
@@ -548,12 +580,24 @@ class ZFSliceDataset(Dataset):
             return list(selected)
 
         remaining_weights = np.array([weights[idx] for idx in remaining], dtype=np.float64)
+        n_weighted_target = min(n_weighted, len(remaining))
         if remaining_weights.sum() <= 0:
-            selected.update(random.sample(remaining, min(n_weighted, len(remaining))))
+            selected.update(random.sample(remaining, n_weighted_target))
+            return list(selected)
+
+        nonzero_mask = remaining_weights > 0
+        nonzero_count = int(np.count_nonzero(nonzero_mask))
+        if nonzero_count < n_weighted_target:
+            nonzero_pool = [remaining[i] for i in np.where(nonzero_mask)[0]]
+            zero_pool = [remaining[i] for i in np.where(~nonzero_mask)[0]]
+            selected.update([int(x) for x in nonzero_pool])
+            need = n_weighted_target - nonzero_count
+            if need > 0 and zero_pool:
+                selected.update(random.sample(zero_pool, need))
             return list(selected)
 
         probs = remaining_weights / remaining_weights.sum()
-        picks = np.random.choice(remaining, size=min(n_weighted, len(remaining)), replace=False, p=probs)
+        picks = np.random.choice(remaining, size=n_weighted_target, replace=False, p=probs)
         selected.update([int(x) for x in picks])
         return list(selected)
 
@@ -821,11 +865,31 @@ class SliceDataset(Dataset):
                     self._slice_remaining[file_path] = []
             else:
                 if self.slice_sampling_no_replacement:
-                    pool = self._slice_remaining.get(file_path, [])
-                    if len(pool) < self.num_random_slices:
+                    pool = self._slice_remaining.get(file_path)
+                    if not pool:
                         pool = list(range(num_slices))
-                    selected_slices = self._sample_from_pool(file_path, pool, num_slices, num_spokes, num_samples)
-                    self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
+                    if len(pool) >= self.num_random_slices:
+                        selected_slices = self._sample_from_pool(
+                            file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=self.num_random_slices
+                        )
+                        self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
+                    else:
+                        # Finish the current cycle first, then reset the pool.
+                        selected_slices = self._sample_from_pool(
+                            file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=len(pool)
+                        )
+                        selected_set = set(selected_slices)
+                        reset_pool = [idx for idx in range(num_slices) if idx not in selected_set]
+                        need = self.num_random_slices - len(selected_slices)
+                        if need > 0:
+                            extra = self._sample_from_pool(
+                                file_path, reset_pool, num_slices, num_spokes, num_samples, num_to_sample=need
+                            )
+                            selected_slices = list(selected_slices) + list(extra)
+                            extra_set = set(extra)
+                            self._slice_remaining[file_path] = [idx for idx in reset_pool if idx not in extra_set]
+                        else:
+                            self._slice_remaining[file_path] = reset_pool
                 elif self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
                     selected_slices = random.sample(range(num_slices), self.num_random_slices)
                 else:
@@ -996,10 +1060,16 @@ class SliceDataset(Dataset):
         num_slices: int,
         num_spokes: int,
         num_samples: int,
+        num_to_sample: Optional[int] = None,
     ) -> list[int]:
+        if num_to_sample is None:
+            num_to_sample = self.num_random_slices
+        num_to_sample = min(num_to_sample, len(pool))
         if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
-            return random.sample(pool, self.num_random_slices)
-        return self._sample_slices_weighted(file_path, pool, num_slices, num_spokes, num_samples)
+            return random.sample(pool, num_to_sample)
+        return self._sample_slices_weighted(
+            file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=num_to_sample
+        )
 
     def _sample_slices_weighted(
         self,
@@ -1008,11 +1078,17 @@ class SliceDataset(Dataset):
         num_slices: int,
         num_spokes: int,
         num_samples: int,
+        num_to_sample: Optional[int] = None,
     ) -> list[int]:
+        if num_to_sample is None:
+            num_to_sample = self.num_random_slices
+        num_to_sample = min(num_to_sample, len(pool))
+        if num_to_sample <= 0:
+            return []
         uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
-        n_uniform = int(round(self.num_random_slices * uniform_fraction))
-        n_uniform = min(n_uniform, self.num_random_slices)
-        n_weighted = self.num_random_slices - n_uniform
+        n_uniform = int(round(num_to_sample * uniform_fraction))
+        n_uniform = min(n_uniform, num_to_sample)
+        n_weighted = num_to_sample - n_uniform
 
         selected = set()
         if n_uniform > 0 and pool:
@@ -1039,12 +1115,24 @@ class SliceDataset(Dataset):
             return list(selected)
 
         remaining_weights = np.array([weights[idx] for idx in remaining], dtype=np.float64)
+        n_weighted_target = min(n_weighted, len(remaining))
         if remaining_weights.sum() <= 0:
-            selected.update(random.sample(remaining, min(n_weighted, len(remaining))))
+            selected.update(random.sample(remaining, n_weighted_target))
+            return list(selected)
+
+        nonzero_mask = remaining_weights > 0
+        nonzero_count = int(np.count_nonzero(nonzero_mask))
+        if nonzero_count < n_weighted_target:
+            nonzero_pool = [remaining[i] for i in np.where(nonzero_mask)[0]]
+            zero_pool = [remaining[i] for i in np.where(~nonzero_mask)[0]]
+            selected.update([int(x) for x in nonzero_pool])
+            need = n_weighted_target - nonzero_count
+            if need > 0 and zero_pool:
+                selected.update(random.sample(zero_pool, need))
             return list(selected)
 
         probs = remaining_weights / remaining_weights.sum()
-        picks = np.random.choice(remaining, size=min(n_weighted, len(remaining)), replace=False, p=probs)
+        picks = np.random.choice(remaining, size=n_weighted_target, replace=False, p=probs)
         selected.update([int(x) for x in picks])
         return list(selected)
 
