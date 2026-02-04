@@ -962,6 +962,42 @@ def main():
             if args.compute_zf_baseline or args.save_debug_arrays:
                 zf_complex = eval_physics(True, dro_kspace, csmap)
 
+            if idx == 0 and (args.save_debug_arrays or args.compute_zf_baseline or args.diagnostics):
+                def _mag_minmax(x: torch.Tensor):
+                    if not isinstance(x, torch.Tensor):
+                        return None, None
+                    if x.numel() == 0:
+                        return None, None
+                    if x.shape[-1] == 0:
+                        return None, None
+                    if x.ndim >= 2 and x.shape[1] == 2:
+                        mag = torch.sqrt(x[:, 0, ...] ** 2 + x[:, 1, ...] ** 2)
+                        return float(mag.min().item()), float(mag.max().item())
+                    if torch.is_complex(x):
+                        mag = torch.abs(x)
+                        return float(mag.min().item()), float(mag.max().item())
+                    return float(x.min().item()), float(x.max().item())
+
+                gt_min, gt_max = _mag_minmax(ground_truth)
+                grasp_min, grasp_max = _mag_minmax(dro_grasp_img)
+                dl_min, dl_max = _mag_minmax(x_recon)
+                k_min, k_max = _mag_minmax(dro_kspace)
+                tqdm.write("=== Debug: first-sample tensor stats ===")
+                tqdm.write(f"grasp_path: {grasp_path}")
+                tqdm.write(
+                    "shapes: "
+                    f"dro_kspace={tuple(dro_kspace.shape)}, csmap={tuple(csmap.shape)}, "
+                    f"gt={tuple(ground_truth.shape)}, grasp={tuple(dro_grasp_img.shape)}, "
+                    f"brisknet={tuple(x_recon.shape)}"
+                )
+                tqdm.write(
+                    "magnitude ranges: "
+                    f"kspace[{k_min:.3g},{k_max:.3g}] "
+                    f"gt[{gt_min:.3g},{gt_max:.3g}] "
+                    f"grasp[{grasp_min:.3g},{grasp_max:.3g}] "
+                    f"brisknet[{dl_min:.3g},{dl_max:.3g}]"
+                )
+
             if args.diagnostics:
                 ref_map = {
                     "gt": ground_truth,
