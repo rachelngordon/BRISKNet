@@ -1042,7 +1042,7 @@ def plot_temporal_curves(
             axes[i].plot(time_points, gt_curve, 'k-', label='DRO', linewidth=2, marker='o')
 
         axes[i].plot(time_points, recon_curve, 'r--', label='BRISKNet', marker='o')
-        axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
+        axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP', marker='o')
         
         display_region = region_label_map.get(region, region) if region_label_map else region
         if plot_dro:
@@ -1162,7 +1162,7 @@ def plot_temporal_curves_normalized(
         if plot_dro:
             axes[i].plot(time_points, gt_curve, 'k-', label='DRO', linewidth=2, marker='o')
         axes[i].plot(time_points, recon_curve, 'r--', label='BRISKNet', marker='o')
-        axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP Recon', marker='o')
+        axes[i].plot(time_points, grasp_curve, 'b:', label='GRASP', marker='o')
         display_region = region_label_map.get(region, region) if region_label_map else region
         axes[i].set_title(f"{display_region.capitalize()}", fontsize=PLOT_FONT_SIZES["title"])
         axes[i].set_xlabel("Time (s)", fontsize=PLOT_FONT_SIZES["label"])
@@ -1539,20 +1539,22 @@ def plot_time_series(
         for contour in contours:
             ax.plot(contour[:, 1], contour[:, 0], linewidth=1.5, color='red')
 
-    # --- Row 2: BRISKNet ---
+    # Use a shared window per time frame so intensity differences are comparable between rows.
     for i, frame_idx in enumerate(indices):
-        img = recon_img_stack[:, :, frame_idx]
-        vmin_frame, vmax_frame = robust_window(img, p_low=1, p_high=99.5)
-        axes[0, i].imshow(img, cmap='gray', vmin=vmin_frame, vmax=vmax_frame)
+        recon_img = recon_img_stack[:, :, frame_idx]
+        grasp_img = grasp_img_stack[:, :, frame_idx]
+        vmin_frame, vmax_frame = robust_window_multi([recon_img, grasp_img], p_low=1, p_high=99.5)
+        axes[0, i].imshow(recon_img, cmap='gray', vmin=vmin_frame, vmax=vmax_frame)
         _overlay_contours(axes[0, i])
         axes[0, i].set_title(f"BRISKNet: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[0, i].axis('off')
 
     # --- Row 3: GRASP Reconstruction ---
     for i, frame_idx in enumerate(indices):
-        img = grasp_img_stack[:, :, frame_idx]
-        vmin_frame, vmax_frame = robust_window(img, p_low=1, p_high=99.5)
-        axes[1, i].imshow(img, cmap='gray', vmin=vmin_frame, vmax=vmax_frame)
+        recon_img = recon_img_stack[:, :, frame_idx]
+        grasp_img = grasp_img_stack[:, :, frame_idx]
+        vmin_frame, vmax_frame = robust_window_multi([recon_img, grasp_img], p_low=1, p_high=99.5)
+        axes[1, i].imshow(grasp_img, cmap='gray', vmin=vmin_frame, vmax=vmax_frame)
         _overlay_contours(axes[1, i])
         axes[1, i].set_title(f"GRASP: Frame {frame_idx}", fontsize=PLOT_FONT_SIZES["title"])
         axes[1, i].axis('off')

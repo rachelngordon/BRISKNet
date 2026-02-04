@@ -178,13 +178,13 @@ def parse_args():
     parser.add_argument("--disable_ssdu", action="store_true", help="Skip SSDU NMSE computation to speed up inference.")
     parser.add_argument(
         "--dro_csmaps_source",
-        default=None,
+        default="espirit",
         choices=("original", "espirit"),
-        help="Override DRO csmaps source ('original' or 'espirit'). Defaults to config, then 'espirit'.",
+        help="DRO csmaps source ('original' or 'espirit'). Default: espirit.",
     )
     parser.add_argument(
         "--dro_sim_source",
-        default=None,
+        default="espirit",
         choices=("original", "espirit"),
         help=(
             "Use DRO simulated k-space/GRASP files from the sample directory (original) or "
@@ -205,8 +205,8 @@ def parse_args():
     parser.add_argument(
         "--dro_noise_level",
         type=float,
-        default=None,
-        help="Override DRO noise level used for simulated k-space/GRASP filenames (e.g., 0 or 0.05). Defaults to config evaluation.val_noise_level, then 0.05.",
+        default=0.05,
+        help="DRO noise level used for simulated k-space/GRASP filenames (e.g., 0 or 0.05). Default: 0.05.",
     )
     parser.add_argument(
         "--normalize_dro_csmaps",
