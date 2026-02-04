@@ -58,6 +58,344 @@ def _should_log_once(dataset_obj: object, flag_attr: str) -> bool:
     return True
 
 
+def _slice_sampling_cache_stats(dataset_obj: object) -> Optional[dict]:
+    volume_map = getattr(dataset_obj, "volume_map", None)
+    if not volume_map:
+        return None
+
+    cache_hits_mem = 0
+    cache_hits_disk = 0
+    cache_misses = 0
+    cache_dir = getattr(dataset_obj, "slice_sampling_cache_dir", None)
+    cache_workers = int(getattr(dataset_obj, "slice_sampling_cache_workers", 0) or 0)
+
+    for file_path, num_slices, num_spokes, num_samples in volume_map:
+        cached = getattr(dataset_obj, "_slice_score_cache", {}).get(file_path)
+        if cached is not None and len(cached.get("background", [])) == int(num_slices):
+            cache_hits_mem += 1
+            continue
+        disk_cache = None
+        if hasattr(dataset_obj, "_load_slice_scores_from_disk"):
+            disk_cache = dataset_obj._load_slice_scores_from_disk(
+                file_path, num_slices, num_spokes, num_samples
+            )
+        if disk_cache is not None:
+            cache_hits_disk += 1
+            if hasattr(dataset_obj, "_slice_score_cache"):
+                dataset_obj._slice_score_cache[file_path] = disk_cache
+        else:
+            cache_misses += 1
+
+    total = cache_hits_mem + cache_hits_disk + cache_misses
+    will_compute = cache_misses > 0
+    return {
+        "total": total,
+        "hits_mem": cache_hits_mem,
+        "hits_disk": cache_hits_disk,
+        "misses": cache_misses,
+        "will_compute": will_compute,
+        "cache_dir": cache_dir,
+        "cache_workers": cache_workers,
+    }
+
+
+def _summarize_scores(values: np.ndarray) -> Optional[dict]:
+    if values is None:
+        return None
+    arr = np.asarray(values, dtype=np.float64)
+    if arr.size == 0:
+        return None
+    return {
+        "count": int(arr.size),
+        "min": float(np.min(arr)),
+        "median": float(np.median(arr)),
+        "mean": float(np.mean(arr)),
+        "p95": float(np.percentile(arr, 95)),
+        "p99": float(np.percentile(arr, 99)),
+        "max": float(np.max(arr)),
+    }
+
+
+def _safe_percent(value: float) -> float:
+    try:
+        return 100.0 * float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def log_slice_sampling_startup_report(
+    dataset_obj: object,
+    label: str = "train",
+    output_dir: Optional[str] = None,
+    plot_histograms: bool = True,
+) -> None:
+    num_random_slices = getattr(dataset_obj, "num_random_slices", None)
+    volume_map = getattr(dataset_obj, "volume_map", None)
+    if num_random_slices is None or not volume_map:
+        print(f"[{label}] Slice sampling sanity report skipped (random sampling not enabled).")
+        return
+
+    try:
+        num_random_slices = int(num_random_slices)
+    except (TypeError, ValueError):
+        print(f"[{label}] Slice sampling sanity report skipped (invalid num_random_slices).")
+        return
+
+    if num_random_slices <= 0:
+        print(f"[{label}] Slice sampling sanity report skipped (num_random_slices <= 0).")
+        return
+
+    slice_sampling_mode = str(getattr(dataset_obj, "slice_sampling_mode", "uniform")).lower()
+    try:
+        uniform_fraction = float(getattr(dataset_obj, "slice_sampling_uniform_fraction", 1.0))
+    except (TypeError, ValueError):
+        uniform_fraction = 1.0
+    try:
+        filter_quantile = float(getattr(dataset_obj, "slice_sampling_filter_quantile", 0.0))
+    except (TypeError, ValueError):
+        filter_quantile = 0.0
+    no_replacement = bool(getattr(dataset_obj, "slice_sampling_no_replacement", False))
+
+    uniform_fraction = min(max(uniform_fraction, 0.0), 1.0)
+    n_uniform = int(round(num_random_slices * uniform_fraction))
+    n_uniform = min(n_uniform, num_random_slices)
+    n_weighted = num_random_slices - n_uniform
+
+    print(f"[{label}] Slice sampling sanity report:")
+    print(
+        "  settings: "
+        f"mode={slice_sampling_mode}, num_random_slices={num_random_slices}, "
+        f"n_uniform={n_uniform}, n_weighted={n_weighted}, "
+        f"uniform_fraction={uniform_fraction:.3f}, filter_quantile={filter_quantile:.3f}, "
+        f"no_replacement={no_replacement}"
+    )
+
+    if slice_sampling_mode == "uniform" or uniform_fraction >= 1.0:
+        print("  cache: uniform sampling (no slice score cache used).")
+        return
+
+    if slice_sampling_mode not in ("background", "nonenhancing"):
+        print(f"  cache: unsupported mode '{slice_sampling_mode}' (no stats computed).")
+        return
+
+    score_key = "background" if slice_sampling_mode == "background" else "enhancement"
+    score_desc = (
+        "mean center-kspace magnitude"
+        if slice_sampling_mode == "background"
+        else "time-std enhancement proxy"
+    )
+
+    cache_stats = _slice_sampling_cache_stats(dataset_obj)
+    if cache_stats is None:
+        print("  cache: unavailable (missing volume map).")
+        return
+
+    print(
+        "  cache: "
+        f"hits(mem={cache_stats['hits_mem']}, disk={cache_stats['hits_disk']}), "
+        f"misses={cache_stats['misses']}, total={cache_stats['total']}, "
+        f"will_compute={cache_stats['will_compute']}, "
+        f"cache_dir={cache_stats['cache_dir']}, cache_workers={cache_stats['cache_workers']}"
+    )
+
+    if hasattr(dataset_obj, "_warm_slice_score_cache"):
+        dataset_obj._warm_slice_score_cache()
+
+    all_scores = []
+    eligible_scores = []
+    filtered_scores = []
+    cutoff_values = []
+    eligible_fracs = []
+
+    expected_uniform_eligible = []
+    expected_weighted_eligible = []
+    expected_uniform_ineligible = []
+    expected_weighted_ineligible = []
+    expected_eligible_fraction = []
+    expected_ineligible_fraction = []
+    sample_counts = []
+
+    total_slices = 0
+    total_eligible = 0
+    total_filtered = 0
+
+    for file_path, num_slices, num_spokes, num_samples in volume_map:
+        if num_slices is None or int(num_slices) <= 0:
+            continue
+        num_slices = int(num_slices)
+        scores = dataset_obj._get_slice_scores(
+            file_path, num_slices, num_spokes, num_samples
+        )
+        weights = np.asarray(scores.get(score_key, []), dtype=np.float64)
+        if weights.shape[0] != num_slices:
+            continue
+
+        if filter_quantile > 0:
+            cutoff = float(np.quantile(weights, filter_quantile))
+            eligible_mask = weights >= cutoff
+        else:
+            cutoff = float(np.min(weights)) if weights.size else 0.0
+            eligible_mask = np.ones_like(weights, dtype=bool)
+
+        eligible_count = int(np.count_nonzero(eligible_mask))
+        filtered_count = int(num_slices - eligible_count)
+        eligible_frac = eligible_count / num_slices if num_slices else 0.0
+
+        eligible_fracs.append(eligible_frac)
+        all_scores.append(weights)
+        eligible_scores.append(weights[eligible_mask])
+        filtered_scores.append(weights[~eligible_mask])
+        if filter_quantile > 0:
+            cutoff_values.append(cutoff)
+
+        total_slices += num_slices
+        total_eligible += eligible_count
+        total_filtered += filtered_count
+
+        sample_count = min(num_random_slices, num_slices)
+        if num_slices <= num_random_slices:
+            exp_uniform_eligible = float(eligible_count)
+            exp_uniform_ineligible = float(filtered_count)
+            exp_weighted_eligible = 0.0
+            exp_weighted_ineligible = 0.0
+        else:
+            p = eligible_frac
+            exp_uniform_eligible = float(n_uniform * p)
+            exp_uniform_ineligible = float(n_uniform * (1.0 - p))
+            expected_remaining_eligible = max(eligible_count - exp_uniform_eligible, 0.0)
+            exp_weighted_eligible = float(min(n_weighted, expected_remaining_eligible))
+            exp_weighted_ineligible = float(n_weighted - exp_weighted_eligible)
+
+        exp_eligible = exp_uniform_eligible + exp_weighted_eligible
+        exp_ineligible = exp_uniform_ineligible + exp_weighted_ineligible
+
+        expected_uniform_eligible.append(exp_uniform_eligible)
+        expected_uniform_ineligible.append(exp_uniform_ineligible)
+        expected_weighted_eligible.append(exp_weighted_eligible)
+        expected_weighted_ineligible.append(exp_weighted_ineligible)
+        expected_eligible_fraction.append(exp_eligible / sample_count if sample_count else 0.0)
+        expected_ineligible_fraction.append(exp_ineligible / sample_count if sample_count else 0.0)
+        sample_counts.append(sample_count)
+
+    if not all_scores:
+        print("  stats: no slice scores available.")
+        return
+
+    all_scores_arr = np.concatenate(all_scores)
+    eligible_scores_arr = np.concatenate(eligible_scores) if eligible_scores else np.array([])
+    filtered_scores_arr = np.concatenate(filtered_scores) if filtered_scores else np.array([])
+
+    eligible_fracs_arr = np.asarray(eligible_fracs, dtype=np.float64)
+    sample_counts_arr = np.asarray(sample_counts, dtype=np.float64)
+
+    total_samples = float(sample_counts_arr.sum()) if sample_counts_arr.size else 0.0
+    if total_samples > 0:
+        weighted_uniform_eligible = float(np.sum(expected_uniform_eligible))
+        weighted_weighted_eligible = float(np.sum(expected_weighted_eligible))
+        weighted_uniform_ineligible = float(np.sum(expected_uniform_ineligible))
+        weighted_weighted_ineligible = float(np.sum(expected_weighted_ineligible))
+
+        eligible_share = (weighted_uniform_eligible + weighted_weighted_eligible) / total_samples
+        ineligible_share = (weighted_uniform_ineligible + weighted_weighted_ineligible) / total_samples
+        weighted_eligible_share = weighted_weighted_eligible / total_samples
+        uniform_eligible_share = weighted_uniform_eligible / total_samples
+        weighted_ineligible_share = weighted_weighted_ineligible / total_samples
+    else:
+        eligible_share = ineligible_share = weighted_eligible_share = uniform_eligible_share = weighted_ineligible_share = 0.0
+
+    print(
+        "  eligible fraction by volume (after per-volume quantile): "
+        f"mean {_safe_percent(eligible_fracs_arr.mean()):.1f}% "
+        f"(min {_safe_percent(eligible_fracs_arr.min()):.1f}%, "
+        f"max {_safe_percent(eligible_fracs_arr.max()):.1f}%, "
+        f"overall {_safe_percent(total_eligible / total_slices if total_slices else 0.0):.1f}%)"
+    )
+    print(
+        "  expected sample mix (overall, weighted by samples): "
+        f"weighted-eligible {_safe_percent(weighted_eligible_share):.1f}%, "
+        f"uniform-eligible {_safe_percent(uniform_eligible_share):.1f}%, "
+        f"below-cutoff {_safe_percent(ineligible_share):.1f}%"
+        + (f" (weighted fallback {_safe_percent(weighted_ineligible_share):.1f}%)" if weighted_ineligible_share > 0 else "")
+    )
+
+    def _print_summary(name: str, arr: np.ndarray) -> None:
+        summary = _summarize_scores(arr)
+        if summary is None:
+            print(f"  {name}: empty")
+            return
+        print(
+            f"  {name}: "
+            f"n={summary['count']}, min={summary['min']:.6g}, "
+            f"median={summary['median']:.6g}, p95={summary['p95']:.6g}, "
+            f"p99={summary['p99']:.6g}, max={summary['max']:.6g}, mean={summary['mean']:.6g}"
+        )
+
+    print(f"  score={score_desc}")
+    _print_summary("scores(all)", all_scores_arr)
+    _print_summary("scores(eligible)", eligible_scores_arr)
+    _print_summary("scores(filtered-out)", filtered_scores_arr)
+
+    if not plot_histograms or output_dir is None:
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"  histograms: skipped (matplotlib import failed: {exc})")
+        return
+
+    hist_dir = os.path.join(output_dir, "sampling_coverage")
+    os.makedirs(hist_dir, exist_ok=True)
+
+    hist_path = os.path.join(hist_dir, f"{label}_slice_sampling_hist.png")
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+
+    if all_scores_arr.size > 0:
+        min_val = float(np.min(all_scores_arr))
+        max_val = float(np.max(all_scores_arr))
+    else:
+        min_val, max_val = 0.0, 1.0
+    if max_val <= min_val:
+        max_val = min_val + 1e-6
+    bins = np.linspace(min_val, max_val, 80)
+
+    axes[0].hist(all_scores_arr, bins=bins, color="#4C78A8", alpha=0.8)
+    axes[0].set_title("Enhancement score (all slices)")
+    axes[0].set_xlabel("Score")
+    axes[0].set_ylabel("Count")
+
+    if filtered_scores_arr.size > 0 or eligible_scores_arr.size > 0:
+        axes[1].hist(
+            [filtered_scores_arr, eligible_scores_arr],
+            bins=bins,
+            stacked=True,
+            color=["#F58518", "#54A24B"],
+            label=["filtered-out (below cutoff)", "eligible (>= cutoff)"],
+        )
+    else:
+        axes[1].hist(all_scores_arr, bins=bins, color="#4C78A8", alpha=0.8)
+    axes[1].set_title("Eligible vs filtered-out (per-volume quantile)")
+    axes[1].set_xlabel("Score")
+    axes[1].set_ylabel("Count")
+    axes[1].legend()
+
+    fig.suptitle(f"{label} slice sampling scores ({score_desc})", fontsize=11)
+    fig.savefig(hist_path, dpi=150)
+    plt.close(fig)
+
+    if filter_quantile > 0 and cutoff_values:
+        cutoff_path = os.path.join(hist_dir, f"{label}_slice_sampling_cutoffs.png")
+        fig, ax = plt.subplots(1, 1, figsize=(6, 4), constrained_layout=True)
+        ax.hist(cutoff_values, bins=50, color="#E45756", alpha=0.8)
+        ax.set_title(f"Per-volume cutoff values (q={filter_quantile:.2f})")
+        ax.set_xlabel("Cutoff score")
+        ax.set_ylabel("Count")
+        fig.savefig(cutoff_path, dpi=150)
+        plt.close(fig)
+
+    print(f"  histograms: saved to {hist_dir}")
+
+
 def _compute_slice_sampling_scores(
     file_path: str,
     dataset_key: str,

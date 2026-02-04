@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import torch
 import warnings
 import yaml
-from dataloader import ZFSliceDataset, SimulatedDataset, SimulatedSPFDataset
+from dataloader import ZFSliceDataset, SimulatedDataset, SimulatedSPFDataset, log_slice_sampling_startup_report
 from einops import rearrange
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -616,6 +616,9 @@ def main():
             flip_kspace=flip_kspace
         )
 
+
+    if global_rank == 0:
+        log_slice_sampling_startup_report(train_dataset, label="train", output_dir=output_dir)
 
     debug_cfg = config.get("debugging", {})
     sample_check_enabled = bool(debug_cfg.get("distributed_sample_check", False)) and config['training']['multigpu']
