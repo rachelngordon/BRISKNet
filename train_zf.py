@@ -103,6 +103,72 @@ def sample_start_time_index(max_idx, use_edge_mixture):
         return max_idx
     return random.randint(0, max_idx)
 
+
+class _DatasetWithIndex(torch.utils.data.Dataset):
+    def __init__(self, base_dataset):
+        self.base_dataset = base_dataset
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        item = self.base_dataset[idx]
+        if isinstance(item, tuple):
+            return (idx, *item)
+        return (idx, item)
+
+
+def _format_sample_id(dataset, idx):
+    if hasattr(dataset, "slice_index_map"):
+        try:
+            file_path, slice_idx = dataset.slice_index_map[idx]
+            patient_id = os.path.splitext(os.path.basename(file_path))[0]
+            return f"{patient_id}:{slice_idx}"
+        except Exception:
+            return str(idx)
+    if hasattr(dataset, "sample_paths"):
+        try:
+            sample_path = dataset.sample_paths[idx]
+            return os.path.basename(sample_path)
+        except Exception:
+            return str(idx)
+    return str(idx)
+
+
+def _print_sample_check_summary(epoch, all_rank_samples, sample_check_batches):
+    if not all_rank_samples:
+        print(f"[DDP] Sample check epoch {epoch}: no samples collected.")
+        return
+    rank_sets = [set(samples) for samples in all_rank_samples]
+    total_samples = sum(len(samples) for samples in all_rank_samples)
+    total_unique = len(set().union(*rank_sets)) if rank_sets else 0
+    sum_rank_unique = sum(len(s) for s in rank_sets)
+    overlap = max(0, sum_rank_unique - total_unique)
+
+    print(
+        f"[DDP] Sample check epoch {epoch} (first {sample_check_batches} batches): "
+        f"total={total_samples}, global_unique={total_unique}, cross_rank_overlap={overlap}"
+    )
+    for rank, samples in enumerate(all_rank_samples):
+        unique_count = len(set(samples))
+        dup_within = len(samples) - unique_count
+        print(f"  - rank {rank}: samples={len(samples)}, unique={unique_count}, dup_within_rank={dup_within}")
+
+    if overlap > 0:
+        from collections import Counter
+
+        counter = Counter()
+        for samples in all_rank_samples:
+            counter.update(samples)
+        overlap_ids = [sid for sid, count in counter.items() if count > 1]
+        preview = ", ".join(overlap_ids[:10])
+        print(
+            "[DDP] Overlap detected across ranks. "
+            "If dataset size isn't divisible by world_size and drop_last=False, "
+            "some overlap can be expected. Sample overlaps: "
+            f"{preview}"
+        )
+
 def main():
 
     set_seed(12)
@@ -551,6 +617,20 @@ def main():
         )
 
 
+    debug_cfg = config.get("debugging", {})
+    sample_check_enabled = bool(debug_cfg.get("distributed_sample_check", False)) and config['training']['multigpu']
+    sample_check_batches = int(debug_cfg.get("distributed_sample_check_batches", 5))
+    if sample_check_batches < 0:
+        sample_check_batches = 0
+
+    train_dataset_for_loader = train_dataset
+    include_sample_indices = False
+    if sample_check_enabled:
+        train_dataset_for_loader = _DatasetWithIndex(train_dataset)
+        include_sample_indices = True
+        if global_rank == 0:
+            print(f"[DDP] Sample check enabled: collecting first {sample_check_batches} batches per epoch.")
+
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32
         np.random.seed(worker_seed)
@@ -560,9 +640,9 @@ def main():
     g.manual_seed(12)
 
     if config['training']['multigpu']:
-        train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=global_rank)
+        train_sampler = DistributedSampler(train_dataset_for_loader, num_replicas=world_size, rank=global_rank)
         train_loader = DataLoader(
-            train_dataset,
+            train_dataset_for_loader,
             batch_size=config["dataloader"]["batch_size"],
             sampler=train_sampler,
             num_workers=config["dataloader"]["num_workers"],
@@ -572,7 +652,7 @@ def main():
         )
     else:
         train_loader = DataLoader(
-            train_dataset,
+            train_dataset_for_loader,
             batch_size=config["dataloader"]["batch_size"],
             shuffle=config["dataloader"]["shuffle"],
             num_workers=config["dataloader"]["num_workers"],
@@ -1573,7 +1653,18 @@ def main():
             t_img = None
             val_t_img = None
 
-            for measured_kspace, csmap, N_samples, N_spokes, N_time in train_loader_tqdm:  # measured_kspace shape: (B, C, I, S, T)
+            sample_check_ids = [] if sample_check_enabled else None
+
+            for batch_idx, batch in enumerate(train_loader_tqdm):  # measured_kspace shape: (B, C, I, S, T)
+                if include_sample_indices:
+                    sample_indices, measured_kspace, csmap, N_samples, N_spokes, N_time = batch
+                    if sample_check_enabled and batch_idx < sample_check_batches:
+                        if torch.is_tensor(sample_indices):
+                            sample_indices = sample_indices.tolist()
+                        for idx in sample_indices:
+                            sample_check_ids.append(_format_sample_id(train_dataset, idx))
+                else:
+                    measured_kspace, csmap, N_samples, N_spokes, N_time = batch
                 
                 start = time.time()
 
@@ -1751,6 +1842,15 @@ def main():
                     else:
                         raise  # re-raise other errors
 
+            if sample_check_enabled and dist.is_available() and dist.is_initialized():
+                try:
+                    gathered = [None for _ in range(world_size)]
+                    dist.all_gather_object(gathered, sample_check_ids or [])
+                    if global_rank == 0:
+                        _print_sample_check_summary(epoch, gathered, sample_check_batches)
+                except Exception as exc:
+                    if global_rank == 0:
+                        print(f"[DDP] Sample check failed: {exc}")
 
             # plot training samples
             if epoch % save_interval == 0:

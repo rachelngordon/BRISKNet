@@ -40,6 +40,8 @@ debugging:
   calc_step_0_val: true
   enable_gradient_monitoring: true
   monitoring_interval: 5
+  distributed_sample_check: false
+  distributed_sample_check_batches: 0
 evaluation:
   chunk_overlap: 18
   chunk_size: 36

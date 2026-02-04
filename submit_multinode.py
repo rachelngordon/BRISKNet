@@ -92,7 +92,7 @@ def main():
     # --- Executor Configuration ---
     job_name = "ei_multinode_higher_sampling_arr_enh"
     config_path = "configs/config_ei_sampling_multinode.yaml"
-    num_nodes = 2
+    num_nodes = 4
     gpus_per_node = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -108,9 +108,8 @@ def main():
         tasks_per_node=1,
         cpus_per_task=8,
         slurm_gres=f"gpu:{gpus_per_node}",
-        timeout_min=200,
-        slurm_additional_parameters={"requeue": True, "exclude": "k002"},
-        qos="burst",
+        timeout_min=700,
+        slurm_additional_parameters={"requeue": True},
         srun_args=["--cpu-bind=none"],
     )
 
