@@ -157,7 +157,7 @@ def main():
     config.setdefault("experiment", {})["output_dir"] = os.path.dirname(output_dir)
 
     use_edge_time_index_sampling = config.get('training', {}).get('edge_time_index_sampling', False)
-    traj_method = config.get("data", {}).get("traj_method", "trajGR")
+    traj_method = config.get("data", {}).get("traj_method", "get_traj")
 
     # create output directories
     output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
@@ -428,7 +428,11 @@ def main():
     eval_chunk_overlap = config["evaluation"]["chunk_overlap"]
 
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
-    val_noise_level = config.get("evaluation", {}).get("val_noise_level", 0)
+    eval_cfg = config.get("evaluation", {})
+    val_noise_level = eval_cfg.get("val_noise_level", 0.05)
+    dro_sim_source = eval_cfg.get("dro_sim_source", "espirit")
+    dro_csmaps_source = eval_cfg.get("dro_csmaps_source", "espirit")
+    dro_espirit_csmaps_dir = eval_cfg.get("dro_espirit_csmaps_dir")
 
     cluster = config["experiment"].get("cluster", "Randi")
 
@@ -610,7 +614,11 @@ def main():
         num_frames=N_time_eval,
         traj_method=traj_method,
         grasp_slice_idx=raw_grasp_slice_idx,
-        noise_level=val_noise_level)
+        noise_level=val_noise_level,
+        dro_csmaps_source=dro_csmaps_source,
+        espirit_csmaps_dir=dro_espirit_csmaps_dir,
+        dro_sim_source=dro_sim_source,
+    )
 
 
     val_dro_loader = DataLoader(
