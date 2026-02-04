@@ -8,6 +8,7 @@ import shutil
 import statistics
 import sys
 import time
+import warnings
 from typing import Tuple
 
 import matplotlib
@@ -26,6 +27,7 @@ from dataloader import SimulatedDataset
 from eval import (
     eval_grasp,
     eval_sample,
+    eval_zf,
     compute_ssdu_kspace_nmse,
     compute_ssdu_kspace_nmse_grasp,
     _resolve_baseline_frames,
@@ -42,6 +44,25 @@ from utils import (
     set_seed,
     sliding_window_inference,
 )
+
+# Silence torchmetrics/torch FutureWarning about torch.load(weights_only=...) defaults.
+warnings.filterwarnings(
+    "ignore",
+    message=r"You are using `torch\.load` with `weights_only=False`.*",
+    category=FutureWarning,
+)
+
+
+def _torch_load_checkpoint(path: str, map_location="cpu"):
+    """Load a checkpoint in the safest available way across torch versions."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except TypeError:
+        # Older torch versions don't support weights_only.
+        return torch.load(path, map_location=map_location)
+    except Exception:
+        # Some checkpoints may include unsupported objects for weights_only mode.
+        return torch.load(path, map_location=map_location)
 
 
 def _resolve_eval_params(config: dict, spokes: int, frames: int, phase_idx: int) -> Tuple[int, int]:
@@ -104,7 +125,7 @@ def _build_model(config: dict, device, block_dir: str):
 
 
 def _load_weights(model, ckpt_path: str):
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = _torch_load_checkpoint(ckpt_path, map_location="cpu")
     state_dict = ckpt.get("model_state_dict", ckpt)
     model.load_state_dict(remove_module_prefix(state_dict))
     return model
@@ -113,12 +134,28 @@ def _load_weights(model, ckpt_path: str):
 def parse_args():
     parser = argparse.ArgumentParser(description="Run inference on validation samples.")
     parser.add_argument("--exp_dir", required=True, help="Experiment directory location.")
+    parser.add_argument(
+        "--output_root",
+        help=(
+            "Override config experiment.output_dir when saving inference outputs "
+            "(useful when exp_dir is read-only)."
+        ),
+    )
     parser.add_argument("--config", help="Path to config.yaml (defaults to output/<exp>/config.yaml).")
     parser.add_argument("--checkpoint", help="Path to model checkpoint (defaults to output/<exp>/<exp>_model.pth).")
-    parser.add_argument(
+    ckpt_group = parser.add_mutually_exclusive_group()
+    ckpt_group.add_argument(
         "--use_best_checkpoint",
+        dest="use_best_checkpoint",
         action="store_true",
-        help="Use <exp>_best_model.pth if available (overrides default last checkpoint).",
+        default=True,
+        help="Use <exp>_best_model.pth if available (default).",
+    )
+    ckpt_group.add_argument(
+        "--use_last_checkpoint",
+        dest="use_best_checkpoint",
+        action="store_false",
+        help="Use <exp>_model.pth (last checkpoint).",
     )
     parser.add_argument(
         "--store_logs",
@@ -143,7 +180,7 @@ def parse_args():
         "--dro_csmaps_source",
         default="espirit",
         choices=("original", "espirit"),
-        help="Use DRO csmaps from the sample directory (original) or ESPIRiT maps (espirit).",
+        help="DRO csmaps source ('original' or 'espirit'). Default: espirit.",
     )
     parser.add_argument(
         "--dro_sim_source",
@@ -156,9 +193,9 @@ def parse_args():
     )
     parser.add_argument(
         "--traj_method",
-        default="get_traj",
+        default=None,
         choices=("trajGR", "get_traj"),
-        help="Trajectory source for NUFFT and simulated k-space/GRASP filenames.",
+        help="Override trajectory source ('trajGR' or 'get_traj'). Defaults to config data.traj_method.",
     )
     parser.add_argument(
         "--dro_espirit_csmaps_dir",
@@ -169,9 +206,27 @@ def parse_args():
         "--dro_noise_level",
         type=float,
         default=0.05,
-        help="DRO noise level to use for inference (set 0 for no noise).",
+        help="DRO noise level used for simulated k-space/GRASP filenames (e.g., 0 or 0.05). Default: 0.05.",
+    )
+    parser.add_argument(
+        "--normalize_dro_csmaps",
+        action="store_true",
+        help=(
+            "Normalize DRO coil sensitivity maps by a per-sample scalar (median RSS in tissue mask) "
+            "and apply the same scaling to DRO k-space. Useful for debugging csmap OOD scaling."
+        ),
     )
     parser.add_argument("--diagnostics", action="store_true", help="Enable diagnostic plots per sample.")
+    parser.add_argument(
+        "--compute_zf_baseline",
+        action="store_true",
+        help="Compute and report adjoint (ZF) baseline image/k-space metrics.",
+    )
+    parser.add_argument(
+        "--save_debug_arrays",
+        action="store_true",
+        help="Save per-sample magnitude arrays (gt/dl/grasp/zf) to NPZ for debugging.",
+    )
     parser.add_argument("--diag_topk", type=int, default=16, help="Top-K pixels to plot in diagnostic curves.")
     parser.add_argument("--diag_num_frames", type=int, default=6, help="Number of frames for heatmap diagnostics.")
     parser.add_argument(
@@ -313,6 +368,48 @@ def _normalize_mask(mask, T: int, H: int, W: int):
     else:
         return None
     return mask_stack > 0
+
+
+def _compute_dro_csmap_scale(csmap: torch.Tensor, mask) -> float | None:
+    """Compute a per-sample scalar to normalize DRO sensitivity-map scale.
+
+    Uses the median RSS of the coil maps inside the union of DRO tissue masks when available;
+    falls back to nonzero RSS pixels otherwise.
+    """
+    smaps = csmap
+    if smaps.ndim == 5 and smaps.shape[0] == 1:
+        smaps = smaps.squeeze(0)
+    if smaps.ndim == 4 and smaps.shape[0] == 1:
+        smaps = smaps.squeeze(0)
+    if smaps.ndim != 3:
+        return None
+
+    rss = torch.sqrt(torch.sum(torch.abs(smaps) ** 2, dim=0))  # (H,W)
+
+    union_np = None
+    if isinstance(mask, dict) and mask:
+        for v in mask.values():
+            if v is None:
+                continue
+            if not isinstance(v, torch.Tensor):
+                continue
+            v_np = v.detach().cpu().numpy().squeeze().astype(bool)
+            if v_np.ndim != 2:
+                continue
+            union_np = v_np if union_np is None else (union_np | v_np)
+
+    if union_np is not None and union_np.any() and union_np.mean() < 0.999:
+        union_t = torch.from_numpy(union_np).to(rss.device)
+        vals = rss[union_t]
+    else:
+        vals = rss[rss > 0]
+
+    if vals.numel() == 0:
+        return None
+    scale = float(torch.median(vals).item())
+    if not np.isfinite(scale) or scale <= 0:
+        return None
+    return scale
 
 
 def _robust_limits(values: np.ndarray, low_q: float, high_q: float):
@@ -504,7 +601,7 @@ def main():
 
     ckpt_meta = None
     try:
-        ckpt_meta = torch.load(ckpt_path, map_location="cpu")
+        ckpt_meta = _torch_load_checkpoint(ckpt_path, map_location="cpu")
     except Exception as exc:
         print(f"Warning: unable to load checkpoint metadata from {ckpt_path}: {exc}")
     trained_epochs = ckpt_meta.get("epoch") - 1 if isinstance(ckpt_meta, dict) else None
@@ -520,7 +617,8 @@ def main():
     cluster = config.get("experiment", {}).get("cluster", "Randi")
 
     # Where to save inference outputs.
-    output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
+    output_root = args.output_root or config["experiment"]["output_dir"]
+    output_dir = os.path.join(output_root, exp_name)
     inference_dir = os.path.join(output_dir, f"inference_{time.strftime('%Y%m%d_%H%M%S')}")
     os.makedirs(inference_dir, exist_ok=True)
 
@@ -543,13 +641,38 @@ def main():
     ssdu_k_folds = config.get("evaluation", {}).get("ssdu_k_folds", 4)
     ssdu_grasp_k_folds = config.get("evaluation", {}).get("ssdu_grasp_k_folds", ssdu_k_folds)
     ssdu_weighting = config.get("evaluation", {}).get("ssdu_weighting", "sqrt_dcomp")
-    val_noise_level = args.dro_noise_level if args.dro_noise_level is not None else config.get("evaluation", {}).get("val_noise_level", 0)
+    config_eval = config.get("evaluation", {})
+    val_noise_level = (
+        args.dro_noise_level
+        if args.dro_noise_level is not None
+        else config_eval.get("val_noise_level", 0.05)
+    )
+    dro_csmaps_source = (
+        args.dro_csmaps_source
+        if args.dro_csmaps_source is not None
+        else config_eval.get("dro_csmaps_source", "espirit")
+    )
+    dro_sim_source = (
+        args.dro_sim_source
+        if args.dro_sim_source is not None
+        else config_eval.get("dro_sim_source", "espirit")
+    )
+    if args.dro_noise_level is None and dro_sim_source == "espirit" and abs(float(val_noise_level) - 0.05) > 1e-8:
+        # The current ESPIRiT DRO artifacts/GRASP recons in dro_dataset_frontpad are stored with the
+        # `_correct_traj_n0.05_espirit` suffix. If an experiment config sets val_noise_level=0 (common
+        # in older configs), we override to 0.05 to avoid FileNotFound errors and keep inference sane.
+        print(
+            f"Note: overriding DRO noise level from {val_noise_level} to 0.05 for dro_sim_source=espirit. "
+            "Pass --dro_noise_level to override explicitly."
+        )
+        val_noise_level = 0.05
 
     inference_settings = {
-        "csmaps_style": args.dro_csmaps_source,
-        "dro_sim_source": args.dro_sim_source,
+        "csmaps_style": dro_csmaps_source,
+        "dro_sim_source": dro_sim_source,
         "dro_espirit_csmaps_dir": args.dro_espirit_csmaps_dir,
         "traj_method": args.traj_method,
+        "output_root": output_root,
         "baseline": {
             "mode": args.baseline_mode,
             "seconds": args.baseline_seconds,
@@ -577,6 +700,7 @@ def main():
             "model_norm": config["model"]["norm"],
             "rescale": bool(rescale),
             "diag_normalize": bool(args.diag_normalize),
+            "normalize_dro_csmaps": bool(args.normalize_dro_csmaps),
         },
         "dro_noise_level": val_noise_level,
         "eval_params": {
@@ -599,8 +723,20 @@ def main():
 
     data_dir = config["data"]["root_dir"]
     model_type = config["model"]["name"]
-    traj_method = args.traj_method
-    dro_dataset_root = "/net/scratch2/rachelgordon/dro_dataset_frontpad"
+    traj_method = args.traj_method or config.get("data", {}).get("traj_method", "get_traj")
+    dro_dataset_root = config_eval.get("simulated_dataset_path", "/net/scratch2/rachelgordon/dro_dataset_frontpad")
+
+    print("=== Inference Configuration (resolved) ===")
+    print(f"DRO dataset root: {dro_dataset_root}")
+    print(f"DRO noise level: {val_noise_level}")
+    print(f"DRO sim source: {dro_sim_source}")
+    print(f"DRO csmaps source: {dro_csmaps_source}")
+    print(f"Trajectory method: {traj_method}")
+    print(f"Eval spokes/frame (BRISKNet): {int(N_spokes_eval)}")
+    print(f"Eval frames (BRISKNet): {int(N_time_eval)}")
+    print(f"Eval total spokes: {int(N_spokes_eval) * int(N_time_eval)}")
+    print(f"Rescale (best-fit scalar): {rescale}")
+    print(f"Normalize DRO csmaps: {bool(args.normalize_dro_csmaps)}")
 
     val_dataset = SimulatedDataset(
         # root_dir=config["evaluation"]["simulated_dataset_path"],
@@ -614,9 +750,9 @@ def main():
         traj_method=traj_method,
         noise_level=val_noise_level,
         grasp_slice_idx=raw_grasp_slice_idx,
-        dro_csmaps_source=args.dro_csmaps_source,
+        dro_csmaps_source=dro_csmaps_source,
         espirit_csmaps_dir=args.dro_espirit_csmaps_dir,
-        dro_sim_source=args.dro_sim_source,
+        dro_sim_source=dro_sim_source,
     )
 
     val_loader = DataLoader(
@@ -649,6 +785,10 @@ def main():
             "num_samples": int(num_samples),
             "phase_index": resolved_phase_index if resolved_phase_index is not None else "none",
             "dro_espirit_csmaps_dir": resolved_espirit_dir,
+            "dro_csmaps_source": dro_csmaps_source,
+            "dro_sim_source": dro_sim_source,
+            "traj_method": traj_method,
+            "dro_noise_level": val_noise_level,
             "early_max_frames": (
                 args.early_max_frames if args.early_max_frames is not None else "no_max"
             ),
@@ -656,6 +796,7 @@ def main():
     )
 
     inference_settings["data"]["dro_dataset_root"] = dro_dataset_root
+    inference_settings["traj_method"] = traj_method
     inference_settings["dro_espirit_csmaps_dir"] = resolved_espirit_dir
     inference_settings["eval_params"]["phase_index"] = (
         resolved_phase_index if resolved_phase_index is not None else "none"
@@ -703,6 +844,7 @@ def main():
     results = []
     raw_results = []
     grasp_results = []
+    zf_results = []
     inference_times = []
 
     with torch.no_grad():
@@ -730,6 +872,18 @@ def main():
             raw_kspace = raw_kspace.squeeze(0).to(device)
             raw_grasp_img = raw_grasp_img.to(device)
             raw_csmaps = raw_csmaps.squeeze(0).to(device)
+
+            dro_csmap_scale = None
+            if args.normalize_dro_csmaps:
+                dro_csmap_scale = _compute_dro_csmap_scale(csmap, mask)
+                if dro_csmap_scale is not None:
+                    csmap = csmap / dro_csmap_scale
+                    dro_kspace = dro_kspace / dro_csmap_scale
+                    if idx == 0:
+                        tqdm.write(
+                            f"[DRO csmap normalize] Applied scale={dro_csmap_scale:.6f} "
+                            "(csmap and kspace divided by this factor)."
+                        )
 
             acceleration_encoding = acceleration_val if config["model"]["encode_acceleration"] else None
             start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device) if config["model"]["encode_time_index"] else None
@@ -788,7 +942,7 @@ def main():
                     torch.cuda.synchronize(device)
                 infer_start = time.perf_counter()
                 x_recon, *_ = model(
-                    dro_kspace, eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="inference", norm="none"#config["model"]["norm"]
+                    dro_kspace, eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="inference", norm=config["model"]["norm"]
                 )
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
@@ -798,11 +952,51 @@ def main():
                     f"[Timing] {label}: DRO recon-only inference time = {infer_time:.3f}s"
                 )
                 raw_x_recon, *_ = model(
-                    raw_kspace, eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm="none"#config["model"]["norm"]
+                    raw_kspace, eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm=config["model"]["norm"]
                 )
 
             sample_dir = os.path.join(inference_dir, f"sample_{idx:02d}")
             os.makedirs(sample_dir, exist_ok=True)
+
+            zf_complex = None
+            if args.compute_zf_baseline or args.save_debug_arrays:
+                zf_complex = eval_physics(True, dro_kspace, csmap)
+
+            if idx == 0 and (args.save_debug_arrays or args.compute_zf_baseline or args.diagnostics):
+                def _mag_minmax(x: torch.Tensor):
+                    if not isinstance(x, torch.Tensor):
+                        return None, None
+                    if x.numel() == 0:
+                        return None, None
+                    if x.shape[-1] == 0:
+                        return None, None
+                    if x.ndim >= 2 and x.shape[1] == 2:
+                        mag = torch.sqrt(x[:, 0, ...] ** 2 + x[:, 1, ...] ** 2)
+                        return float(mag.min().item()), float(mag.max().item())
+                    if torch.is_complex(x):
+                        mag = torch.abs(x)
+                        return float(mag.min().item()), float(mag.max().item())
+                    return float(x.min().item()), float(x.max().item())
+
+                gt_min, gt_max = _mag_minmax(ground_truth)
+                grasp_min, grasp_max = _mag_minmax(dro_grasp_img)
+                dl_min, dl_max = _mag_minmax(x_recon)
+                k_min, k_max = _mag_minmax(dro_kspace)
+                tqdm.write("=== Debug: first-sample tensor stats ===")
+                tqdm.write(f"grasp_path: {grasp_path}")
+                tqdm.write(
+                    "shapes: "
+                    f"dro_kspace={tuple(dro_kspace.shape)}, csmap={tuple(csmap.shape)}, "
+                    f"gt={tuple(ground_truth.shape)}, grasp={tuple(dro_grasp_img.shape)}, "
+                    f"brisknet={tuple(x_recon.shape)}"
+                )
+                tqdm.write(
+                    "magnitude ranges: "
+                    f"kspace[{k_min:.3g},{k_max:.3g}] "
+                    f"gt[{gt_min:.3g},{gt_max:.3g}] "
+                    f"grasp[{grasp_min:.3g},{grasp_max:.3g}] "
+                    f"brisknet[{dl_min:.3g},{dl_max:.3g}]"
+                )
 
             if args.diagnostics:
                 ref_map = {
@@ -923,7 +1117,15 @@ def main():
                 total_scan_seconds=args.total_scan_seconds,
             )
 
-            grasp_metrics = eval_grasp(
+            (
+                grasp_ssim,
+                grasp_psnr,
+                grasp_mse,
+                grasp_lpips,
+                grasp_dc_mse,
+                grasp_dc_mae,
+                grasp_aux,
+            ) = eval_grasp(
                 dro_kspace,
                 csmap,
                 ground_truth,
@@ -933,7 +1135,41 @@ def main():
                 sample_dir,
                 rescale=rescale,
                 dro_eval=True,
+                return_aux=True,
             )
+
+            if args.compute_zf_baseline:
+                (
+                    zf_ssim,
+                    zf_psnr,
+                    zf_mse,
+                    zf_lpips,
+                    zf_dc_mse,
+                    zf_dc_mae,
+                    zf_aux,
+                ) = eval_zf(
+                    dro_kspace,
+                    csmap,
+                    ground_truth,
+                    eval_physics,
+                    mask,
+                    device,
+                    rescale=rescale,
+                    zf_complex_override=zf_complex,
+                    return_aux=True,
+                )
+                zf_results.append(
+                    dict(
+                        sample=label,
+                        ssim=zf_ssim,
+                        psnr=zf_psnr,
+                        mse=zf_mse,
+                        lpips=zf_lpips,
+                        dc_mse=zf_dc_mse,
+                        dc_mae=zf_dc_mae,
+                        **(zf_aux or {}),
+                    )
+                )
 
             raw_dc_mse, raw_dc_mae, _ = eval_sample(
                 raw_kspace,
@@ -977,7 +1213,6 @@ def main():
             )
 
             ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = dro_metrics
-            grasp_ssim, grasp_psnr, grasp_mse, grasp_lpips, grasp_dc_mse, grasp_dc_mae = grasp_metrics
 
             results.append(
                 dict(
@@ -990,6 +1225,7 @@ def main():
                     dc_mae=dc_mae,
                     recon_corr=recon_corr,
                     grasp_corr=grasp_corr,
+                    dro_csmap_scale=dro_csmap_scale,
                     **(temporal_metrics or {}),
                 )
             )
@@ -1002,6 +1238,7 @@ def main():
                     lpips=grasp_lpips,
                     dc_mse=grasp_dc_mse,
                     dc_mae=grasp_dc_mae,
+                    **(grasp_aux or {}),
                 )
             )
             raw_results.append(
@@ -1015,6 +1252,52 @@ def main():
                     raw_grasp_ssdu_nmse=ssdu_grasp_result.get("ssdu_nmse_mean"),
                 )
             )
+
+            if args.save_debug_arrays:
+                debug_npz = os.path.join(sample_dir, "debug_arrays_mag.npz")
+                gt_mag = torch.sqrt(ground_truth[:, 0, ...] ** 2 + ground_truth[:, 1, ...] ** 2).squeeze(0)
+                dl_mag = torch.sqrt(x_recon[:, 0, ...] ** 2 + x_recon[:, 1, ...] ** 2).squeeze(0)
+                grasp_mag = torch.sqrt(dro_grasp_img[:, 0, ...] ** 2 + dro_grasp_img[:, 1, ...] ** 2).squeeze(0)
+                gt_mag_np = gt_mag.detach().cpu().numpy().astype(np.float32, copy=False)  # (T,H,W)
+                dl_mag_np = dl_mag.detach().cpu().numpy().astype(np.float32, copy=False)  # (H,W,T)
+                dl_mag_np = np.transpose(dl_mag_np, (2, 0, 1))  # (T,H,W)
+                grasp_mag_np = grasp_mag.detach().cpu().numpy().astype(np.float32, copy=False)
+                # Canonicalize to (T,H,W) for easy comparison/debugging.
+                if (
+                    grasp_mag_np.ndim == 3
+                    and grasp_mag_np.shape[0] != gt_mag_np.shape[0]
+                    and grasp_mag_np.shape[1] == gt_mag_np.shape[0]
+                ):
+                    # Common case: (H,T,W) -> (T,H,W)
+                    grasp_mag_np = np.transpose(grasp_mag_np, (1, 0, 2))
+                zf_mag_np = np.array([], dtype=np.float32)
+                if zf_complex is not None:
+                    zf_mag_np = torch.abs(zf_complex).detach().cpu().numpy().astype(np.float32, copy=False)  # (H,W,T)
+                    zf_mag_np = np.transpose(zf_mag_np, (2, 0, 1))  # (T,H,W)
+
+                mask_union = np.array([], dtype=np.uint8)
+                if isinstance(mask, dict) and mask:
+                    union = None
+                    for v in mask.values():
+                        if v is None:
+                            continue
+                        v_np = v.detach().cpu().numpy().squeeze().astype(bool)
+                        if v_np.ndim != 2:
+                            continue
+                        union = v_np if union is None else (union | v_np)
+                    if union is not None:
+                        mask_union = union.astype(np.uint8)
+
+                np.savez_compressed(
+                    debug_npz,
+                    gt_mag=gt_mag_np,
+                    dl_mag=dl_mag_np,
+                    grasp_mag=grasp_mag_np,
+                    zf_mag=zf_mag_np,
+                    mask_union=mask_union,
+                    spokes_per_frame=int(N_spokes_eval),
+                    num_frames=int(N_time_eval),
+                )
 
     mean_infer = None
     std_infer = None
@@ -1048,20 +1331,49 @@ def main():
     with open(metrics_path, "w") as f:
         headers = [
             "sample",
+            "dro_csmap_scale",
             "dl_ssim",
             "dl_psnr",
+            "dl_psnr_fg",
             "dl_mse",
+            "dl_mse_fg",
             "dl_lpips",
             "dl_dc_mse",
             "dl_dc_mae",
+            "dl_dc_mse_bestfit",
+            "dl_dc_mae_bestfit",
+            "dl_dc_scale_abs",
+            "dl_dc_scale_phase",
+            "dl_img_scale",
             "dl_recon_corr",
             "grasp_corr",
             "grasp_ssim",
             "grasp_psnr",
+            "grasp_psnr_fg",
             "grasp_mse",
+            "grasp_mse_fg",
             "grasp_lpips",
             "grasp_dc_mse",
             "grasp_dc_mae",
+            "grasp_dc_mse_bestfit",
+            "grasp_dc_mae_bestfit",
+            "grasp_dc_scale_abs",
+            "grasp_dc_scale_phase",
+            "grasp_img_scale",
+            "zf_ssim",
+            "zf_psnr",
+            "zf_psnr_fg",
+            "zf_mse",
+            "zf_mse_fg",
+            "zf_lpips",
+            "zf_dc_mse",
+            "zf_dc_mae",
+            "zf_dc_mse_bestfit",
+            "zf_dc_mae_bestfit",
+            "zf_dc_scale_abs",
+            "zf_dc_scale_phase",
+            "zf_img_scale",
+            "fg_fraction",
             "raw_dc_mse",
             "raw_dc_mae",
             "raw_grasp_dc_mse",
@@ -1070,23 +1382,61 @@ def main():
             "raw_grasp_ssdu_nmse",
         ]
         f.write(",".join(headers) + "\n")
+        zf_lookup = {row["sample"]: row for row in zf_results}
         for dro_row, grasp_row, raw_row in zip(results, grasp_results, raw_results):
+            zf_row = zf_lookup.get(dro_row["sample"], {})
+            dl_psnr_fg = dro_row.get("dl_psnr_fg")
+            dl_mse_fg = dro_row.get("dl_mse_fg")
+            grasp_psnr_fg = dro_row.get("grasp_psnr_fg")
+            grasp_mse_fg = dro_row.get("grasp_mse_fg")
+            fg_fraction = dro_row.get("fg_fraction")
+            zf_psnr_fg = zf_row.get("zf_psnr_fg")
+            zf_mse_fg = zf_row.get("zf_mse_fg")
             row = [
                 dro_row["sample"],
+                "" if dro_row.get("dro_csmap_scale") is None else f"{dro_row['dro_csmap_scale']:.6f}",
                 f"{dro_row['ssim']:.6f}",
                 f"{dro_row['psnr']:.6f}",
+                "" if dl_psnr_fg is None else f"{dl_psnr_fg:.6f}",
                 f"{dro_row['mse']:.6f}",
+                "" if dl_mse_fg is None else f"{dl_mse_fg:.6f}",
                 f"{dro_row['lpips']:.6f}",
                 f"{dro_row['dc_mse']:.6f}",
                 f"{dro_row['dc_mae']:.6f}",
+                "" if dro_row.get("dl_dc_mse_bestfit") is None else f"{dro_row['dl_dc_mse_bestfit']:.6f}",
+                "" if dro_row.get("dl_dc_mae_bestfit") is None else f"{dro_row['dl_dc_mae_bestfit']:.6f}",
+                "" if dro_row.get("dl_dc_scale_abs") is None else f"{dro_row['dl_dc_scale_abs']:.6f}",
+                "" if dro_row.get("dl_dc_scale_phase") is None else f"{dro_row['dl_dc_scale_phase']:.6f}",
+                "" if dro_row.get("dl_img_scale") is None else f"{dro_row['dl_img_scale']:.6f}",
                 "" if dro_row["recon_corr"] is None else f"{dro_row['recon_corr']:.6f}",
                 "" if dro_row["grasp_corr"] is None else f"{dro_row['grasp_corr']:.6f}",
                 f"{grasp_row['ssim']:.6f}",
                 f"{grasp_row['psnr']:.6f}",
+                "" if grasp_psnr_fg is None else f"{grasp_psnr_fg:.6f}",
                 f"{grasp_row['mse']:.6f}",
+                "" if grasp_mse_fg is None else f"{grasp_mse_fg:.6f}",
                 f"{grasp_row['lpips']:.6f}",
                 f"{grasp_row['dc_mse']:.6f}",
                 f"{grasp_row['dc_mae']:.6f}",
+                "" if grasp_row.get("grasp_dc_mse_bestfit") is None else f"{grasp_row['grasp_dc_mse_bestfit']:.6f}",
+                "" if grasp_row.get("grasp_dc_mae_bestfit") is None else f"{grasp_row['grasp_dc_mae_bestfit']:.6f}",
+                "" if grasp_row.get("grasp_dc_scale_abs") is None else f"{grasp_row['grasp_dc_scale_abs']:.6f}",
+                "" if grasp_row.get("grasp_dc_scale_phase") is None else f"{grasp_row['grasp_dc_scale_phase']:.6f}",
+                "" if dro_row.get("grasp_img_scale") is None else f"{dro_row['grasp_img_scale']:.6f}",
+                "" if not zf_row else f"{zf_row.get('ssim', float('nan')):.6f}",
+                "" if not zf_row else f"{zf_row.get('psnr', float('nan')):.6f}",
+                "" if zf_psnr_fg is None else f"{zf_psnr_fg:.6f}",
+                "" if not zf_row else f"{zf_row.get('mse', float('nan')):.6f}",
+                "" if zf_mse_fg is None else f"{zf_mse_fg:.6f}",
+                "" if not zf_row else f"{zf_row.get('lpips', float('nan')):.6f}",
+                "" if not zf_row else f"{zf_row.get('dc_mse', float('nan')):.6f}",
+                "" if not zf_row else f"{zf_row.get('dc_mae', float('nan')):.6f}",
+                "" if zf_row.get("zf_dc_mse_bestfit") is None else f"{zf_row['zf_dc_mse_bestfit']:.6f}",
+                "" if zf_row.get("zf_dc_mae_bestfit") is None else f"{zf_row['zf_dc_mae_bestfit']:.6f}",
+                "" if zf_row.get("zf_dc_scale_abs") is None else f"{zf_row['zf_dc_scale_abs']:.6f}",
+                "" if zf_row.get("zf_dc_scale_phase") is None else f"{zf_row['zf_dc_scale_phase']:.6f}",
+                "" if zf_row.get("zf_img_scale") is None else f"{zf_row['zf_img_scale']:.6f}",
+                "" if fg_fraction is None else f"{fg_fraction:.6f}",
                 f"{raw_row['raw_dc_mse']:.6f}",
                 f"{raw_row['raw_dc_mae']:.6f}",
                 f"{raw_row['raw_grasp_dc_mse']:.6f}",
@@ -1140,21 +1490,34 @@ def main():
     dl_summary = {
         "ssim": _mean_std(results, "ssim"),
         "psnr": _mean_std(results, "psnr"),
+        "psnr_fg": _mean_std(results, "dl_psnr_fg"),
         "mse": _mean_std(results, "mse"),
+        "mse_fg": _mean_std(results, "dl_mse_fg"),
         "lpips": _mean_std(results, "lpips"),
         "dc_mse": _mean_std(results, "dc_mse"),
         "dc_mae": _mean_std(results, "dc_mae"),
+        "dc_mse_bestfit": _mean_std(results, "dl_dc_mse_bestfit"),
+        "dc_mae_bestfit": _mean_std(results, "dl_dc_mae_bestfit"),
+        "dc_scale_abs": _mean_std(results, "dl_dc_scale_abs"),
+        "img_scale": _mean_std(results, "dl_img_scale"),
         "recon_corr": _mean_std(results, "recon_corr"),
         "grasp_corr": _mean_std(results, "grasp_corr"),
+        "fg_fraction": _mean_std(results, "fg_fraction"),
     }
 
     grasp_summary = {
         "ssim": _mean_std(grasp_results, "ssim"),
         "psnr": _mean_std(grasp_results, "psnr"),
+        "psnr_fg": _mean_std(results, "grasp_psnr_fg"),
         "mse": _mean_std(grasp_results, "mse"),
+        "mse_fg": _mean_std(results, "grasp_mse_fg"),
         "lpips": _mean_std(grasp_results, "lpips"),
         "dc_mse": _mean_std(grasp_results, "dc_mse"),
         "dc_mae": _mean_std(grasp_results, "dc_mae"),
+        "dc_mse_bestfit": _mean_std(grasp_results, "grasp_dc_mse_bestfit"),
+        "dc_mae_bestfit": _mean_std(grasp_results, "grasp_dc_mae_bestfit"),
+        "dc_scale_abs": _mean_std(grasp_results, "grasp_dc_scale_abs"),
+        "img_scale": _mean_std(results, "grasp_img_scale"),
     }
 
     def _format_mean_std(mean, std):
@@ -1162,10 +1525,29 @@ def main():
             return ""
         return f"{mean:.4f} ± {std:.4f}"
 
+    def _format_mean_std_compact(mean, std, precision: int = 3):
+        if mean is None:
+            return ""
+        return f"{mean:.{precision}f} ± {std:.{precision}f}"
+
     def _format_mean_std_precise(mean, std):
         if mean is None:
             return ""
         return f"{mean:.4e} ± {std:.4e}"
+
+    def _render_table(headers, rows):
+        widths = [len(str(h)) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(str(cell)))
+
+        def fmt(row):
+            return "| " + " | ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row)) + " |"
+
+        sep = "|-" + "-|-".join("-" * w for w in widths) + "-|"
+        lines = [fmt(headers), sep]
+        lines.extend(fmt(r) for r in rows)
+        return "\n".join(lines)
 
     recon_corr_str = _format_mean_std(*dl_summary["recon_corr"])
     grasp_corr_str = _format_mean_std(*dl_summary["grasp_corr"])
@@ -1179,41 +1561,126 @@ def main():
         "raw_grasp_ssdu_nmse": _mean_std(raw_results, "raw_grasp_ssdu_nmse"),
     }
 
+    zf_summary = None
+    if zf_results:
+        zf_summary = {
+            "ssim": _mean_std(zf_results, "ssim"),
+            "psnr": _mean_std(zf_results, "psnr"),
+            "psnr_fg": _mean_std(zf_results, "zf_psnr_fg"),
+            "mse": _mean_std(zf_results, "mse"),
+            "mse_fg": _mean_std(zf_results, "zf_mse_fg"),
+            "lpips": _mean_std(zf_results, "lpips"),
+            "dc_mse": _mean_std(zf_results, "dc_mse"),
+            "dc_mae": _mean_std(zf_results, "dc_mae"),
+            "dc_mse_bestfit": _mean_std(zf_results, "zf_dc_mse_bestfit"),
+            "dc_mae_bestfit": _mean_std(zf_results, "zf_dc_mae_bestfit"),
+            "dc_scale_abs": _mean_std(zf_results, "zf_dc_scale_abs"),
+            "img_scale": _mean_std(zf_results, "zf_img_scale"),
+        }
+
     print("=== Inference Summary (averaged over samples) ===")
     print("Image Metrics")
-    print(
-        "DL   -> "
-        f"SSIM: {_format_mean_std(*dl_summary['ssim'])}, "
-        f"PSNR: {_format_mean_std(*dl_summary['psnr'])}, "
-        f"MSE: {_format_mean_std(*dl_summary['mse'])}, "
-        f"LPIPS: {_format_mean_std(*dl_summary['lpips'])}, "
-        f"EC Corr (DL): {recon_corr_str}, "
-        f"EC Corr (GRASP): {grasp_corr_str}"
-    )
-    print(
-        "GRASP-> "
-        f"SSIM: {_format_mean_std(*grasp_summary['ssim'])}, "
-        f"PSNR: {_format_mean_std(*grasp_summary['psnr'])}, "
-        f"MSE: {_format_mean_std(*grasp_summary['mse'])}, "
-        f"LPIPS: {_format_mean_std(*grasp_summary['lpips'])}"
-    )
+    image_headers = ["Method", "SSIM", "PSNR", "PSNR_FG", "MSE", "MSE_FG", "LPIPS"]
+    image_rows = [
+        [
+            "BRISKNet",
+            _format_mean_std(*dl_summary["ssim"]),
+            _format_mean_std(*dl_summary["psnr"]),
+            _format_mean_std(*dl_summary["psnr_fg"]),
+            _format_mean_std(*dl_summary["mse"]),
+            _format_mean_std(*dl_summary["mse_fg"]),
+            _format_mean_std(*dl_summary["lpips"]),
+        ],
+        [
+            "GRASP",
+            _format_mean_std(*grasp_summary["ssim"]),
+            _format_mean_std(*grasp_summary["psnr"]),
+            _format_mean_std(*grasp_summary["psnr_fg"]),
+            _format_mean_std(*grasp_summary["mse"]),
+            _format_mean_std(*grasp_summary["mse_fg"]),
+            _format_mean_std(*grasp_summary["lpips"]),
+        ],
+    ]
+    if zf_summary is not None:
+        image_rows.append(
+            [
+                "ZF",
+                _format_mean_std(*zf_summary["ssim"]),
+                _format_mean_std(*zf_summary["psnr"]),
+                _format_mean_std(*zf_summary["psnr_fg"]),
+                _format_mean_std(*zf_summary["mse"]),
+                _format_mean_std(*zf_summary["mse_fg"]),
+                _format_mean_std(*zf_summary["lpips"]),
+            ]
+        )
+    print(_render_table(image_headers, image_rows))
+    if recon_corr_str or grasp_corr_str:
+        print(f"EC Corr (BRISKNet): {recon_corr_str}, EC Corr (GRASP): {grasp_corr_str}")
+    fg_fraction_str = _format_mean_std(*dl_summary["fg_fraction"])
+    if fg_fraction_str:
+        print(f"Foreground mask fraction: {fg_fraction_str}")
+    img_scale_parts = []
+    dl_img_scale_str = _format_mean_std(*dl_summary["img_scale"])
+    grasp_img_scale_str = _format_mean_std(*grasp_summary["img_scale"])
+    zf_img_scale_str = _format_mean_std(*zf_summary["img_scale"]) if zf_summary is not None else ""
+    if dl_img_scale_str:
+        img_scale_parts.append(f"BRISKNet: {dl_img_scale_str}")
+    if grasp_img_scale_str:
+        img_scale_parts.append(f"GRASP: {grasp_img_scale_str}")
+    if zf_img_scale_str:
+        img_scale_parts.append(f"ZF: {zf_img_scale_str}")
+    if img_scale_parts:
+        print("Best-fit image gain (to GT): " + ", ".join(img_scale_parts))
+    csmap_scale_str = _format_mean_std(*_mean_std(results, "dro_csmap_scale"))
+    if csmap_scale_str:
+        print(f"DRO csmap scale (median RSS): {csmap_scale_str}")
     print("K-space Metrics")
-    print(
-        "DRO  -> "
-        f"DL DC_MSE: {_format_mean_std(*dl_summary['dc_mse'])}, "
-        f"DL DC_MAE: {_format_mean_std(*dl_summary['dc_mae'])}, "
-        f"GRASP DC_MSE: {_format_mean_std(*grasp_summary['dc_mse'])}, "
-        f"GRASP DC_MAE: {_format_mean_std(*grasp_summary['dc_mae'])}"
-    )
-    print(
-        "RAW  -> "
-        f"DL DC_MSE: {_format_mean_std_precise(*raw_summary['raw_dc_mse'])}, "
-        f"DL DC_MAE: {_format_mean_std_precise(*raw_summary['raw_dc_mae'])}, "
-        f"GRASP DC_MSE: {_format_mean_std_precise(*raw_summary['raw_grasp_dc_mse'])}, "
-        f"GRASP DC_MAE: {_format_mean_std_precise(*raw_summary['raw_grasp_dc_mae'])}, "
-        f"DL SSDU NMSE: {_format_mean_std_precise(*raw_summary['raw_ssdu_nmse'])}, "
-        f"GRASP SSDU NMSE: {_format_mean_std_precise(*raw_summary['raw_grasp_ssdu_nmse'])}"
-    )
+    k_headers = ["Method", "DC_MSE", "DC_MAE"]
+    k_rows = [
+        ["BRISKNet", _format_mean_std(*dl_summary["dc_mse"]), _format_mean_std(*dl_summary["dc_mae"])],
+        ["GRASP", _format_mean_std(*grasp_summary["dc_mse"]), _format_mean_std(*grasp_summary["dc_mae"])],
+    ]
+    if zf_summary is not None:
+        k_rows.append(["ZF", _format_mean_std(*zf_summary["dc_mse"]), _format_mean_std(*zf_summary["dc_mae"])])
+    print("DRO")
+    print(_render_table(k_headers, k_rows))
+    if dl_summary["dc_mse_bestfit"][0] is not None or grasp_summary["dc_mse_bestfit"][0] is not None or (zf_summary is not None and zf_summary["dc_mse_bestfit"][0] is not None):
+        zf_dc_bestfit = _format_mean_std(*zf_summary["dc_mse_bestfit"]) if zf_summary is not None else ""
+        bestfit_line = (
+            "DRO* -> "
+            f"BRISKNet DC_MSE*: {_format_mean_std(*dl_summary['dc_mse_bestfit'])}, "
+            f"GRASP DC_MSE*: {_format_mean_std(*grasp_summary['dc_mse_bestfit'])}"
+        )
+        if zf_dc_bestfit:
+            bestfit_line += f", ZF DC_MSE*: {zf_dc_bestfit}"
+        print(bestfit_line)
+
+        zf_gain = _format_mean_std(*zf_summary["dc_scale_abs"]) if zf_summary is not None else ""
+        gain_line = (
+            "Gain -> "
+            f"BRISKNet |c|: {_format_mean_std(*dl_summary['dc_scale_abs'])}, "
+            f"GRASP |c|: {_format_mean_std(*grasp_summary['dc_scale_abs'])}"
+        )
+        if zf_gain:
+            gain_line += f", ZF |c|: {zf_gain}"
+        print(gain_line)
+    raw_headers = ["Method", "DC_MSE", "DC_MAE", "SSDU_NMSE"]
+    raw_rows = [
+        [
+            "BRISKNet",
+            _format_mean_std_precise(*raw_summary["raw_dc_mse"]),
+            _format_mean_std_precise(*raw_summary["raw_dc_mae"]),
+            _format_mean_std_precise(*raw_summary["raw_ssdu_nmse"]),
+        ],
+        [
+            "GRASP",
+            _format_mean_std_precise(*raw_summary["raw_grasp_dc_mse"]),
+            _format_mean_std_precise(*raw_summary["raw_grasp_dc_mae"]),
+            _format_mean_std_precise(*raw_summary["raw_grasp_ssdu_nmse"]),
+        ],
+    ]
+    print("RAW")
+    print(_render_table(raw_headers, raw_rows))
     def _has_any_metric(keys):
         return any(
             v.get(key) is not None and np.isfinite(v.get(key))
@@ -1222,24 +1689,26 @@ def main():
         )
 
     def _print_temporal_table(label, prefix):
-        if not _has_any_metric([
-            f"{prefix}{model}_{subset}_{metric}"
-            for model in ("dl", "grasp")
-            for subset in ("all", "top10", "top20")
-            for metric in metric_names
-        ]):
+        if not _has_any_metric(
+            [
+                f"{prefix}{model}_{subset}_{metric}"
+                for model in ("dl", "grasp")
+                for subset in ("all", "top10", "top20")
+                for metric in metric_names
+            ]
+        ):
             return
         print(label)
-        header = f"{'Subset':<8} {'Metric':<22} {'DL':<16} {'GRASP':<16}"
-        print(header)
-        print("-" * len(header))
+        temporal_headers = ["Subset", "Metric", "BRISKNet", "GRASP"]
+        temporal_rows = []
         for subset in ("all", "top10", "top20"):
             for metric in metric_names:
                 dl_key = f"{prefix}dl_{subset}_{metric}"
                 grasp_key = f"{prefix}grasp_{subset}_{metric}"
-                dl_val = _format_mean_std(*_mean_std(results, dl_key))
-                grasp_val = _format_mean_std(*_mean_std(results, grasp_key))
-                print(f"{subset:<8} {metric:<22} {dl_val:<16} {grasp_val:<16}")
+                dl_val = _format_mean_std_compact(*_mean_std(results, dl_key))
+                grasp_val = _format_mean_std_compact(*_mean_std(results, grasp_key))
+                temporal_rows.append([subset, metric, dl_val, grasp_val])
+        print(_render_table(temporal_headers, temporal_rows))
 
     print("----- Temporal Fidelity Metrics (mean ± std) -----")
     _print_temporal_table("Malignant", prefix="")

@@ -4,6 +4,7 @@ import glob
 import math
 import os
 import time
+import warnings
 from typing import Tuple
 
 import h5py
@@ -29,6 +30,23 @@ from utils import (
     set_seed,
     sliding_window_inference,
 )
+
+# Silence torchmetrics/torch FutureWarning about torch.load(weights_only=...) defaults.
+warnings.filterwarnings(
+    "ignore",
+    message=r"You are using `torch\.load` with `weights_only=False`.*",
+    category=FutureWarning,
+)
+
+
+def _torch_load_checkpoint(path: str, map_location="cpu"):
+    """Load a checkpoint in the safest available way across torch versions."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+    except Exception:
+        return torch.load(path, map_location=map_location)
 
 
 ## COMMANDS
@@ -95,7 +113,7 @@ def _build_model(config: dict, device, block_dir: str):
 
 
 def _load_weights(model, ckpt_path: str):
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = _torch_load_checkpoint(ckpt_path, map_location="cpu")
     state_dict = ckpt.get("model_state_dict", ckpt)
     model.load_state_dict(remove_module_prefix(state_dict))
     return model

@@ -14,6 +14,16 @@ import random
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 
+def _torch_load_checkpoint(path: str, map_location="cpu"):
+    """Load a checkpoint in the safest available way across torch versions."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+    except Exception:
+        return torch.load(path, map_location=map_location)
+
+
 def save_csmap_png(csmap, output_dir, tag, max_coils=16, cmap="viridis"):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -606,7 +616,7 @@ def save_checkpoint(model, optimizer, epoch,
 
 
 def load_checkpoint(model, optimizer, filename):
-    ckpt = torch.load(filename, map_location="cpu")
+    ckpt = _torch_load_checkpoint(filename, map_location="cpu")
 
     model_to_load = model.module if isinstance(model, DDP) else model
 
@@ -751,7 +761,7 @@ def GRASPRecon(csmaps, kspace, spokes_per_frame, num_frames, grasp_path):
     R1 = np.squeeze(R1.get())
 
     np.save(grasp_path, R1)
-    print(f"GRASP Recon with {spokes_per_frame} spokes/frame and {num_frames} timeframes saved to {grasp_path}")
+    print(f"GRASP with {spokes_per_frame} spokes/frame and {num_frames} timeframes saved to {grasp_path}")
 
     return R1
 
