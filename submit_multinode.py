@@ -91,7 +91,7 @@ class Trainer(submitit.helpers.Checkpointable):
 def main():
     # --- Executor Configuration ---
     job_name = "ei_multinode_enh_sampling"
-    config_path = "configs/config_ei_sampling_multinode.yaml"
+    config_path = "/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_ei_sampling_multinode.yaml"
     num_nodes = 4
     gpus_per_node = 4
 
