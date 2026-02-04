@@ -1225,7 +1225,15 @@ def main():
                 gt_mag_np = gt_mag.detach().cpu().numpy().astype(np.float32, copy=False)  # (T,H,W)
                 dl_mag_np = dl_mag.detach().cpu().numpy().astype(np.float32, copy=False)  # (H,W,T)
                 dl_mag_np = np.transpose(dl_mag_np, (2, 0, 1))  # (T,H,W)
-                grasp_mag_np = grasp_mag.detach().cpu().numpy().astype(np.float32, copy=False)  # (T,H,W)
+                grasp_mag_np = grasp_mag.detach().cpu().numpy().astype(np.float32, copy=False)
+                # Canonicalize to (T,H,W) for easy comparison/debugging.
+                if (
+                    grasp_mag_np.ndim == 3
+                    and grasp_mag_np.shape[0] != gt_mag_np.shape[0]
+                    and grasp_mag_np.shape[1] == gt_mag_np.shape[0]
+                ):
+                    # Common case: (H,T,W) -> (T,H,W)
+                    grasp_mag_np = np.transpose(grasp_mag_np, (1, 0, 2))
                 zf_mag_np = np.array([], dtype=np.float32)
                 if zf_complex is not None:
                     zf_mag_np = torch.abs(zf_complex).detach().cpu().numpy().astype(np.float32, copy=False)  # (H,W,T)

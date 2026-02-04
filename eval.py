@@ -1847,14 +1847,19 @@ def eval_sample(
     denom = float(np.dot(x_recon_scale_np.flatten(), x_recon_scale_np.flatten()))
     c = float(np.dot(x_recon_scale_np.flatten(), ground_truth_np.flatten()) / (denom + 1e-12)) if denom > 0 else 1.0
     grasp_recon_scale_np = grasp_recon_np
-    if grasp_recon_np.ndim == 5 and ground_truth_np.ndim == 5:
-        # Align GRASP ordering to match GT if needed (e.g., (B,2,H,W,T) -> (B,2,T,H,W)).
-        if (
-            grasp_recon_np.shape[:2] == ground_truth_np.shape[:2]
-            and grasp_recon_np.shape[2] == ground_truth_np.shape[3]
-            and grasp_recon_np.shape[3] == ground_truth_np.shape[4]
-            and grasp_recon_np.shape[4] == ground_truth_np.shape[2]
-        ):
+    if (
+        grasp_recon_np.ndim == 5
+        and ground_truth_np.ndim == 5
+        and grasp_recon_np.shape[:2] == ground_truth_np.shape[:2]
+    ):
+        # Align GRASP ordering to match GT: (B,2,T,H,W). In this codebase, GRASP tensors are
+        # sometimes stored as (B,2,H,T,W) or (B,2,H,W,T).
+        T = int(ground_truth_np.shape[2])
+        if grasp_recon_np.shape[2] == T:
+            grasp_recon_scale_np = grasp_recon_np
+        elif grasp_recon_np.shape[3] == T:
+            grasp_recon_scale_np = np.transpose(grasp_recon_np, (0, 1, 3, 2, 4))
+        elif grasp_recon_np.shape[4] == T:
             grasp_recon_scale_np = np.transpose(grasp_recon_np, (0, 1, 4, 2, 3))
 
     denom_grasp = float(np.dot(grasp_recon_scale_np.flatten(), grasp_recon_scale_np.flatten()))
