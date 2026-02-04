@@ -1,5 +1,6 @@
 import os
 import csv
+import warnings
 from pathlib import Path
 import matplotlib.pyplot as plt
 import torch
@@ -60,6 +61,29 @@ PLOT_ADJUST = {
 # ==========================================================
 # EVALUATION FUNCTIONS
 # ==========================================================
+
+def _safe_pearsonr(x, y) -> float:
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if x.size < 2 or y.size < 2:
+        return float("nan")
+    if not np.isfinite(x).all() or not np.isfinite(y).all():
+        return float("nan")
+    if np.allclose(x, x[0]) or np.allclose(y, y[0]):
+        return float("nan")
+    corr, _ = pearsonr(x, y)
+    return float(corr)
+
+
+def _safe_tight_layout(fig, **kwargs):
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=UserWarning,
+            message=r".*Axes that are not compatible with tight_layout.*",
+        )
+        fig.tight_layout(**kwargs)
+
 
 def robust_window(img, p_low=1, p_high=99):
     lo, hi = np.percentile(img, [p_low, p_high])
@@ -164,6 +188,31 @@ def calc_dc(input, reference, device):
     mae = mae(input, reference)
 
     return mse.item(), mae.item()
+
+
+def _best_fit_complex_scale(pred: torch.Tensor, ref: torch.Tensor) -> complex | None:
+    """Least-squares complex scalar c minimizing ||c*pred - ref||_2.
+
+    Returns Python complex, or None if pred energy is ~0.
+    """
+    pred_flat = pred.reshape(-1)
+    ref_flat = ref.reshape(-1)
+    denom = torch.sum(torch.conj(pred_flat) * pred_flat)
+    if torch.abs(denom) < 1e-12:
+        return None
+    numer = torch.sum(torch.conj(pred_flat) * ref_flat)
+    return (numer / denom).item()
+
+
+def calc_dc_bestfit(pred: torch.Tensor, ref: torch.Tensor, device):
+    """Compute DC metrics after applying a best-fit complex scalar gain."""
+    c = _best_fit_complex_scale(pred, ref)
+    if c is None:
+        return None, None, None
+    c_t = torch.as_tensor(c, dtype=pred.dtype, device=pred.device)
+    pred_scaled = pred * c_t
+    dc_mse, dc_mae = calc_dc(pred_scaled, ref, device)
+    return dc_mse, dc_mae, c
 
 
 def _standardize_kspace_for_ssdu(kspace: torch.Tensor, spokes_per_frame: int) -> Tuple[torch.Tensor, int]:
@@ -976,12 +1025,9 @@ def plot_temporal_curves(
         recon_curve = [recon_img_stack[:, :, t][mask].mean() for t in range(recon_img_stack.shape[2])]
         grasp_curve = [grasp_img_stack[:, :, t][mask].mean() for t in range(grasp_img_stack.shape[2])]
 
-        # compute the pearson correlation coefficients
-        recon_correlation, _ = pearsonr(recon_curve, gt_curve)
-        grasp_correlation, _ = pearsonr(grasp_curve, gt_curve)
-
-        recon_correlation = float(recon_correlation)
-        grasp_correlation = float(grasp_correlation)
+        # compute the pearson correlation coefficients (guard against constant curves)
+        recon_correlation = _safe_pearsonr(recon_curve, gt_curve)
+        grasp_correlation = _safe_pearsonr(grasp_curve, gt_curve)
 
         region_corrs[region] = {"DL": recon_correlation, "GRASP":  grasp_correlation}
 
@@ -1012,9 +1058,9 @@ def plot_temporal_curves(
         axes[i].legend(fontsize=PLOT_FONT_SIZES["legend"])
 
     axes[0].set_ylabel("Mean Signal Intensity", fontsize=PLOT_FONT_SIZES["label"])
-    plt.tight_layout(rect=[0, 0.02, 1, 0.94], **PLOT_LAYOUT)
+    _safe_tight_layout(fig, rect=[0, 0.02, 1, 0.94], **PLOT_LAYOUT)
     plt.savefig(filename, bbox_inches='tight', pad_inches=0.02)
-    plt.close()
+    plt.close(fig)
 
     return region_corrs
 
@@ -1125,9 +1171,9 @@ def plot_temporal_curves_normalized(
         axes[i].legend(fontsize=PLOT_FONT_SIZES["legend"])
 
     axes[0].set_ylabel("Baseline-Subtracted Signal", fontsize=PLOT_FONT_SIZES["label"])
-    plt.tight_layout(rect=[0, 0.02, 1, 0.94], **PLOT_LAYOUT)
+    _safe_tight_layout(fig, rect=[0, 0.02, 1, 0.94], **PLOT_LAYOUT)
     plt.savefig(filename, bbox_inches='tight', pad_inches=0.02)
-    plt.close()
+    plt.close(fig)
 
 
 
@@ -1227,7 +1273,7 @@ def plot_single_temporal_curve(
         ax.axis('off')
 
     # --- 4. Finalize and Save ---
-    plt.tight_layout(rect=[0, 0, 1, 0.9], **PLOT_LAYOUT)
+    _safe_tight_layout(fig, rect=[0, 0, 1, 0.9], **PLOT_LAYOUT)
     plt.savefig(filename, bbox_inches='tight', pad_inches=0.02, dpi=150)
     plt.close(fig)
 
@@ -1522,7 +1568,19 @@ def plot_time_series(
 # ==========================================================
 # EVALUATION 
 # ==========================================================
-def eval_grasp(kspace, csmap, ground_truth, grasp_recon, physics, device, output_dir, rescale, dro_eval=True):
+def eval_grasp(
+    kspace,
+    csmap,
+    ground_truth,
+    grasp_recon,
+    physics,
+    device,
+    output_dir,
+    rescale,
+    dro_eval=True,
+    report_bestfit_dc: bool = False,
+    return_aux: bool = False,
+):
 
 
     # ==========================================================
@@ -1538,6 +1596,17 @@ def eval_grasp(kspace, csmap, ground_truth, grasp_recon, physics, device, output
 
     # Compute MSE
     dc_mse_grasp, dc_mae_grasp = calc_dc(grasp_kspace, kspace, device)
+    aux = {}
+    dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(grasp_kspace, kspace, device)
+    if dc_mse_bestfit is not None and dc_scale is not None:
+        aux.update(
+            {
+                "grasp_dc_mse_bestfit": dc_mse_bestfit,
+                "grasp_dc_mae_bestfit": dc_mae_bestfit,
+                "grasp_dc_scale_abs": float(abs(dc_scale)),
+                "grasp_dc_scale_phase": float(np.angle(dc_scale)),
+            }
+        )
 
 
     # ==========================================================
@@ -1572,10 +1641,124 @@ def eval_grasp(kspace, csmap, ground_truth, grasp_recon, physics, device, output
         ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp = calc_image_metrics(grasp_mag.contiguous(), gt_mag.contiguous(), data_range, device)
 
 
+        if return_aux:
+            return ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp, aux
         return ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp
 
     else:
+        if return_aux:
+            return dc_mse_grasp, dc_mae_grasp, aux
         return dc_mse_grasp, dc_mae_grasp
+
+
+def eval_zf(
+    kspace,
+    csmap,
+    ground_truth,
+    physics,
+    mask,
+    device,
+    rescale: bool,
+    zf_complex_override: torch.Tensor | None = None,
+    report_bestfit_dc: bool = False,
+    return_aux: bool = False,
+):
+    """Adjoint (density-compensated) baseline + metrics against DRO ground truth."""
+    kspace = kspace.squeeze()
+    zf_complex = zf_complex_override if zf_complex_override is not None else physics(True, kspace, csmap)
+    zf = torch.stack([zf_complex.real, zf_complex.imag], dim=0).unsqueeze(0)
+
+    aux = {}
+
+    zf_kspace = physics(False, zf_complex.to(csmap.dtype), csmap)
+    dc_mse_zf, dc_mae_zf = calc_dc(zf_kspace, kspace, device)
+    dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(zf_kspace, kspace, device)
+    if dc_mse_bestfit is not None and dc_scale is not None:
+        aux.update(
+            {
+                "zf_dc_mse_bestfit": dc_mse_bestfit,
+                "zf_dc_mae_bestfit": dc_mae_bestfit,
+                "zf_dc_scale_abs": float(abs(dc_scale)),
+                "zf_dc_scale_phase": float(np.angle(dc_scale)),
+            }
+        )
+
+    # Best-fit gain against GT (real scalar, matching eval_sample convention).
+    zf_np = zf.cpu().numpy()
+    gt_np = ground_truth.cpu().numpy()
+    zf_scale_np = zf_np
+    if zf_np.ndim == 5 and gt_np.ndim == 5:
+        if (
+            zf_np.shape[:2] == gt_np.shape[:2]
+            and zf_np.shape[2] == gt_np.shape[3]
+            and zf_np.shape[3] == gt_np.shape[4]
+            and zf_np.shape[4] == gt_np.shape[2]
+        ):
+            zf_scale_np = np.transpose(zf_np, (0, 1, 4, 2, 3))
+    denom = float(np.dot(zf_scale_np.flatten(), zf_scale_np.flatten()))
+    c = float(np.dot(zf_scale_np.flatten(), gt_np.flatten()) / (denom + 1e-12)) if denom > 0 else 1.0
+    aux["zf_img_scale"] = c
+    if rescale:
+        zf = torch.tensor(c * zf_np, device=device)
+
+    # Convert to magnitude (treat time as depth slices).
+    gt_mag = torch.sqrt(ground_truth[:, 0, ...] ** 2 + ground_truth[:, 1, ...] ** 2)  # (B,T,H,W)
+    zf_mag = torch.sqrt(zf[:, 0, ...] ** 2 + zf[:, 1, ...] ** 2)  # (B,H,W,T)
+    zf_mag = zf_mag.permute(0, 3, 1, 2).unsqueeze(1)  # (B,1,T,H,W)
+    gt_mag = gt_mag.unsqueeze(1)  # (B,1,T,H,W)
+
+    min_val = torch.min(gt_mag).item()
+    max_val = torch.max(gt_mag).item()
+    data_range = (min_val, max_val)
+    ssim_zf, psnr_zf, mse_zf, lpips_zf = calc_image_metrics(zf_mag.contiguous(), gt_mag.contiguous(), data_range, device)
+
+    # Foreground-masked metrics (same union mask as DRO tissues if available).
+    masks_np = {key: val.cpu().numpy().squeeze().astype(bool) for key, val in (mask or {}).items()}
+    foreground_mask = None
+    foreground_fraction = None
+    if masks_np:
+        union = np.zeros(gt_mag.shape[-2:], dtype=bool)
+        for mask_arr in masks_np.values():
+            if mask_arr is None:
+                continue
+            mask_arr = np.asarray(mask_arr).squeeze().astype(bool)
+            if mask_arr.shape != union.shape:
+                continue
+            union |= mask_arr
+        if union.any() and union.mean() < 0.999:
+            foreground_mask = union
+            foreground_fraction = float(union.mean())
+    if foreground_mask is None:
+        gt_mag_np = gt_mag.squeeze().detach().cpu().numpy()  # (T,H,W)
+        max_gt = float(np.max(gt_mag_np))
+        if max_gt > 0:
+            support = np.max(gt_mag_np, axis=0) > (1e-3 * max_gt)
+            if support.any():
+                foreground_mask = support
+                foreground_fraction = float(support.mean())
+
+    if foreground_mask is not None:
+        gt_mag_np = gt_mag.squeeze().detach().cpu().numpy()  # (T,H,W)
+        zf_mag_np = zf_mag.squeeze().detach().cpu().numpy()  # (T,H,W)
+        # Convert to (H,W,T) for convenient masking.
+        gt_mag_np_hw = np.transpose(gt_mag_np, (1, 2, 0))
+        zf_mag_np_hw = np.transpose(zf_mag_np, (1, 2, 0))
+        dr = float(gt_mag_np_hw.max() - gt_mag_np_hw.min())
+        zf_mse_fg = float(np.mean((zf_mag_np_hw - gt_mag_np_hw)[foreground_mask] ** 2))
+        zf_psnr_fg = None
+        if dr > 0 and zf_mse_fg > 0:
+            zf_psnr_fg = float(20.0 * np.log10(dr) - 10.0 * np.log10(zf_mse_fg))
+        aux.update(
+            {
+                "zf_psnr_fg": zf_psnr_fg,
+                "zf_mse_fg": zf_mse_fg,
+                "fg_fraction": foreground_fraction,
+            }
+        )
+
+    if return_aux:
+        return ssim_zf, psnr_zf, mse_zf, lpips_zf, dc_mse_zf, dc_mae_zf, aux
+    return ssim_zf, psnr_zf, mse_zf, lpips_zf, dc_mse_zf, dc_mae_zf
 
 
 
@@ -1597,6 +1780,7 @@ def eval_sample(
     grasp_path=None,
     raw_slice_idx=None,
     rescale=True,
+    report_bestfit_dc: bool = False,
     filename_suffix="",
     baseline_mode: str = "fraction",
     baseline_seconds: float = 20.0,
@@ -1630,6 +1814,17 @@ def eval_sample(
     # Compute MSE
     dc_mse, dc_mae = calc_dc(recon_kspace, kspace, device)
 
+    extra_metrics = {}
+    dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(recon_kspace, kspace, device)
+    if dc_mse_bestfit is not None and dc_scale is not None:
+        extra_metrics.update(
+            {
+                "dl_dc_mse_bestfit": dc_mse_bestfit,
+                "dl_dc_mae_bestfit": dc_mae_bestfit,
+                "dl_dc_scale_abs": float(abs(dc_scale)),
+                "dl_dc_scale_phase": float(np.angle(dc_scale)),
+            }
+        )
 
     # RESCALE
 
@@ -1638,13 +1833,47 @@ def eval_sample(
     ground_truth_np = ground_truth.cpu().numpy()
     grasp_recon_np = grasp_img.cpu().numpy()
 
-    if rescale:
-        c = np.dot(x_recon_np.flatten(), ground_truth_np.flatten()) / np.dot(x_recon_np.flatten(), x_recon_np.flatten())
-        recon_complex_scaled = torch.tensor(c * x_recon_np, device=device)
-        
-        c_grasp = np.dot(grasp_recon_np.flatten(), ground_truth_np.flatten()) / np.dot(grasp_recon_np.flatten(), grasp_recon_np.flatten())
-        grasp_img = torch.tensor(c_grasp * grasp_recon_np, device=device)
+    x_recon_scale_np = x_recon_np
+    if x_recon_np.ndim == 5 and ground_truth_np.ndim == 5:
+        # Align (B,2,H,W,T) -> (B,2,T,H,W) for best-fit scalar computation.
+        if (
+            x_recon_np.shape[:2] == ground_truth_np.shape[:2]
+            and x_recon_np.shape[2] == ground_truth_np.shape[3]
+            and x_recon_np.shape[3] == ground_truth_np.shape[4]
+            and x_recon_np.shape[4] == ground_truth_np.shape[2]
+        ):
+            x_recon_scale_np = np.transpose(x_recon_np, (0, 1, 4, 2, 3))
 
+    denom = float(np.dot(x_recon_scale_np.flatten(), x_recon_scale_np.flatten()))
+    c = float(np.dot(x_recon_scale_np.flatten(), ground_truth_np.flatten()) / (denom + 1e-12)) if denom > 0 else 1.0
+    grasp_recon_scale_np = grasp_recon_np
+    if grasp_recon_np.ndim == 5 and ground_truth_np.ndim == 5:
+        # Align GRASP ordering to match GT if needed (e.g., (B,2,H,W,T) -> (B,2,T,H,W)).
+        if (
+            grasp_recon_np.shape[:2] == ground_truth_np.shape[:2]
+            and grasp_recon_np.shape[2] == ground_truth_np.shape[3]
+            and grasp_recon_np.shape[3] == ground_truth_np.shape[4]
+            and grasp_recon_np.shape[4] == ground_truth_np.shape[2]
+        ):
+            grasp_recon_scale_np = np.transpose(grasp_recon_np, (0, 1, 4, 2, 3))
+
+    denom_grasp = float(np.dot(grasp_recon_scale_np.flatten(), grasp_recon_scale_np.flatten()))
+    c_grasp = (
+        float(np.dot(grasp_recon_scale_np.flatten(), ground_truth_np.flatten()) / (denom_grasp + 1e-12))
+        if denom_grasp > 0
+        else 1.0
+    )
+
+    extra_metrics.update(
+        {
+            "dl_img_scale": c,
+            "grasp_img_scale": c_grasp,
+        }
+    )
+
+    if rescale:
+        recon_complex_scaled = torch.tensor(c * x_recon_np, device=device)
+        grasp_img = torch.tensor(c_grasp * grasp_recon_np, device=device)
     else:
         recon_complex_scaled = torch.tensor(x_recon_np, device=device)
         grasp_img = torch.tensor(grasp_recon_np, device=device)
@@ -1696,6 +1925,28 @@ def eval_sample(
         gt_mag_np = np.abs(gt_complex_np)
         
         masks_np = {key: val.cpu().numpy().squeeze().astype(bool) for key, val in mask.items()}
+        foreground_mask = None
+        foreground_fraction = None
+        if masks_np:
+            union = np.zeros(recon_mag_np.shape[:2], dtype=bool)
+            for mask_arr in masks_np.values():
+                if mask_arr is None:
+                    continue
+                mask_arr = np.asarray(mask_arr).squeeze().astype(bool)
+                if mask_arr.shape != union.shape:
+                    continue
+                union |= mask_arr
+            if union.any() and union.mean() < 0.999:
+                foreground_mask = union
+                foreground_fraction = float(union.mean())
+
+        if foreground_mask is None:
+            max_val = float(np.max(gt_mag_np))
+            if max_val > 0:
+                support = np.max(gt_mag_np, axis=2) > (1e-3 * max_val)
+                if support.any():
+                    foreground_mask = support
+                    foreground_fraction = float(support.mean())
         roi_source = None
         region_label_map = None
         if "malignant" in masks_np and masks_np["malignant"].any():
@@ -1780,6 +2031,28 @@ def eval_sample(
             )
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
+
+        if foreground_mask is not None:
+            data_range = float(gt_mag_np.max() - gt_mag_np.min())
+            dl_mse_fg = float(np.mean((recon_mag_np - gt_mag_np)[foreground_mask] ** 2))
+            grasp_mse_fg = float(np.mean((grasp_mag_np - gt_mag_np)[foreground_mask] ** 2))
+            dl_psnr_fg = None
+            grasp_psnr_fg = None
+            if data_range > 0 and dl_mse_fg > 0:
+                dl_psnr_fg = float(20.0 * np.log10(data_range) - 10.0 * np.log10(dl_mse_fg))
+            if data_range > 0 and grasp_mse_fg > 0:
+                grasp_psnr_fg = float(20.0 * np.log10(data_range) - 10.0 * np.log10(grasp_mse_fg))
+            temporal_metrics.update(
+                {
+                    "dl_psnr_fg": dl_psnr_fg,
+                    "dl_mse_fg": dl_mse_fg,
+                    "grasp_psnr_fg": grasp_psnr_fg,
+                    "grasp_mse_fg": grasp_mse_fg,
+                    "fg_fraction": foreground_fraction,
+                }
+            )
+        if extra_metrics:
+            temporal_metrics.update(extra_metrics)
 
         primary_region = None
         if "malignant" in masks_np and masks_np["malignant"].any():
