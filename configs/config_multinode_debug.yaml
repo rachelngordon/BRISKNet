@@ -76,7 +76,7 @@ model:
   losses:
     adj_loss:
       weight: 1
-    use_ei_loss: False
+    use_ei_loss: True
     mc_loss:
       weight: 10
       metric: "MAE"
@@ -85,9 +85,9 @@ model:
       temporal_transform: "warp"
       spatial_transform: "all"
       rotate_range: 20
-      weight: 0
-      warmup: 25
-      duration: 10000
+      weight: 10000
+      warmup: 10
+      duration: 5
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
@@ -98,7 +98,7 @@ model:
 
 # Training settings
 training:
-  epochs: 2
+  epochs: 3
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

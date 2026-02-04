@@ -90,7 +90,7 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_multinode_higher_sampling_arr_enh"
+    job_name = "ei_multinode_enh_sampling"
     config_path = "configs/config_ei_sampling_multinode.yaml"
     num_nodes = 4
     gpus_per_node = 4
@@ -109,7 +109,7 @@ def main():
         cpus_per_task=8,
         slurm_gres=f"gpu:{gpus_per_node}",
         timeout_min=700,
-        slurm_additional_parameters={"requeue": True},
+        slurm_additional_parameters={"requeue": True, "exclude": "k002,j001-ds,j005-ds"},
         srun_args=["--cpu-bind=none"],
     )
 
