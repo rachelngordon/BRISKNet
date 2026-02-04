@@ -107,7 +107,7 @@ model:
     mc_loss:
       metric: MAE
       weight: 1
-    use_ei_loss: false
+    use_ei_loss: True
   lowk_alpha: 1.0
   lowk_frac: 0.125
   name: LSFPNet
