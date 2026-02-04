@@ -62,5 +62,9 @@ def apply_cluster_paths(config: dict) -> dict:
 
     if "output_dir" in exp_cfg:
         exp_cfg["output_dir"] = _swap_base(exp_cfg["output_dir"], cluster, "code")
+    if "pretrained_checkpoint" in exp_cfg:
+        exp_cfg["pretrained_checkpoint"] = _swap_base(
+            exp_cfg["pretrained_checkpoint"], cluster, "code"
+        )
 
     return config

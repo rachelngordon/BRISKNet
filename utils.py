@@ -660,6 +660,52 @@ def load_checkpoint(model, optimizer, filename):
 
     return model, optimizer, ckpt.get("epoch", 1), ckpt.get("ei_weight"), ckpt.get("step0_train_ei_loss"), ckpt.get("epoch_train_mc_loss"), train_curves, val_curves, eval_curves, ckpt.get("avg_grasp_ssim"), ckpt.get("avg_grasp_psnr"), ckpt.get("avg_grasp_mse"), ckpt.get("avg_grasp_lpips"), ckpt.get("avg_grasp_dc_mse"), ckpt.get("avg_grasp_dc_mae"), ckpt.get("avg_grasp_curve_corr"), ckpt.get("avg_grasp_raw_dc_mae"), ckpt.get("avg_grasp_raw_dc_mse")
 
+
+def load_pretrained_weights(model, filename, skip_prefixes=None):
+    """
+    Load model weights for warm-starting without optimizer/epoch state.
+
+    This is forgiving about missing/unexpected keys and shape mismatches,
+    which is useful when enabling new components (e.g., encodings).
+    """
+    ckpt = _torch_load_checkpoint(filename, map_location="cpu")
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    state_dict = remove_module_prefix(state_dict)
+
+    model_to_load = model.module if isinstance(model, DDP) else model
+    model_state = model_to_load.state_dict()
+
+    skip_prefixes = tuple(skip_prefixes or [])
+    filtered_state = {}
+    skipped_keys = []
+    mismatched_keys = []
+
+    for key, value in state_dict.items():
+        if skip_prefixes and key.startswith(skip_prefixes):
+            skipped_keys.append(key)
+            continue
+        if key not in model_state:
+            skipped_keys.append(key)
+            continue
+        if model_state[key].shape != value.shape:
+            mismatched_keys.append((key, tuple(value.shape), tuple(model_state[key].shape)))
+            continue
+        filtered_state[key] = value
+
+    incompatible = model_to_load.load_state_dict(filtered_state, strict=False)
+
+    info = {
+        "checkpoint_keys": len(state_dict),
+        "loaded_keys": len(filtered_state),
+        "skipped_keys": len(skipped_keys),
+        "skipped_sample": skipped_keys[:10],
+        "mismatched_keys": mismatched_keys,
+        "missing_keys": len(incompatible.missing_keys),
+        "unexpected_keys": len(incompatible.unexpected_keys),
+        "checkpoint_epoch": ckpt.get("epoch"),
+    }
+    return model, info
+
 def to_torch_complex(x: torch.Tensor):
     """(B, 2, ...) real -> (B, ...) complex"""
     assert x.shape[1] == 2, (

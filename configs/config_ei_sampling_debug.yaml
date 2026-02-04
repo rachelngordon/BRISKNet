@@ -2,8 +2,8 @@ data:
   coils: 16
   dataset_key: kspace
   eval_frequency: 5
-  eval_spokes: 36
-  eval_timeframes: 8
+  eval_spokes: 8
+  eval_timeframes: 36
   flip_kspace: false
   fpg: 36
   height: 320
@@ -13,16 +13,16 @@ data:
   slices_to_eval: 1
   spf_aug: false
   split_file: /home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json
-  timeframes: 8
+  timeframes: 36
   total_spokes: 288
-  train_spokes_per_frame: 36
+  train_spokes_per_frame: 8
   traj_method: get_traj
   val_split_ratio: 0.2
   weight_accelerations: false
   width: 320
 dataloader:
   batch_size: 1
-  max_subjects: 3
+  max_subjects: 2
   num_random_slices: 4
   num_workers: 2
   shuffle: true
@@ -31,13 +31,13 @@ dataloader:
   slice_range_start: None
   slice_sampling_mode: nonenhancing
   slice_sampling_uniform_fraction: 0.6
-  slice_sampling_filter_quantile: 0.3
+  slice_sampling_filter_quantile: 0.4
   slice_sampling_no_replacement: true
   slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
   slice_sampling_cache_workers: 4
 debugging:
   calc_step_0: true
-  calc_step_0_val: true
+  calc_step_0_val: false
   enable_gradient_monitoring: true
   monitoring_interval: 5
   distributed_sample_check: false
@@ -52,6 +52,7 @@ evaluation:
 experiment:
   cluster: DSI
   output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  pretrained_checkpoint: '/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_diffeo_36spf/ei_diffeo_36spf_model.pth'
 model:
   activation_checkpointing: false
   cascades: 2

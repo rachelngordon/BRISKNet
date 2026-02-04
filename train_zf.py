@@ -25,7 +25,7 @@ from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
 from radial_lsfp import MCNUFFT
-from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
+from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
 from eval import eval_grasp, eval_sample
 import csv
 import math
@@ -861,14 +861,81 @@ def main():
     )
 
 
+    pretrained_checkpoint = config.get("experiment", {}).get("pretrained_checkpoint", None)
+    if isinstance(pretrained_checkpoint, str):
+        if pretrained_checkpoint.strip().lower() in ("", "none", "null"):
+            pretrained_checkpoint = None
+
     # Load the checkpoint to resume training
     if resume_from_checkpoint:
         # if global_rank == 0 or config['training']['multigpu'] == False:
         checkpoint_file = os.path.join(output_dir, f'{exp_name}_model.pth')
         model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
+        if pretrained_checkpoint and (global_rank == 0 or not config['training']['multigpu']):
+            print(
+                f"[Checkpoint] Found pretrained_checkpoint={pretrained_checkpoint}, "
+                "but an existing run checkpoint was detected; resuming instead."
+            )
 
     else:
         start_epoch = 1
+        if pretrained_checkpoint:
+            if not os.path.isfile(pretrained_checkpoint):
+                raise FileNotFoundError(
+                    f"Pretrained checkpoint not found: {pretrained_checkpoint}"
+                )
+
+            skip_prefixes = []
+            enc_skip_reason = None
+            ckpt_cfg_path = os.path.join(os.path.dirname(pretrained_checkpoint), "config.yaml")
+            if os.path.isfile(ckpt_cfg_path):
+                try:
+                    with open(ckpt_cfg_path, "r") as file:
+                        ckpt_cfg = yaml.safe_load(file) or {}
+                    ckpt_model_cfg = ckpt_cfg.get("model", {})
+                    ckpt_encode_acc = bool(ckpt_model_cfg.get("encode_acceleration", False))
+                    ckpt_encode_time = bool(ckpt_model_cfg.get("encode_time_index", False))
+                    cur_encode_acc = bool(config["model"].get("encode_acceleration", False))
+                    cur_encode_time = bool(config["model"].get("encode_time_index", False))
+                    if (cur_encode_acc and not ckpt_encode_acc) or (cur_encode_time and not ckpt_encode_time):
+                        skip_prefixes.append("mapping_network.")
+                        enc_skip_reason = (
+                            f"checkpoint encodings (acc={ckpt_encode_acc}, time={ckpt_encode_time}) "
+                            f"do not include current encodings (acc={cur_encode_acc}, time={cur_encode_time})"
+                        )
+                except Exception as exc:
+                    if global_rank == 0 or not config['training']['multigpu']:
+                        print(f"[Checkpoint] Warning: failed to read {ckpt_cfg_path}: {exc}")
+
+            model, preload_info = load_pretrained_weights(
+                model,
+                pretrained_checkpoint,
+                skip_prefixes=skip_prefixes,
+            )
+            if global_rank == 0 or not config['training']['multigpu']:
+                print(f"[Checkpoint] Loaded pretrained weights from {pretrained_checkpoint}")
+                if enc_skip_reason:
+                    print(f"[Checkpoint] Skipping encoding weights: {enc_skip_reason}")
+                if preload_info.get("mismatched_keys"):
+                    mismatched_preview = ", ".join(
+                        k for k, _, _ in preload_info["mismatched_keys"][:5]
+                    )
+                    print(f"[Checkpoint] Skipped {len(preload_info['mismatched_keys'])} mismatched keys (e.g., {mismatched_preview})")
+                print(
+                    "[Checkpoint] Preload summary: "
+                    f"loaded={preload_info.get('loaded_keys')}, "
+                    f"skipped={preload_info.get('skipped_keys')}, "
+                    f"missing={preload_info.get('missing_keys')}, "
+                    f"unexpected={preload_info.get('unexpected_keys')}"
+                )
+                if run_state is not None:
+                    with state_lock:
+                        run_state["pretrained_checkpoint"] = {
+                            "loaded": True,
+                            "path": pretrained_checkpoint,
+                            "epoch": preload_info.get("checkpoint_epoch"),
+                        }
+                        _save_run_state(run_state_path, run_state)
         # target_w_ei = 0.0
 
 
@@ -2254,13 +2321,6 @@ def main():
 
                     if global_rank == 0 or not config['training']['multigpu']:
 
-                        # Save the model checkpoint
-                        train_curves, val_curves, eval_curves = _build_checkpoint_curves()
-                        model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
-                        save_checkpoint(model, optimizer, epoch + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
-                        print(f'Model saved to {model_save_path}')
-
-
                         # plot losses in one figure
                         # Set the seaborn style
                         sns.set_style("whitegrid")
@@ -2629,6 +2689,33 @@ def main():
                     print(f"GRASP DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {np.std(raw_grasp_dc_maes):.4f}")
                     print(f"GRASP DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {np.std(raw_grasp_dc_mses):.4f}")
                     print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {np.std(grasp_curve_corrs):.4f}")
+
+            # Always save the latest checkpoint after each epoch.
+            if global_rank == 0 or not config['training']['multigpu']:
+                train_curves, val_curves, eval_curves = _build_checkpoint_curves()
+                model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    epoch + 1,
+                    train_curves,
+                    val_curves,
+                    eval_curves,
+                    target_w_ei,
+                    step0_train_ei_loss,
+                    epoch_train_mc_loss,
+                    avg_grasp_ssim,
+                    avg_grasp_psnr,
+                    avg_grasp_mse,
+                    avg_grasp_lpips,
+                    avg_grasp_dc_mse,
+                    avg_grasp_dc_mae,
+                    avg_grasp_curve_corr,
+                    avg_grasp_raw_dc_mae,
+                    avg_grasp_raw_dc_mse,
+                    model_save_path,
+                )
+                print(f"[Checkpoint] Latest model saved to {model_save_path}")
 
             if (
                 not mc_only_checkpoint_saved
