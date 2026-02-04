@@ -28,6 +28,8 @@ import pandas as pd
 from functools import lru_cache
 from cluster_paths import _swap_base
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from scipy.ndimage import binary_fill_holes, label as nd_label
+from skimage.filters import threshold_otsu
 
 
 
@@ -108,6 +110,51 @@ def robust_window_multi(images, p_low=1, p_high=99.5):
     if hi <= lo:
         hi = lo + 1e-6
     return lo, hi
+
+
+def _infer_foreground_mask_from_stack(img_stack: np.ndarray) -> tuple[np.ndarray | None, float | None]:
+    """Infer a coarse foreground/tissue mask from a (H, W, T) magnitude stack."""
+    if img_stack is None:
+        return None, None
+    stack = np.asarray(img_stack)
+    if stack.ndim != 3:
+        return None, None
+    if not np.isfinite(stack).any():
+        return None, None
+
+    # Use a max-projection to capture the body/breast across time.
+    proj = np.nanmax(stack, axis=2)
+    proj = np.asarray(proj, dtype=np.float32)
+    proj[np.isnan(proj)] = 0.0
+    max_val = float(np.max(proj))
+    if not np.isfinite(max_val) or max_val <= 0:
+        return None, None
+
+    # Otsu threshold tends to separate background/noise from anatomy reasonably well.
+    try:
+        vals = proj[np.isfinite(proj)]
+        thr = float(threshold_otsu(vals))
+    except Exception:
+        thr = 0.05 * max_val
+    thr = max(0.0, min(thr, 0.9 * max_val))
+    mask = proj > thr
+
+    # Clean up: fill holes + keep largest connected component (reduces speckle in background).
+    try:
+        mask = binary_fill_holes(mask)
+        labeled, n = nd_label(mask)
+        if n > 1:
+            counts = np.bincount(labeled.ravel())
+            counts[0] = 0
+            largest = int(np.argmax(counts))
+            mask = labeled == largest
+    except Exception:
+        pass
+
+    frac = float(mask.mean()) if mask.size else None
+    if frac is None or frac <= 0 or frac >= 0.999:
+        return None, None
+    return mask.astype(bool), frac
 
 
 def normalize_for_lpips(image, data_range):
@@ -1962,10 +2009,20 @@ def eval_sample(
             roi_source = "benign"
             print(f"Using benign ROI for plots (no malignant mask) for {patient_id or plot_label}.")
         else:
-            masks_np = {"full": np.ones(recon_mag_np.shape[:2], dtype=bool)}
-            roi_source = "full"
-            region_label_map = {"full": "Full"}
-            print(f"No ROI mask found; plotting whole-image mean curve for {patient_id or plot_label}.")
+            fg_mask, fg_fraction = _infer_foreground_mask_from_stack(grasp_mag_np)
+            if fg_mask is not None:
+                masks_np = {"foreground": fg_mask}
+                roi_source = "foreground"
+                region_label_map = {"foreground": "Foreground"}
+                print(
+                    "No ROI mask found; plotting foreground mean curve "
+                    f"(mask fraction {fg_fraction:.3f}) for {patient_id or plot_label}."
+                )
+            else:
+                masks_np = {"full": np.ones(recon_mag_np.shape[:2], dtype=bool)}
+                roi_source = "full"
+                region_label_map = {"full": "Full"}
+                print(f"No ROI mask found; plotting whole-image mean curve for {patient_id or plot_label}.")
 
         num_frames = recon_mag_np.shape[2]
 
@@ -2066,10 +2123,14 @@ def eval_sample(
             primary_region = "malignant"
         elif "benign" in masks_np and masks_np["benign"].any():
             primary_region = "benign"
+        elif "foreground" in masks_np and masks_np["foreground"].any():
+            primary_region = "foreground"
         elif "full" in masks_np and masks_np["full"].any():
             primary_region = "full"
 
-        tumor_mask_for_plot = None if primary_region in (None, "full") else masks_np.get(primary_region)
+        tumor_mask_for_plot = (
+            None if primary_region in (None, "full", "foreground") else masks_np.get(primary_region)
+        )
         if primary_region is not None and plot_label is not None:
             
             # --- Plot Spatial Quality at the central timepoint ---
@@ -2120,16 +2181,17 @@ def eval_sample(
                 region_label_map=region_label_map,
             )
 
-            plot_single_temporal_curve(
-                img_stack=recon_mag_np,
-                masks=masks_np,
-                time_points=aif_time_points,
-                num_frames=num_frames,
-                filename=os.path.join(output_dir, f"recon_temporal_curve_{plot_label}{suffix}.png"),
-                acceleration=acceleration,
-                spokes_per_frame=spokes_per_frame,
-                region_key=primary_region,
-            )
+            if primary_region in ("malignant", "benign"):
+                plot_single_temporal_curve(
+                    img_stack=recon_mag_np,
+                    masks=masks_np,
+                    time_points=aif_time_points,
+                    num_frames=num_frames,
+                    filename=os.path.join(output_dir, f"recon_temporal_curve_{plot_label}{suffix}.png"),
+                    acceleration=acceleration,
+                    spokes_per_frame=spokes_per_frame,
+                    region_key=primary_region,
+                )
 
             plot_time_series(
                 recon_img_stack=recon_mag_np,
@@ -2276,10 +2338,14 @@ def eval_sample(
             primary_region = "malignant"
         elif "benign" in masks_np and masks_np["benign"].any():
             primary_region = "benign"
+        elif "foreground" in masks_np and masks_np["foreground"].any():
+            primary_region = "foreground"
         elif "full" in masks_np and masks_np["full"].any():
             primary_region = "full"
 
-        tumor_mask_for_plot = None if primary_region in (None, "full") else masks_np.get(primary_region)
+        tumor_mask_for_plot = (
+            None if primary_region in (None, "full", "foreground") else masks_np.get(primary_region)
+        )
         if primary_region is not None and plot_label is not None:
             
             # --- Plot Spatial Quality at the central timepoint ---
@@ -2331,16 +2397,17 @@ def eval_sample(
                 region_label_map=region_label_map,
             )
 
-            plot_single_temporal_curve(
-                img_stack=recon_mag_np,
-                masks=masks_np,
-                time_points=aif_time_points,
-                num_frames=num_frames,
-                filename=os.path.join(output_dir, f"non_dro_recon_temporal_curve_{plot_label}{suffix}.png"),
-                acceleration=acceleration,
-                spokes_per_frame=spokes_per_frame,
-                region_key=primary_region,
-            )
+            if primary_region in ("malignant", "benign"):
+                plot_single_temporal_curve(
+                    img_stack=recon_mag_np,
+                    masks=masks_np,
+                    time_points=aif_time_points,
+                    num_frames=num_frames,
+                    filename=os.path.join(output_dir, f"non_dro_recon_temporal_curve_{plot_label}{suffix}.png"),
+                    acceleration=acceleration,
+                    spokes_per_frame=spokes_per_frame,
+                    region_key=primary_region,
+                )
 
             plot_time_series(
                 recon_img_stack=recon_mag_np,
