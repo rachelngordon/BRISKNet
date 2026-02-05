@@ -44,11 +44,13 @@ import signal
 from torch.utils.tensorboard import SummaryWriter
 from cluster_paths import apply_cluster_paths
 from contextlib import nullcontext
+from datetime import timedelta
 
 
 def setup():
     """Initializes the distributed process group."""
-    dist.init_process_group("nccl")
+    # dist.init_process_group("nccl")
+    dist.init_process_group("nccl", timeout=timedelta(seconds=3600))
 
 def cleanup():
     if dist.is_available() and dist.is_initialized():
