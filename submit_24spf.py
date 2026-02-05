@@ -44,7 +44,7 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_24spf_sampling_all_transforms"
+    job_name = "ei_24spf_slice_sampling_all_transforms"
     config_path = 'configs/config_sampling_24spf.yaml'
     num_gpus = 4
 

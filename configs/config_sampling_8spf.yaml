@@ -24,9 +24,9 @@ data:
 
 # Experiment settings
 experiment:
-  output_dir: "/home/rachelgordon/mri_recon/radial-breast-ddei/output"
+  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
-  pretrained_checkpoint: '/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_diffeo_36spf/ei_diffeo_36spf_model.pth'
+  pretrained_checkpoint: '/net/projects2/annawoodard/rachelgordon/experiments/mc_36spf_overfit/mc_36spf_overfit_best_model.pth'
 
 # DataLoader settings
 dataloader:
@@ -75,7 +75,7 @@ model:
   checkpoint_use_reentrant: false
   optimizer:
     name: "Adam"
-    lr: 0.001
+    lr: 0.00005
     weight_decay: 0.0
     b1: 0.9
     b2: 0.999
@@ -93,7 +93,7 @@ model:
       spatial_transform: "diffeo"
       rotate_range: 60
       weight: 10000
-      warmup: 10
+      warmup: 20
       duration: 5
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
@@ -112,7 +112,7 @@ model:
       no_grad: false
     # Operator-level (binning) equivariance (DDEI-ish).
     rebin_loss:
-      enable: false
+      enable: true
       weight: 10000
       factor: 2
       metric: "MSE"
@@ -122,13 +122,14 @@ model:
 
 # Training settings
 training:
-  epochs: 1000
+  epochs: 500
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: True
   lr_schedule:
     min_lr_factor: 0.6
+    warmup_epochs: 10
   edge_time_index_sampling: true
   curriculum_learning:
     enabled: False

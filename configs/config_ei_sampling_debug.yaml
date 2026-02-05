@@ -1,9 +1,9 @@
 data:
   coils: 16
   dataset_key: kspace
-  eval_frequency: 5
-  eval_spokes: 2
-  eval_timeframes: 144
+  eval_frequency: 1
+  eval_spokes: 36
+  eval_timeframes: 8
   flip_kspace: false
   fpg: 36
   height: 320
@@ -13,9 +13,9 @@ data:
   slices_to_eval: 1
   spf_aug: false
   split_file: /home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json
-  timeframes: 144
+  timeframes: 8
   total_spokes: 288
-  train_spokes_per_frame: 2
+  train_spokes_per_frame: 36
   traj_method: get_traj
   val_split_ratio: 0.2
   weight_accelerations: false
@@ -36,7 +36,7 @@ dataloader:
   slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
   slice_sampling_cache_workers: 4
 debugging:
-  calc_step_0: false
+  calc_step_0: true
   calc_step_0_val: false
   enable_gradient_monitoring: true
   monitoring_interval: 5
@@ -105,6 +105,13 @@ model:
       baseline_seconds: 20.0
       total_seconds: 150.0
       no_grad: false
+    # Operator-level (binning) equivariance (DDEI-ish).
+    rebin_loss:
+      enable: true
+      weight: 10000
+      factor: 2
+      metric: "MSE"
+      time_index_mode: "scaled"
     mc_loss:
       metric: MAE
       weight: 1
@@ -126,6 +133,9 @@ model:
   svd_noise_std: 0.001
   use_lowk_dc: false
 training:
+  lr_schedule:
+    min_lr_factor: 0.6
+    warmup_epochs: 10
   curriculum_learning:
     enabled: false
     phases:

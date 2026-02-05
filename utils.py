@@ -631,6 +631,10 @@ def load_checkpoint(model, optimizer, filename):
         "weighted_train_mc_losses": ckpt.get("weighted_train_mc_losses", []),
         "weighted_train_ei_losses": ckpt.get("weighted_train_ei_losses", []),
         "weighted_train_adj_losses": ckpt.get("weighted_train_adj_losses", []),
+        "train_rebin_losses": ckpt.get("train_rebin_losses", []),
+        "weighted_train_rebin_losses": ckpt.get("weighted_train_rebin_losses", []),
+        "lr_history": ckpt.get("lr_history", []),
+        "lr_epochs": ckpt.get("lr_epochs", []),
     }
     val_curves = {
         "val_mc_losses": ckpt.get("val_mc_losses", []),

@@ -18,7 +18,7 @@ data:
   train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
-  eval_frequency: 1
+  eval_frequency: 5
   flip_kspace: False
   traj_method: get_traj
 
@@ -26,13 +26,14 @@ data:
 experiment:
   output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
+  pretrained_checkpoint: '/net/projects2/annawoodard/rachelgordon/experiments/mc_36spf_overfit/mc_36spf_overfit_best_model.pth'
 
 # DataLoader settings
 dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 16
+  max_subjects: 300
   num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
@@ -68,7 +69,7 @@ model:
   checkpoint_use_reentrant: false
   optimizer:
     name: "Adam"
-    lr: 0.0005
+    lr: 0.00005
     weight_decay: 0.0
     b1: 0.9
     b2: 0.999
@@ -78,31 +79,44 @@ model:
       weight: 1
     use_ei_loss: True
     mc_loss:
-      weight: 10
+      weight: 1
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "warp"
-      spatial_transform: "all"
-      rotate_range: 20
+      temporal_transform: "arrival_shift_enh_scale"
+      spatial_transform: "diffeo"
+      rotate_range: 60
       weight: 10000
-      warmup: 10
+      warmup: 20
       duration: 5
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
+      # --- arrival_shift params ---
+      arrival_shift_max_shift: 1
+      arrival_shift_percentile: 0.95
+      arrival_shift_baseline_k: 2.0
+      # --- enh_scale params ---
+      enh_scale_min: 0.85
+      enh_scale_max: 1.15
+      pre_contrast_baseline: "m_seconds"
+      baseline_seconds: 20.0
+      total_seconds: 150.0
       no_grad: false
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 3
+  epochs: 500
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: True
+  lr_schedule:
+    min_lr_factor: 0.6
+    warmup_epochs: 10
   edge_time_index_sampling: false
   curriculum_learning:
     enabled: False
@@ -129,7 +143,7 @@ evaluation:
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
-  val_noise_level: 0
+  val_noise_level: 0.05
 
 debugging:
   calc_step_0: True

@@ -94,7 +94,7 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_8spf_sampling_all_transforms"
+    job_name = "ei_8spf_slice_sampling_all_transforms"
     config_path = "/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_sampling_8spf.yaml"
     num_nodes = 4
     gpus_per_node = 4

@@ -94,8 +94,8 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_diffeo_arr_shift_enh_scale_36spf"
-    config_path = '/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_diffeo_arr_shift_enh_scale.yaml'
+    job_name = "ei_diffeo_all_transforms_36spf"
+    config_path = '/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_diffeo_all.yaml'
     num_nodes = 2
     gpus_per_node = 4
 

@@ -1084,6 +1084,10 @@ def main():
         weighted_train_mc_losses = train_curves["weighted_train_mc_losses"]
         weighted_train_ei_losses = train_curves["weighted_train_ei_losses"]
         weighted_train_adj_losses = train_curves["weighted_train_adj_losses"]
+        train_rebin_losses = train_curves.get("train_rebin_losses", [])
+        weighted_train_rebin_losses = train_curves.get("weighted_train_rebin_losses", [])
+        lr_history = train_curves.get("lr_history", [])
+        lr_epochs = train_curves.get("lr_epochs", [])
         eval_ssims = eval_curves["eval_ssims"]
         eval_psnrs = eval_curves["eval_psnrs"]
         eval_mses = eval_curves["eval_mses"]
@@ -1108,6 +1112,10 @@ def main():
         weighted_train_mc_losses = []
         weighted_train_ei_losses = []
         weighted_train_adj_losses = []
+        train_rebin_losses = []
+        weighted_train_rebin_losses = []
+        lr_history = []
+        lr_epochs = []
         eval_ssims = []
         eval_lpipses = []
         eval_psnrs = []
@@ -1163,6 +1171,10 @@ def main():
             weighted_train_mc_losses=weighted_train_mc_losses,
             weighted_train_ei_losses=weighted_train_ei_losses,
             weighted_train_adj_losses=weighted_train_adj_losses,
+            train_rebin_losses=train_rebin_losses,
+            weighted_train_rebin_losses=weighted_train_rebin_losses,
+            lr_history=lr_history,
+            lr_epochs=lr_epochs,
         )
         val_curves = dict(
             val_mc_losses=val_mc_losses,
@@ -1647,6 +1659,27 @@ def main():
             epoch_eval_peak_errs = []
 
 
+            # cosine LR with warmup (set before first step of the epoch)
+            total = epochs
+            lr_sched_cfg = config.get("training", {}).get("lr_schedule", {})
+            warm = int(lr_sched_cfg.get("warmup_epochs", 5))
+            if warm < 0:
+                warm = 0
+            lr_floor = lr_sched_cfg.get("min_lr_factor", 0.2)
+            if warm > 0 and epoch <= warm:
+                lr_scale = epoch / warm
+            else:
+                p = (epoch - warm) / max(1, total - warm)
+                lr_scale = lr_floor + (1.0 - lr_floor) * 0.5 * (1 + math.cos(math.pi * p))
+            for pg in optimizer.param_groups:
+                pg['lr'] = config["model"]["optimizer"]["lr"] * lr_scale
+
+            current_lr = optimizer.param_groups[0]["lr"]
+            lr_history.append(current_lr)
+            lr_epochs.append(epoch)
+            if global_rank == 0 or not config['training']['multigpu']:
+                writer.add_scalar('LR', current_lr, epoch)
+
             train_loader_tqdm = tqdm(
                 train_loader, desc=f"Epoch {epoch}/{epochs}  Training", unit="batch"
             )
@@ -1894,18 +1927,6 @@ def main():
                     else:
                         optimizer.step()
 
-                    # cosine LR with 5-epoch warmup
-                    total = epochs
-                    warm = 5
-                    lr_floor = config.get("training", {}).get("lr_schedule", {}).get("min_lr_factor", 0.2)
-                    if epoch <= warm:
-                        lr_scale = epoch / warm
-                    else:
-                        p = (epoch - warm) / max(1, total - warm)
-                        lr_scale = lr_floor + (1.0 - lr_floor) * 0.5 * (1 + math.cos(math.pi * p))
-                    for pg in optimizer.param_groups:
-                        pg['lr'] = config["model"]["optimizer"]["lr"] * lr_scale
-
                     end = time.time()
 
                     if global_rank == 0 or not config['training']['multigpu']:
@@ -1987,6 +2008,9 @@ def main():
                 epoch_train_rebin_loss = running_rebin_loss / len(train_loader)
             else:
                 epoch_train_rebin_loss = 0.0
+            if use_rebin_loss:
+                train_rebin_losses.append(epoch_train_rebin_loss)
+                weighted_train_rebin_losses.append(epoch_train_rebin_loss * rebin_loss_weight)
 
 
             if global_rank == 0 or not config['training']['multigpu']:
@@ -2426,6 +2450,30 @@ def main():
                         plt.savefig(os.path.join(output_dir, "weighted_losses.png"))
                         plt.close()
 
+                        # Plot Learning Rate Schedule
+                        if lr_history:
+                            plt.figure()
+                            plt.plot(lr_epochs, lr_history)
+                            plt.xlabel("Epoch")
+                            plt.ylabel("Learning Rate")
+                            plt.title("Learning Rate Schedule")
+                            plt.grid(True)
+                            plt.savefig(os.path.join(output_dir, "learning_rate.png"))
+                            plt.close()
+
+                        # Plot Rebin Loss (if enabled)
+                        if use_rebin_loss and train_rebin_losses:
+                            plt.figure()
+                            plt.plot(train_rebin_losses, label="Rebin Loss")
+                            if weighted_train_rebin_losses:
+                                plt.plot(weighted_train_rebin_losses, label="Weighted Rebin Loss")
+                            plt.xlabel("Epoch")
+                            plt.ylabel("Loss")
+                            plt.title("Training Rebin Loss")
+                            plt.legend()
+                            plt.grid(True)
+                            plt.savefig(os.path.join(output_dir, "rebin_loss.png"))
+                            plt.close()
 
                         # plot evaluation metrics in one figure
 
