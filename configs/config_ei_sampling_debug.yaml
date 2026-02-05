@@ -2,8 +2,8 @@ data:
   coils: 16
   dataset_key: kspace
   eval_frequency: 5
-  eval_spokes: 8
-  eval_timeframes: 36
+  eval_spokes: 2
+  eval_timeframes: 144
   flip_kspace: false
   fpg: 36
   height: 320
@@ -13,17 +13,17 @@ data:
   slices_to_eval: 1
   spf_aug: false
   split_file: /home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json
-  timeframes: 36
+  timeframes: 144
   total_spokes: 288
-  train_spokes_per_frame: 8
+  train_spokes_per_frame: 2
   traj_method: get_traj
   val_split_ratio: 0.2
   weight_accelerations: false
   width: 320
 dataloader:
   batch_size: 1
-  max_subjects: 2
-  num_random_slices: 4
+  max_subjects: 3
+  num_random_slices: 1
   num_workers: 2
   shuffle: true
   slice_idx: 41
@@ -36,7 +36,7 @@ dataloader:
   slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
   slice_sampling_cache_workers: 4
 debugging:
-  calc_step_0: true
+  calc_step_0: false
   calc_step_0_val: false
   enable_gradient_monitoring: true
   monitoring_interval: 5
@@ -82,7 +82,7 @@ model:
     adj_loss:
       weight: 1
     ei_loss:
-      duration: 5
+      duration: 0
       metric: MSE
       no_grad: false
       rotate_range: 20
@@ -90,7 +90,7 @@ model:
       subsample_ratio_max: 0.95
       subsample_ratio_min: 0.7
       temporal_transform: "arrival_shift_enh_scale"
-      warmup: 10
+      warmup: 0
       warp_ratio_max: 0.95
       warp_ratio_min: 0.6
       weight: 10000
