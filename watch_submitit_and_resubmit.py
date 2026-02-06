@@ -8,17 +8,16 @@ import time
 
 
 DEFAULT_WATCH = {
-    "submitit_logs/ei_2spf_sampling_all_transforms": "python submit_2spf.py",
-    "submitit_logs/ei_4spf_sampling_all_transforms": "python submit_4spf.py",
-    "submitit_logs/ei_8spf_sampling_all_transforms": "python submit_8spf.py",
-    "submitit_logs/ei_diffeo_arr_shift_enh_scale_rebin_36spf": "python submit_diffeo_all_multinode.py",
-    "submitit_logs/ei_diffeo_arr_shift_enh_scale_36spf": "python submit_diffeo_as_es_multinode.py",
-    "submitit_logs/ei_diffeo_arr_shift_36spf": "python submit_diffeo_arr_shift.py",
-    "submitit_logs/ei_16spf_sampling_all_transforms": "python submit_16spf.py",
-    "submitit_logs/ei_24spf_sampling_all_transforms": "python submit_24spf.py",
-    "submitit_logs/ei_36spf_sampling_all_transforms": "python submit_36spf.py",
-    "submitit_logs/ei_diffeo_36spf": "python submit_ei_diffeo.py",
-    "submitit_logs/ei_spatial_rotate20_36spf": "python submit_ei_spatial.py",
+    "submitit_logs/ei_2spf_slice_sampling_all_transforms": "python submit_2spf.py",
+    "submitit_logs/ei_4spf_slice_sampling_all_transforms": "python submit_4spf.py",
+    "submitit_logs/ei_8spf_slice_sampling_all_transforms": "python submit_8spf.py",
+    "submitit_logs/ei_16spf_slice_sampling_all_transforms": "python submit_16spf.py",
+    "submitit_logs/ei_24spf_slice_sampling_all_transforms": "python submit_24spf.py",
+    "submitit_logs/ei_36spf_slice_sampling_all_transforms": "python submit_36spf.py",
+    "submitit_logs/ei_diffeo_all_transforms_36spf": "python submit_diffeo_all.py",
+    "submitit_logs/ei_diffeo_no_arrival_shift_36spf": "python submit_diffeo_no_arr_shift.py",
+    "submitit_logs/ei_diffeo_no_enh_scale_36spf": "python submit_diffeo_no_enh_scale.py",
+    "submitit_logs/ei_diffeo_no_rebin_36spf": "python submit_diffeo_no_rebin.py",
 }
 
 FAILURE_MARKERS = (

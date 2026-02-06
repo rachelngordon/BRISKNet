@@ -336,6 +336,10 @@ def main():
     device = torch.device(args.device or config["training"]["device"])
     rescale = config.get("evaluation", {}).get("rescale", True)
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
+    ei_cfg = config.get("model", {}).get("losses", {}).get("ei_loss", {})
+    arrival_method = (ei_cfg.get("arrival_method", "threshold") or "threshold").lower()
+    arrival_fraction = float(ei_cfg.get("arrival_fraction", 0.1))
+    arrival_k = float(ei_cfg.get("arrival_shift_baseline_k", 2.0))
     if args.raw_slice_idx is not None:
         raw_grasp_slice_idx = args.raw_slice_idx
 
@@ -605,6 +609,9 @@ def main():
         grasp_path=grasp_path,
         rescale=rescale,
         filename_suffix="raw_csmaps",
+        arrival_k=arrival_k,
+        arrival_method=arrival_method,
+        arrival_fraction=arrival_fraction,
     )
 
     grasp_metrics = eval_grasp(
@@ -636,6 +643,9 @@ def main():
         grasp_path=grasp_path,
         raw_slice_idx=raw_slice_idx,
         rescale=rescale,
+        arrival_k=arrival_k,
+        arrival_method=arrival_method,
+        arrival_fraction=arrival_fraction,
     )
     raw_grasp_dc_mse, raw_grasp_dc_mae = eval_grasp(
         raw_kspace,

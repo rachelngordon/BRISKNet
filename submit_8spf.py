@@ -94,9 +94,9 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_8spf_slice_sampling_all_transforms"
+    job_name = "ei_8spf_slice_sampling_no_rebin"
     config_path = "/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_sampling_8spf.yaml"
-    num_nodes = 4
+    num_nodes = 2
     gpus_per_node = 4
 
     log_dir = f"submitit_logs/{job_name}"
@@ -113,7 +113,7 @@ def main():
         cpus_per_task=8,
         slurm_gres=f"gpu:{gpus_per_node}",
         timeout_min=700,
-        slurm_additional_parameters={"requeue": True, "exclude": "k002", "constraint": "a100|h100|h200"},
+        slurm_additional_parameters={"requeue": True, "constraint": "a100|h100|h200"},
         srun_args=["--cpu-bind=none"],
     )
 

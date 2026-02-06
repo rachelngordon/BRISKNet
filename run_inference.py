@@ -242,7 +242,7 @@ def parse_args():
     )
     parser.add_argument(
         "--baseline_mode",
-        default="seconds",
+        default="fraction",
         choices=("seconds", "fraction"),
         help="Baseline window selection mode for temporal metrics/plots.",
     )
@@ -261,7 +261,7 @@ def parse_args():
     parser.add_argument(
         "--baseline_min_frames",
         type=int,
-        default=1,
+        default=4,
         help="Minimum baseline frames to use.",
     )
     parser.add_argument(
@@ -279,8 +279,19 @@ def parse_args():
     parser.add_argument(
         "--arrival_k",
         type=float,
-        default=2.0,
+        default=None,
         help="Arrival threshold factor k for mu + k*sigma.",
+    )
+    parser.add_argument(
+        "--arrival_method",
+        default=None,
+        help="Arrival method: threshold or fraction_of_peak (uses arrival_fraction).",
+    )
+    parser.add_argument(
+        "--arrival_fraction",
+        type=float,
+        default=None,
+        help="Fraction-of-peak arrival threshold (0..1).",
     )
     parser.add_argument(
         "--early_seconds",
@@ -291,14 +302,14 @@ def parse_args():
     parser.add_argument(
         "--early_min_frames",
         type=int,
-        default=1,
+        default=4,
         help="Minimum early enhancement window frames.",
     )
     parser.add_argument(
         "--early_max_frames",
         type=int,
-        default=None,
-        help="Maximum early enhancement window frames (omit for no max).",
+        default=8,
+        help="Maximum early enhancement window frames.",
     )
     parser.add_argument("--seed", type=int, default=12, help="Random seed.")
     return parser.parse_args()
@@ -667,6 +678,17 @@ def main():
         )
         val_noise_level = 0.05
 
+    ei_cfg = config.get("model", {}).get("losses", {}).get("ei_loss", {})
+    arrival_method = (args.arrival_method or ei_cfg.get("arrival_method", "threshold")).lower()
+    if args.arrival_fraction is None:
+        arrival_fraction = float(ei_cfg.get("arrival_fraction", 0.1))
+    else:
+        arrival_fraction = float(args.arrival_fraction)
+    if args.arrival_k is None:
+        arrival_k = float(ei_cfg.get("arrival_shift_baseline_k", 2.0))
+    else:
+        arrival_k = float(args.arrival_k)
+
     inference_settings = {
         "csmaps_style": dro_csmaps_source,
         "dro_sim_source": dro_sim_source,
@@ -681,7 +703,9 @@ def main():
             "max_frames": args.baseline_max_frames,
             "total_scan_seconds": args.total_scan_seconds,
         },
-        "arrival_k": args.arrival_k,
+        "arrival_method": arrival_method,
+        "arrival_fraction": arrival_fraction,
+        "arrival_k": arrival_k,
         "early_window": {
             "mode": "seconds_after_arrival",
             "seconds": args.early_seconds,
@@ -789,6 +813,9 @@ def main():
             "dro_sim_source": dro_sim_source,
             "traj_method": traj_method,
             "dro_noise_level": val_noise_level,
+            "arrival_method": arrival_method,
+            "arrival_fraction": arrival_fraction,
+            "arrival_k": arrival_k,
             "early_max_frames": (
                 args.early_max_frames if args.early_max_frames is not None else "no_max"
             ),
@@ -1110,7 +1137,9 @@ def main():
                 baseline_fraction=args.baseline_fraction,
                 baseline_min_frames=args.baseline_min_frames,
                 baseline_max_frames=args.baseline_max_frames,
-                arrival_k=args.arrival_k,
+                arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=args.early_seconds,
                 early_min_frames=args.early_min_frames,
                 early_max_frames=args.early_max_frames,
@@ -1194,7 +1223,9 @@ def main():
                 baseline_fraction=args.baseline_fraction,
                 baseline_min_frames=args.baseline_min_frames,
                 baseline_max_frames=args.baseline_max_frames,
-                arrival_k=args.arrival_k,
+                arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=args.early_seconds,
                 early_min_frames=args.early_min_frames,
                 early_max_frames=args.early_max_frames,

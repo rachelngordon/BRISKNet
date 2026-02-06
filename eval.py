@@ -15,6 +15,7 @@ from lsfpnet import to_torch_complex, from_torch_complex
 from radial_lsfp import MCNUFFT
 import numpy as np
 from scipy.optimize import curve_fit
+from transform import estimate_bolus_arrival_index
 from scipy.interpolate import PchipInterpolator
 from tqdm import tqdm # A library for a nice progress bar
 from scipy.stats import mannwhitneyu
@@ -1035,6 +1036,14 @@ def plot_temporal_curves(
     spokes_per_frame: int, 
     plot_dro: bool = True,
     region_label_map: Optional[Dict[str, str]] = None,
+    show_arrival: bool = False,
+    arrival_percentile: float = 0.95,
+    arrival_baseline_k: float = 2.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+    arrival_pre_contrast_baseline: str = "n_frames",
+    arrival_baseline_seconds: float = 20.0,
+    arrival_total_seconds: float = 150.0,
 ):
     """
     Plots the mean signal intensity vs. time for different tissue regions.
@@ -1063,6 +1072,18 @@ def plot_temporal_curves(
     )
 
     region_corrs = {}
+    arrival_idx = None
+    if show_arrival:
+        arrival_idx = _arrival_index_from_mag_stack(
+            recon_img_stack,
+            arrival_percentile,
+            arrival_baseline_k,
+            arrival_method,
+            arrival_fraction,
+            arrival_pre_contrast_baseline,
+            arrival_baseline_seconds,
+            arrival_total_seconds,
+        )
 
     for i, region in enumerate(regions):
         mask = masks[region]
@@ -1102,6 +1123,15 @@ def plot_temporal_curves(
         axes[i].set_xlabel("Time (s)", fontsize=PLOT_FONT_SIZES["label"])
         axes[i].tick_params(axis='both', which='major', labelsize=PLOT_FONT_SIZES["tick"])
         axes[i].grid(True)
+        if arrival_idx is not None and arrival_idx < len(time_points):
+            arrival_time = time_points[arrival_idx]
+            axes[i].axvline(
+                arrival_time,
+                color='tab:red',
+                linestyle='--',
+                linewidth=1.5,
+                label='Arrival' if i == 0 else None,
+            )
         axes[i].legend(fontsize=PLOT_FONT_SIZES["legend"])
 
     axes[0].set_ylabel("Mean Signal Intensity", fontsize=PLOT_FONT_SIZES["label"])
@@ -1149,6 +1179,41 @@ def _resolve_baseline_frames(
     raise ValueError(f"Unknown baseline_mode: {baseline_mode!r}")
 
 
+def _arrival_index_from_mag_stack(
+    mag_stack: np.ndarray,
+    percentile: float,
+    baseline_k: float,
+    arrival_method: str,
+    arrival_fraction: float,
+    pre_contrast_baseline: str,
+    baseline_seconds: float,
+    total_seconds: float,
+) -> Optional[int]:
+    if mag_stack is None or mag_stack.ndim != 3:
+        return None
+    try:
+        mag = torch.from_numpy(mag_stack).float()
+    except Exception:
+        return None
+    mag = mag.permute(2, 0, 1).unsqueeze(0)  # (1, T, H, W)
+    zeros = torch.zeros_like(mag)
+    x = torch.stack([mag, zeros], dim=1)  # (1, 2, T, H, W)
+    try:
+        idx = estimate_bolus_arrival_index(
+            x,
+            percentile=percentile,
+            baseline_k=baseline_k,
+            arrival_method=arrival_method,
+            arrival_fraction=arrival_fraction,
+            pre_contrast_baseline=pre_contrast_baseline,
+            baseline_seconds=baseline_seconds,
+            total_seconds=total_seconds,
+        )
+    except Exception:
+        return None
+    return int(idx)
+
+
 def plot_temporal_curves_normalized(
     gt_img_stack: np.ndarray,
     recon_img_stack: np.ndarray,
@@ -1165,6 +1230,14 @@ def plot_temporal_curves_normalized(
     baseline_min_frames: int = 4,
     baseline_max_frames: Optional[int] = 10,
     region_label_map: Optional[Dict[str, str]] = None,
+    show_arrival: bool = False,
+    arrival_percentile: float = 0.95,
+    arrival_baseline_k: float = 2.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+    arrival_pre_contrast_baseline: str = "n_frames",
+    arrival_baseline_seconds: float = 20.0,
+    arrival_total_seconds: float = 150.0,
 ):
     """
     Plots baseline-subtracted mean signal vs. time for different tissue regions.
@@ -1194,6 +1267,19 @@ def plot_temporal_curves_normalized(
         fontsize=PLOT_FONT_SIZES["suptitle"],
     )
 
+    arrival_idx = None
+    if show_arrival:
+        arrival_idx = _arrival_index_from_mag_stack(
+            recon_img_stack,
+            arrival_percentile,
+            arrival_baseline_k,
+            arrival_method,
+            arrival_fraction,
+            arrival_pre_contrast_baseline,
+            arrival_baseline_seconds,
+            arrival_total_seconds,
+        )
+
     for i, region in enumerate(regions):
         mask = masks[region]
 
@@ -1215,6 +1301,15 @@ def plot_temporal_curves_normalized(
         axes[i].set_xlabel("Time (s)", fontsize=PLOT_FONT_SIZES["label"])
         axes[i].tick_params(axis='both', which='major', labelsize=PLOT_FONT_SIZES["tick"])
         axes[i].grid(True)
+        if arrival_idx is not None and arrival_idx < len(time_points):
+            arrival_time = time_points[arrival_idx]
+            axes[i].axvline(
+                arrival_time,
+                color='tab:red',
+                linestyle='--',
+                linewidth=1.5,
+                label='Arrival' if i == 0 else None,
+            )
         axes[i].legend(fontsize=PLOT_FONT_SIZES["legend"])
 
     axes[0].set_ylabel("Baseline-Subtracted Signal", fontsize=PLOT_FONT_SIZES["label"])
@@ -1235,6 +1330,14 @@ def plot_single_temporal_curve(
     # New arguments required for this specific plot style:
     frames_to_show: List[int] = None,
     region_key: str | None = None,
+    show_arrival: bool = False,
+    arrival_percentile: float = 0.95,
+    arrival_baseline_k: float = 2.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+    arrival_pre_contrast_baseline: str = "n_frames",
+    arrival_baseline_seconds: float = 20.0,
+    arrival_total_seconds: float = 150.0,
 ):
     """
     Generates a comprehensive analysis plot for a single sample, showing the
@@ -1294,6 +1397,21 @@ def plot_single_temporal_curve(
     # --- 2. Plot Tumor Enhancement Curve (Left Panel) ---
     mean_curve = [img_stack[:, :, t][tumor_mask].mean() for t in range(img_stack.shape[2])]
     ax_curve.plot(time_points, mean_curve, 'o-', label='Mean Tumor Signal', linewidth=2, markersize=6)
+    if show_arrival:
+        arrival_idx = _arrival_index_from_mag_stack(
+            img_stack,
+            arrival_percentile,
+            arrival_baseline_k,
+            arrival_method,
+            arrival_fraction,
+            arrival_pre_contrast_baseline,
+            arrival_baseline_seconds,
+            arrival_total_seconds,
+        )
+        if arrival_idx is not None and arrival_idx < len(time_points):
+            arrival_time = time_points[arrival_idx]
+            ax_curve.axvline(arrival_time, color='tab:red', linestyle='--', linewidth=1.5, label='Arrival')
+            ax_curve.plot(arrival_time, mean_curve[arrival_idx], 'ro', markersize=8, zorder=10)
 
     highlight_times = [time_points[i] for i in frames_to_show]
     highlight_vals = [mean_curve[i] for i in frames_to_show]
@@ -1337,6 +1455,8 @@ def compute_temporal_metrics(
     baseline_min_frames: int = 4,
     baseline_max_frames: Optional[int] = 10,
     arrival_k: float = 3.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
     early_seconds: float = 35.0,
     early_min_frames: int = 4,
     early_max_frames: Optional[int] = 8,
@@ -1418,10 +1538,15 @@ def compute_temporal_metrics(
 
     mu0 = smoothed[:n_baseline].mean()
     sigma0 = smoothed[:n_baseline].std()
-    thr0 = mu0 + arrival_k * sigma0
+    method = (arrival_method or "threshold").lower()
+    if method in ("fraction", "fraction_of_peak", "fop"):
+        peak0 = mean_curve.max()
+        frac = max(0.0, min(1.0, float(arrival_fraction)))
+        thr0 = mu0 + frac * (peak0 - mu0)
+    else:
+        thr0 = mu0 + arrival_k * sigma0
     above0 = smoothed > thr0
-    consecutive0 = above0[:-1] & above0[1:]
-    t_arr_idx = int(np.argmax(consecutive0)) if np.any(consecutive0) else 0
+    t_arr_idx = int(np.argmax(above0)) if np.any(above0) else 0
     t_peak_idx = int(np.argmax(mean_curve))
 
     early_start = t_arr_idx
@@ -1443,11 +1568,16 @@ def compute_temporal_metrics(
         return float(np.nanmean(corr)) if corr.size else np.nan
 
     def arrival_indices(curves: np.ndarray, baseline_mu: np.ndarray, baseline_sigma: np.ndarray) -> np.ndarray:
-        thr = baseline_mu + arrival_k * baseline_sigma
+        method_local = (arrival_method or "threshold").lower()
+        if method_local in ("fraction", "fraction_of_peak", "fop"):
+            peak = curves.max(axis=1)
+            frac = max(0.0, min(1.0, float(arrival_fraction)))
+            thr = baseline_mu + frac * (peak - baseline_mu)
+        else:
+            thr = baseline_mu + arrival_k * baseline_sigma
         above = curves > thr[:, None]
-        consecutive = above[:, :-1] & above[:, 1:]
-        has_arrival = np.any(consecutive, axis=1)
-        idx = np.argmax(consecutive, axis=1)
+        has_arrival = np.any(above, axis=1)
+        idx = np.argmax(above, axis=1)
         return np.where(has_arrival, idx, -1)
 
     def compute_iauc10(curves: np.ndarray, baseline: np.ndarray, arrivals: np.ndarray) -> np.ndarray:
@@ -1837,10 +1967,20 @@ def eval_sample(
     baseline_min_frames: int = 4,
     baseline_max_frames: Optional[int] = 10,
     arrival_k: float = 3.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
     early_seconds: float = 35.0,
     early_min_frames: int = 4,
     early_max_frames: Optional[int] = 8,
     total_scan_seconds: float = 150.0,
+    plot_arrival: bool = False,
+    arrival_percentile: float = 0.95,
+    arrival_baseline_k: float = 2.0,
+    arrival_method_plot: str | None = None,
+    arrival_fraction_plot: float | None = None,
+    arrival_pre_contrast_baseline: str = "n_frames",
+    arrival_baseline_seconds: float = 20.0,
+    arrival_total_seconds: float = 150.0,
 ):
 
     acceleration = round(acceleration.item(), 1)
@@ -2028,6 +2168,10 @@ def eval_sample(
 
         aif_time_points = np.linspace(0, total_scan_seconds, num_frames)
 
+        arrival_method_plot = (arrival_method_plot or arrival_method or "threshold").lower()
+        if arrival_fraction_plot is None:
+            arrival_fraction_plot = arrival_fraction
+
         temporal_metrics = {}
         if 'malignant' in masks_np and masks_np['malignant'].any():
             dl_metrics = compute_temporal_metrics(
@@ -2041,6 +2185,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2056,6 +2202,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2074,6 +2222,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2089,6 +2239,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2163,6 +2315,14 @@ def eval_sample(
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=True,
                 region_label_map=region_label_map,
+                show_arrival=plot_arrival,
+                arrival_percentile=arrival_percentile,
+                arrival_baseline_k=arrival_baseline_k,
+                arrival_method=arrival_method_plot,
+                arrival_fraction=arrival_fraction_plot,
+                arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                arrival_baseline_seconds=arrival_baseline_seconds,
+                arrival_total_seconds=arrival_total_seconds,
             )
             plot_temporal_curves_normalized(
                 gt_img_stack=gt_mag_np,
@@ -2179,6 +2339,14 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 region_label_map=region_label_map,
+                show_arrival=plot_arrival,
+                arrival_percentile=arrival_percentile,
+                arrival_baseline_k=arrival_baseline_k,
+                arrival_method=arrival_method_plot,
+                arrival_fraction=arrival_fraction_plot,
+                arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                arrival_baseline_seconds=arrival_baseline_seconds,
+                arrival_total_seconds=arrival_total_seconds,
             )
 
             if primary_region in ("malignant", "benign"):
@@ -2191,6 +2359,14 @@ def eval_sample(
                     acceleration=acceleration,
                     spokes_per_frame=spokes_per_frame,
                     region_key=primary_region,
+                    show_arrival=plot_arrival,
+                    arrival_percentile=arrival_percentile,
+                    arrival_baseline_k=arrival_baseline_k,
+                    arrival_method=arrival_method_plot,
+                    arrival_fraction=arrival_fraction_plot,
+                    arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                    arrival_baseline_seconds=arrival_baseline_seconds,
+                    arrival_total_seconds=arrival_total_seconds,
                 )
 
             plot_time_series(
@@ -2278,6 +2454,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2293,6 +2471,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2311,6 +2491,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2326,6 +2508,8 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
@@ -2378,6 +2562,14 @@ def eval_sample(
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=False,
                 region_label_map=region_label_map,
+                show_arrival=plot_arrival,
+                arrival_percentile=arrival_percentile,
+                arrival_baseline_k=arrival_baseline_k,
+                arrival_method=arrival_method_plot,
+                arrival_fraction=arrival_fraction_plot,
+                arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                arrival_baseline_seconds=arrival_baseline_seconds,
+                arrival_total_seconds=arrival_total_seconds,
             )
             plot_temporal_curves_normalized(
                 gt_img_stack=gt_mag_np,
@@ -2395,6 +2587,14 @@ def eval_sample(
                 baseline_min_frames=baseline_min_frames,
                 baseline_max_frames=baseline_max_frames,
                 region_label_map=region_label_map,
+                show_arrival=plot_arrival,
+                arrival_percentile=arrival_percentile,
+                arrival_baseline_k=arrival_baseline_k,
+                arrival_method=arrival_method_plot,
+                arrival_fraction=arrival_fraction_plot,
+                arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                arrival_baseline_seconds=arrival_baseline_seconds,
+                arrival_total_seconds=arrival_total_seconds,
             )
 
             if primary_region in ("malignant", "benign"):
@@ -2407,6 +2607,14 @@ def eval_sample(
                     acceleration=acceleration,
                     spokes_per_frame=spokes_per_frame,
                     region_key=primary_region,
+                    show_arrival=plot_arrival,
+                    arrival_percentile=arrival_percentile,
+                    arrival_baseline_k=arrival_baseline_k,
+                    arrival_method=arrival_method_plot,
+                    arrival_fraction=arrival_fraction_plot,
+                    arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                    arrival_baseline_seconds=arrival_baseline_seconds,
+                    arrival_total_seconds=arrival_total_seconds,
                 )
 
             plot_time_series(

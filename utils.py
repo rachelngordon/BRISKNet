@@ -12,6 +12,7 @@ from sigpy.mri import app
 from radial_lsfp import MCNUFFT
 import random
 from torch.nn.parallel import DistributedDataParallel as DDP
+from transform import estimate_bolus_arrival_index
 
 
 def _torch_load_checkpoint(path: str, map_location="cpu"):
@@ -360,7 +361,15 @@ def plot_enhancement_curve(
     model_output: torch.Tensor,
     percentile: float = 99.0,
     title: str = "Enhancement Curve Comparison",
-    output_filename: str = None
+    output_filename: str = None,
+    show_arrival: bool = False,
+    arrival_percentile: float = 0.95,
+    arrival_baseline_k: float = 2.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+    arrival_pre_contrast_baseline: str = "n_frames",
+    arrival_baseline_seconds: float = 20.0,
+    arrival_total_seconds: float = 150.0,
 ):
     """
     Calculates and plots the enhancement curves for a model output and a benchmark
@@ -395,7 +404,23 @@ def plot_enhancement_curve(
     
     # Plot model output curve
     plt.plot(time_axis, model_curve, label='Model Output', marker='o', linestyle='-', color='tab:blue')
-    
+
+    if show_arrival:
+        arrival_idx = estimate_bolus_arrival_index(
+            model_output.detach(),
+            percentile=arrival_percentile,
+            baseline_k=arrival_baseline_k,
+            arrival_method=arrival_method,
+            arrival_fraction=arrival_fraction,
+            pre_contrast_baseline=arrival_pre_contrast_baseline,
+            baseline_seconds=arrival_baseline_seconds,
+            total_seconds=arrival_total_seconds,
+        )
+        if arrival_idx is not None:
+            arrival_time = time_axis[arrival_idx]
+            plt.axvline(arrival_time, color='tab:red', linestyle='--', linewidth=1.5, label=f'Arrival t={arrival_time}')
+            plt.scatter([arrival_time], [model_curve[arrival_idx]], color='tab:red', zorder=5)
+
     # Plot benchmark curve
     # plt.plot(time_axis, benchmark_curve, label='GRASP Benchmark', marker='x', linestyle='--', color='tab:orange')
     
@@ -545,14 +570,14 @@ def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=N
         else:
             ax1 = axes[t]
 
-        ax1.imshow(img, cmap="gray")
+        ax1.imshow(img, cmap="gray_r")
         ax1.set_title(f"t = {t}")
         ax1.set_xticks([])
         ax1.set_yticks([])
 
         if grasp_img is not None:
             ax2 = axes[1, t]
-            ax2.imshow(grasp_img, cmap="gray")
+            ax2.imshow(grasp_img, cmap="gray_r")
             ax2.set_title(f"t = {t}")
             ax2.set_xticks([])
             ax2.set_yticks([])
