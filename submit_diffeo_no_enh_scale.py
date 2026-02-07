@@ -61,9 +61,10 @@ def main():
         tasks_per_node=1,
         cpus_per_task=8,                       # 8 CPUs for 4 GPUs is reasonable
         slurm_gres=f"gpu:{num_gpus}",     # 4× H200 on a single node
-        timeout_min=700,
+        timeout_min=200,
         # Mark job requeueable so submitit can restart it at timeout.
         slurm_additional_parameters={"requeue": True, "constraint": "a100|h100|h200"},
+        qos="burst",
 
         # IMPORTANT: no cpu_bind here anymore, this only affects sbatch
         # and your sbatch doesn't support --cpu-bind

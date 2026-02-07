@@ -41,10 +41,10 @@ class InferenceBatch(submitit.helpers.Checkpointable):
 
 
 def main():
-    job_name = "transforms_inference_batch"
+    job_name = "transforms_inference_batch2"
     exp_names = "ei_diffeo_36spf,mc_36spf_overfit"
     exp_base_dir = "/net/projects2/annawoodard/rachelgordon/experiments"
-    num_gpus = 2
+    num_gpus = 4
     extra_args = [
         # "--disable_ssdu",
     ]
