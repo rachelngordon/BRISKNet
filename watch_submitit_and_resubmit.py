@@ -14,6 +14,10 @@ DEFAULT_WATCH = {
     "submitit_logs/ei_16spf_slice_sampling_no_rebin": "python submit_16spf_multinode.py",
     "submitit_logs/ei_24spf_slice_sampling_no_rebin": "python submit_24spf.py",
     "submitit_logs/ei_36spf_slice_sampling_no_rebin": "python submit_36spf_multinode.py",
+    "submitit_logs/ei_diffeo_fop_all_transforms_36spf": "python submit_diffeo_all.py",
+    "submitit_logs/ei_diffeo_fop_no_arrival_shift_36spf": "python submit_diffeo_no_arr_shift.py",
+    "submitit_logs/ei_diffeo_fop_no_enh_scale_36spf": "python submit_diffeo_no_enh_scale.py",
+    "submitit_logs/ei_diffeo_fop_no_rebin_36spf": "python submit_diffeo_no_rebin.py",
 }
 
 FAILURE_MARKERS = (

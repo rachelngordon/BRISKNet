@@ -97,6 +97,9 @@ model:
       arrival_shift_max_shift: 1
       arrival_shift_percentile: 0.95
       arrival_shift_baseline_k: 2.0
+      arrival_method: fraction
+      arrival_fraction: 0.15       # used when method = fraction
+      enh_scale_start: arrival
       # --- enh_scale params ---
       enh_scale_min: 0.85
       enh_scale_max: 1.15
