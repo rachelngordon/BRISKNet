@@ -1,9 +1,9 @@
 data:
   coils: 16
   dataset_key: kspace
-  eval_frequency: 5
-  eval_spokes: 36
-  eval_timeframes: 8
+  eval_frequency: 1
+  eval_spokes: 8
+  eval_timeframes: 36
   flip_kspace: false
   fpg: 36
   height: 320
@@ -13,17 +13,17 @@ data:
   slices_to_eval: 1
   spf_aug: false
   split_file: /home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json
-  timeframes: 8
+  timeframes: 36
   total_spokes: 288
-  train_spokes_per_frame: 36
+  train_spokes_per_frame: 8
   traj_method: get_traj
   val_split_ratio: 0.2
   weight_accelerations: false
   width: 320
 dataloader:
   batch_size: 1
-  max_subjects: 300
-  num_random_slices: 4
+  max_subjects: 3
+  num_random_slices: 1
   num_workers: 2
   shuffle: true
   slice_idx: 41
@@ -31,27 +31,32 @@ dataloader:
   slice_range_start: None
   slice_sampling_mode: nonenhancing
   slice_sampling_uniform_fraction: 0.6
-  slice_sampling_filter_quantile: 0.3
+  slice_sampling_filter_quantile: 0.4
   slice_sampling_no_replacement: true
   slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
   slice_sampling_cache_workers: 4
 debugging:
   calc_step_0: true
-  calc_step_0_val: true
+  calc_step_0_val: false
   enable_gradient_monitoring: true
   monitoring_interval: 5
   distributed_sample_check: false
   distributed_sample_check_batches: 0
+  save_enhancement_curve_pngs: true
 evaluation:
   chunk_overlap: 18
   chunk_size: 36
   num_samples: 15
   rescale: false
   simulated_dataset_path: /net/scratch2/rachelgordon/dro_dataset_frontpad
-  val_noise_level: 0
+  val_noise_level: 0.05
+  deterministic_val_ei: true
+  deterministic_val_ei_seed: 1234
+
 experiment:
   cluster: DSI
   output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  pretrained_checkpoint: '/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_diffeo_36spf/ei_diffeo_36spf_model.pth'
 model:
   activation_checkpointing: false
   cascades: 2
@@ -81,7 +86,7 @@ model:
     adj_loss:
       weight: 1
     ei_loss:
-      duration: 5
+      duration: 0
       metric: MSE
       no_grad: false
       rotate_range: 20
@@ -89,21 +94,31 @@ model:
       subsample_ratio_max: 0.95
       subsample_ratio_min: 0.7
       temporal_transform: "arrival_shift_enh_scale"
-      warmup: 10
+      warmup: 0
       warp_ratio_max: 0.95
       warp_ratio_min: 0.6
       weight: 10000
       # --- arrival_shift params ---
       arrival_shift_max_shift: 1
       arrival_shift_percentile: 0.95
-      arrival_shift_baseline_k: 2.0
+      arrival_shift_baseline_k: 2
+      arrival_method: threshold
+      arrival_fraction: 0.15       # used when method = fraction
       # --- enh_scale params ---
       enh_scale_min: 0.85
       enh_scale_max: 1.15
+      enh_scale_start: arrival
       pre_contrast_baseline: "m_seconds"
       baseline_seconds: 20.0
       total_seconds: 150.0
       no_grad: false
+    # Operator-level (binning) equivariance (DDEI-ish).
+    rebin_loss:
+      enable: false
+      weight: 10000
+      factor: 2
+      metric: "MSE"
+      time_index_mode: "scaled"
     mc_loss:
       metric: MAE
       weight: 1
@@ -125,6 +140,10 @@ model:
   svd_noise_std: 0.001
   use_lowk_dc: false
 training:
+  lr_schedule:
+    warmup_mode: cosine
+    min_lr_factor: 0.6
+    warmup_epochs: 10
   curriculum_learning:
     enabled: false
     phases:

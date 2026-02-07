@@ -25,7 +25,7 @@ from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
 from radial_lsfp import MCNUFFT
-from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
+from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
 from eval import eval_grasp, eval_sample
 import csv
 import math
@@ -43,16 +43,43 @@ import h5py
 import signal
 from torch.utils.tensorboard import SummaryWriter
 from cluster_paths import apply_cluster_paths
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
+from datetime import timedelta
 
 
 def setup():
     """Initializes the distributed process group."""
-    dist.init_process_group("nccl")
+    # dist.init_process_group("nccl")
+    dist.init_process_group("nccl", timeout=timedelta(seconds=3600))
 
 def cleanup():
     if dist.is_available() and dist.is_initialized():
         dist.destroy_process_group()
+
+@contextmanager
+def _temporary_rng(seed):
+    if seed is None:
+        yield
+        return
+    py_state = random.getstate()
+    np_state = np.random.get_state()
+    torch_state = torch.random.get_rng_state()
+    cuda_states = None
+    if torch.cuda.is_available():
+        cuda_states = torch.cuda.get_rng_state_all()
+    try:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        yield
+    finally:
+        random.setstate(py_state)
+        np.random.set_state(np_state)
+        torch.random.set_rng_state(torch_state)
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
 
 def _load_run_state(run_state_path):
     if not os.path.exists(run_state_path):
@@ -223,7 +250,7 @@ def main():
     config.setdefault("experiment", {})["output_dir"] = os.path.dirname(output_dir)
 
     use_edge_time_index_sampling = config.get('training', {}).get('edge_time_index_sampling', False)
-    traj_method = config.get("data", {}).get("traj_method", "trajGR")
+    traj_method = config.get("data", {}).get("traj_method", "get_traj")
 
     # create output directories
     output_dir = os.path.join(config["experiment"]["output_dir"], exp_name)
@@ -509,7 +536,17 @@ def main():
     eval_chunk_overlap = config["evaluation"]["chunk_overlap"]
 
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
-    val_noise_level = config.get("evaluation", {}).get("val_noise_level", 0)
+    eval_cfg = config.get("evaluation", {})
+    val_noise_level = eval_cfg.get("val_noise_level", 0.05)
+    dro_sim_source = eval_cfg.get("dro_sim_source", "espirit")
+    dro_csmaps_source = eval_cfg.get("dro_csmaps_source", "espirit")
+    dro_espirit_csmaps_dir = eval_cfg.get("dro_espirit_csmaps_dir")
+    deterministic_val_ei = bool(eval_cfg.get("deterministic_val_ei", False))
+    deterministic_val_ei_seed = eval_cfg.get("deterministic_val_ei_seed", 0)
+    try:
+        deterministic_val_ei_seed = int(deterministic_val_ei_seed)
+    except (TypeError, ValueError):
+        deterministic_val_ei_seed = 0
 
     cluster = config["experiment"].get("cluster", "Randi")
 
@@ -708,7 +745,11 @@ def main():
         num_frames=N_time_eval,
         traj_method=traj_method,
         grasp_slice_idx=raw_grasp_slice_idx,
-        noise_level=val_noise_level)
+        noise_level=val_noise_level,
+        dro_csmaps_source=dro_csmaps_source,
+        espirit_csmaps_dir=dro_espirit_csmaps_dir,
+        dro_sim_source=dro_sim_source,
+    )
 
 
     val_dro_loader = DataLoader(
@@ -853,14 +894,81 @@ def main():
     )
 
 
+    pretrained_checkpoint = config.get("experiment", {}).get("pretrained_checkpoint", None)
+    if isinstance(pretrained_checkpoint, str):
+        if pretrained_checkpoint.strip().lower() in ("", "none", "null"):
+            pretrained_checkpoint = None
+
     # Load the checkpoint to resume training
     if resume_from_checkpoint:
         # if global_rank == 0 or config['training']['multigpu'] == False:
         checkpoint_file = os.path.join(output_dir, f'{exp_name}_model.pth')
         model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
+        if pretrained_checkpoint and (global_rank == 0 or not config['training']['multigpu']):
+            print(
+                f"[Checkpoint] Found pretrained_checkpoint={pretrained_checkpoint}, "
+                "but an existing run checkpoint was detected; resuming instead."
+            )
 
     else:
         start_epoch = 1
+        if pretrained_checkpoint:
+            if not os.path.isfile(pretrained_checkpoint):
+                raise FileNotFoundError(
+                    f"Pretrained checkpoint not found: {pretrained_checkpoint}"
+                )
+
+            skip_prefixes = []
+            enc_skip_reason = None
+            ckpt_cfg_path = os.path.join(os.path.dirname(pretrained_checkpoint), "config.yaml")
+            if os.path.isfile(ckpt_cfg_path):
+                try:
+                    with open(ckpt_cfg_path, "r") as file:
+                        ckpt_cfg = yaml.safe_load(file) or {}
+                    ckpt_model_cfg = ckpt_cfg.get("model", {})
+                    ckpt_encode_acc = bool(ckpt_model_cfg.get("encode_acceleration", False))
+                    ckpt_encode_time = bool(ckpt_model_cfg.get("encode_time_index", False))
+                    cur_encode_acc = bool(config["model"].get("encode_acceleration", False))
+                    cur_encode_time = bool(config["model"].get("encode_time_index", False))
+                    if (cur_encode_acc and not ckpt_encode_acc) or (cur_encode_time and not ckpt_encode_time):
+                        skip_prefixes.append("mapping_network.")
+                        enc_skip_reason = (
+                            f"checkpoint encodings (acc={ckpt_encode_acc}, time={ckpt_encode_time}) "
+                            f"do not include current encodings (acc={cur_encode_acc}, time={cur_encode_time})"
+                        )
+                except Exception as exc:
+                    if global_rank == 0 or not config['training']['multigpu']:
+                        print(f"[Checkpoint] Warning: failed to read {ckpt_cfg_path}: {exc}")
+
+            model, preload_info = load_pretrained_weights(
+                model,
+                pretrained_checkpoint,
+                skip_prefixes=skip_prefixes,
+            )
+            if global_rank == 0 or not config['training']['multigpu']:
+                print(f"[Checkpoint] Loaded pretrained weights from {pretrained_checkpoint}")
+                if enc_skip_reason:
+                    print(f"[Checkpoint] Skipping encoding weights: {enc_skip_reason}")
+                if preload_info.get("mismatched_keys"):
+                    mismatched_preview = ", ".join(
+                        k for k, _, _ in preload_info["mismatched_keys"][:5]
+                    )
+                    print(f"[Checkpoint] Skipped {len(preload_info['mismatched_keys'])} mismatched keys (e.g., {mismatched_preview})")
+                print(
+                    "[Checkpoint] Preload summary: "
+                    f"loaded={preload_info.get('loaded_keys')}, "
+                    f"skipped={preload_info.get('skipped_keys')}, "
+                    f"missing={preload_info.get('missing_keys')}, "
+                    f"unexpected={preload_info.get('unexpected_keys')}"
+                )
+                if run_state is not None:
+                    with state_lock:
+                        run_state["pretrained_checkpoint"] = {
+                            "loaded": True,
+                            "path": pretrained_checkpoint,
+                            "epoch": preload_info.get("checkpoint_epoch"),
+                        }
+                        _save_run_state(run_state_path, run_state)
         # target_w_ei = 0.0
 
 
@@ -933,6 +1041,8 @@ def main():
             max_shift=config['model']['losses']['ei_loss'].get("arrival_shift_max_shift", 2),
             percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
             baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+            arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+            arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
             pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
             baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
             total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
@@ -947,6 +1057,11 @@ def main():
             baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
             total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
             buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
+            start_mode=config['model']['losses']['ei_loss'].get("enh_scale_start", "baseline"),
+            arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+            arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+            arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+            arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
         )
         temp_noise = TemporalNoise(n_trans=1, noise_strength=config['model']['losses']['ei_loss'].get("noise_strength", 0.5))
         time_reverse = TimeReverse(n_trans=1)
@@ -1007,6 +1122,12 @@ def main():
         weighted_train_mc_losses = train_curves["weighted_train_mc_losses"]
         weighted_train_ei_losses = train_curves["weighted_train_ei_losses"]
         weighted_train_adj_losses = train_curves["weighted_train_adj_losses"]
+        train_rebin_losses = train_curves.get("train_rebin_losses", [])
+        weighted_train_rebin_losses = train_curves.get("weighted_train_rebin_losses", [])
+        lr_history = train_curves.get("lr_history", [])
+        lr_epochs = train_curves.get("lr_epochs", [])
+        ei_weight_history = train_curves.get("ei_weight_history", [])
+        ei_weight_epochs = train_curves.get("ei_weight_epochs", [])
         eval_ssims = eval_curves["eval_ssims"]
         eval_psnrs = eval_curves["eval_psnrs"]
         eval_mses = eval_curves["eval_mses"]
@@ -1031,6 +1152,12 @@ def main():
         weighted_train_mc_losses = []
         weighted_train_ei_losses = []
         weighted_train_adj_losses = []
+        train_rebin_losses = []
+        weighted_train_rebin_losses = []
+        lr_history = []
+        lr_epochs = []
+        ei_weight_history = []
+        ei_weight_epochs = []
         eval_ssims = []
         eval_lpipses = []
         eval_psnrs = []
@@ -1086,6 +1213,12 @@ def main():
             weighted_train_mc_losses=weighted_train_mc_losses,
             weighted_train_ei_losses=weighted_train_ei_losses,
             weighted_train_adj_losses=weighted_train_adj_losses,
+            train_rebin_losses=train_rebin_losses,
+            weighted_train_rebin_losses=weighted_train_rebin_losses,
+            lr_history=lr_history,
+            lr_epochs=lr_epochs,
+            ei_weight_history=ei_weight_history,
+            ei_weight_epochs=ei_weight_epochs,
         )
         val_curves = dict(
             val_mc_losses=val_mc_losses,
@@ -1332,10 +1465,16 @@ def main():
                         initial_val_mc_loss += mc_loss.item()
     
                         if use_ei_loss:
-                            ei_loss, t_img = ei_loss_fn(
-                                x_recon, eval_physics, model, csmap, acceleration_encoding, start_timepoint_index
-                            )
-    
+                            if deterministic_val_ei:
+                                val_seed = deterministic_val_ei_seed + int(step0_val_batches)
+                                val_ei_ctx = _temporary_rng(val_seed)
+                            else:
+                                val_ei_ctx = nullcontext()
+                            with val_ei_ctx:
+                                ei_loss, t_img = ei_loss_fn(
+                                    x_recon, eval_physics, model, csmap, acceleration_encoding, start_timepoint_index
+                                )
+
                             initial_val_ei_loss += ei_loss.item()
     
     
@@ -1366,6 +1505,15 @@ def main():
                             dro_eval=True,
                             grasp_path=grasp_path,
                             rescale=config['evaluation']['rescale'],
+                            plot_arrival=True,
+                            arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                            arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                            arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                            arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                            arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                            arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                            arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                            arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                         )
                         initial_eval_ssims.append(ssim)
                         initial_eval_psnrs.append(psnr)
@@ -1394,7 +1542,34 @@ def main():
                         # raw k-space eval
                         print("performing non-DRO eval...")
                         dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, rescale=config['evaluation']['rescale'], dro_eval=False)
-                        dc_mse_raw, dc_mae_raw, _ = eval_sample(raw_kspace, raw_csmaps, ground_truth, raw_x_recon, eval_physics, mask, raw_grasp_img, acceleration, int(N_spokes), eval_dir, label='val0', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
+                        dc_mse_raw, dc_mae_raw, _ = eval_sample(
+                            raw_kspace,
+                            raw_csmaps,
+                            ground_truth,
+                            raw_x_recon,
+                            eval_physics,
+                            mask,
+                            raw_grasp_img,
+                            acceleration,
+                            int(N_spokes),
+                            eval_dir,
+                            label='val0',
+                            device=device,
+                            cluster=cluster,
+                            dro_eval=False,
+                            grasp_path=grasp_path,
+                            raw_slice_idx=raw_grasp_slice_idx,
+                            rescale=config['evaluation']['rescale'],
+                            plot_arrival=True,
+                            arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                            arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                            arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                            arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                            arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                            arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                            arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                            arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
+                        )
     
                         raw_grasp_dc_mses.append(dc_mse_raw_grasp)
                         raw_grasp_dc_maes.append(dc_mae_raw_grasp)
@@ -1570,6 +1745,31 @@ def main():
             epoch_eval_peak_errs = []
 
 
+            # cosine LR with warmup (set before first step of the epoch)
+            total = epochs
+            lr_sched_cfg = config.get("training", {}).get("lr_schedule", {})
+            warm = int(lr_sched_cfg.get("warmup_epochs", 5))
+            if warm < 0:
+                warm = 0
+            warmup_mode = str(lr_sched_cfg.get("warmup_mode", "linear")).lower()
+            lr_floor = lr_sched_cfg.get("min_lr_factor", 0.2)
+            if warm > 0 and epoch <= warm:
+                if warmup_mode == "cosine":
+                    lr_scale = 0.5 * (1.0 - math.cos(math.pi * (epoch / warm)))
+                else:
+                    lr_scale = epoch / warm
+            else:
+                p = (epoch - warm) / max(1, total - warm)
+                lr_scale = lr_floor + (1.0 - lr_floor) * 0.5 * (1 + math.cos(math.pi * p))
+            for pg in optimizer.param_groups:
+                pg['lr'] = config["model"]["optimizer"]["lr"] * lr_scale
+
+            current_lr = optimizer.param_groups[0]["lr"]
+            lr_history.append(current_lr)
+            lr_epochs.append(epoch)
+            if global_rank == 0 or not config['training']['multigpu']:
+                writer.add_scalar('LR', current_lr, epoch)
+
             train_loader_tqdm = tqdm(
                 train_loader, desc=f"Epoch {epoch}/{epochs}  Training", unit="batch"
             )
@@ -1651,6 +1851,8 @@ def main():
                     target_weight=target_w_ei,
                 )
                 compute_ei_this_epoch = ei_loss_weight > 0.0
+            ei_weight_history.append(ei_loss_weight)
+            ei_weight_epochs.append(epoch)
 
             # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
             t_img = None
@@ -1817,18 +2019,6 @@ def main():
                     else:
                         optimizer.step()
 
-                    # cosine LR with 5-epoch warmup
-                    total = epochs
-                    warm = 5
-                    lr_floor = config.get("training", {}).get("lr_schedule", {}).get("min_lr_factor", 0.2)
-                    if epoch <= warm:
-                        lr_scale = epoch / warm
-                    else:
-                        p = (epoch - warm) / max(1, total - warm)
-                        lr_scale = lr_floor + (1.0 - lr_floor) * 0.5 * (1 + math.cos(math.pi * p))
-                    for pg in optimizer.param_groups:
-                        pg['lr'] = config["model"]["optimizer"]["lr"] * lr_scale
-
                     end = time.time()
 
                     if global_rank == 0 or not config['training']['multigpu']:
@@ -1910,6 +2100,9 @@ def main():
                 epoch_train_rebin_loss = running_rebin_loss / len(train_loader)
             else:
                 epoch_train_rebin_loss = 0.0
+            if use_rebin_loss:
+                train_rebin_losses.append(epoch_train_rebin_loss)
+                weighted_train_rebin_losses.append(epoch_train_rebin_loss * rebin_loss_weight)
 
 
             if global_rank == 0 or not config['training']['multigpu']:
@@ -1994,9 +2187,15 @@ def main():
                                 val_running_mc_loss += val_mc_loss.item()
 
                                 if use_ei_loss and compute_ei_this_epoch:
-                                    val_ei_loss, val_t_img = ei_loss_fn(
-                                        val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
-                                    )
+                                    if deterministic_val_ei:
+                                        val_seed = deterministic_val_ei_seed + int(epoch) * 100000 + int(val_batches)
+                                        val_ei_ctx = _temporary_rng(val_seed)
+                                    else:
+                                        val_ei_ctx = nullcontext()
+                                    with val_ei_ctx:
+                                        val_ei_loss, val_t_img = ei_loss_fn(
+                                            val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
+                                        )
 
                                     val_running_ei_loss += val_ei_loss.item()
                                     val_loader_tqdm.set_postfix(
@@ -2028,6 +2227,15 @@ def main():
                                     dro_eval=True,
                                     grasp_path=grasp_path,
                                     rescale=config['evaluation']['rescale'],
+                                    plot_arrival=True,
+                                    arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                    arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                                    arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                    arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                                    arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                                    arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                                    arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                                    arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                                 )
                                 epoch_eval_ssims.append(ssim)
                                 epoch_eval_psnrs.append(psnr)
@@ -2053,7 +2261,34 @@ def main():
                                         epoch_eval_peak_errs.append(peak_err)
 
                                 # raw k-space eval
-                                dc_mse_raw, dc_mae_raw, _ = eval_sample(val_raw_kspace, val_raw_csmaps, val_ground_truth, val_raw_x_recon, eval_physics, val_mask, val_raw_grasp_img, acceleration, int(N_spokes), eval_dir, label=f'epoch{epoch}', device=device, cluster=cluster, dro_eval=False, grasp_path=grasp_path, raw_slice_idx=raw_grasp_slice_idx, rescale=config['evaluation']['rescale'])
+                                dc_mse_raw, dc_mae_raw, _ = eval_sample(
+                                    val_raw_kspace,
+                                    val_raw_csmaps,
+                                    val_ground_truth,
+                                    val_raw_x_recon,
+                                    eval_physics,
+                                    val_mask,
+                                    val_raw_grasp_img,
+                                    acceleration,
+                                    int(N_spokes),
+                                    eval_dir,
+                                    label=f'epoch{epoch}',
+                                    device=device,
+                                    cluster=cluster,
+                                    dro_eval=False,
+                                    grasp_path=grasp_path,
+                                    raw_slice_idx=raw_grasp_slice_idx,
+                                    rescale=config['evaluation']['rescale'],
+                                    plot_arrival=True,
+                                    arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                    arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                                    arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                    arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                                    arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                                    arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                                    arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                                    arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
+                                )
 
                                 epoch_eval_raw_dc_mses.append(dc_mse_raw)
                                 epoch_eval_raw_dc_maes.append(dc_mae_raw)
@@ -2158,6 +2393,14 @@ def main():
                                 output_filename=os.path.join(
                                     ec_dir, f"val_dro_sample_enhancement_curve_epoch_{epoch}.png"
                                 ),
+                                show_arrival=True,
+                                arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                                arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                                arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                                arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                                arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                                arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                             )
                         
                         if ec_dir is not None:
@@ -2166,6 +2409,14 @@ def main():
                                 output_filename=os.path.join(
                                     ec_dir, f"val_dro_grasp_sample_enhancement_curve_epoch_{epoch}.png"
                                 ),
+                                show_arrival=True,
+                                arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                                arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                                arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                                arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                                arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                                arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                             )
 
 
@@ -2246,19 +2497,12 @@ def main():
 
                     if global_rank == 0 or not config['training']['multigpu']:
 
-                        # Save the model checkpoint
-                        train_curves, val_curves, eval_curves = _build_checkpoint_curves()
-                        model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
-                        save_checkpoint(model, optimizer, epoch + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
-                        print(f'Model saved to {model_save_path}')
-
-
                         # plot losses in one figure
                         # Set the seaborn style
                         sns.set_style("whitegrid")
 
                         # Create a figure and a set of subplots
-                        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+                        fig, axes = plt.subplots(2, 4, figsize=(22, 10))
 
                         # Plot Training Adjoint Loss
                         sns.lineplot(x=range(len(train_adj_losses)), y=train_adj_losses, ax=axes[0, 0])
@@ -2278,6 +2522,13 @@ def main():
                         axes[0, 2].set_xlabel("Epoch")
                         axes[0, 2].set_ylabel("EI Loss")
 
+                        # Plot Learning Rate Schedule
+                        if lr_history:
+                            sns.lineplot(x=lr_epochs, y=lr_history, ax=axes[0, 3])
+                        axes[0, 3].set_title("Learning Rate Schedule")
+                        axes[0, 3].set_xlabel("Epoch")
+                        axes[0, 3].set_ylabel("Learning Rate")
+
                         # Plot Validation Adjoint Loss
                         sns.lineplot(x=range(0, len(val_adj_losses)*eval_frequency, eval_frequency), y=val_adj_losses, ax=axes[1, 0], color='orange')
                         axes[1, 0].set_title(f"Validation Adjoint Loss ({N_spokes_eval} spokes/frame)")
@@ -2295,6 +2546,13 @@ def main():
                         axes[1, 2].set_title(f"Validation EI Loss ({N_spokes_eval} spokes/frame)")
                         axes[1, 2].set_xlabel("Epoch")
                         axes[1, 2].set_ylabel("EI Loss")
+
+                        # Plot EI Loss Weight Schedule
+                        if ei_weight_history:
+                            sns.lineplot(x=ei_weight_epochs, y=ei_weight_history, ax=axes[1, 3], color='orange')
+                        axes[1, 3].set_title("EI Loss Weight Schedule")
+                        axes[1, 3].set_xlabel("Epoch")
+                        axes[1, 3].set_ylabel("EI Weight")
 
                         plt.tight_layout()
                         plt.savefig(os.path.join(output_dir, "losses.png"))
@@ -2356,6 +2614,30 @@ def main():
                         plt.savefig(os.path.join(output_dir, "weighted_losses.png"))
                         plt.close()
 
+                        # Plot Learning Rate Schedule
+                        if lr_history:
+                            plt.figure()
+                            plt.plot(lr_epochs, lr_history)
+                            plt.xlabel("Epoch")
+                            plt.ylabel("Learning Rate")
+                            plt.title("Learning Rate Schedule")
+                            plt.grid(True)
+                            plt.savefig(os.path.join(output_dir, "learning_rate.png"))
+                            plt.close()
+
+                        # Plot Rebin Loss (if enabled)
+                        if use_rebin_loss and train_rebin_losses:
+                            plt.figure()
+                            plt.plot(train_rebin_losses, label="Rebin Loss")
+                            if weighted_train_rebin_losses:
+                                plt.plot(weighted_train_rebin_losses, label="Weighted Rebin Loss")
+                            plt.xlabel("Epoch")
+                            plt.ylabel("Loss")
+                            plt.title("Training Rebin Loss")
+                            plt.legend()
+                            plt.grid(True)
+                            plt.savefig(os.path.join(output_dir, "rebin_loss.png"))
+                            plt.close()
 
                         # plot evaluation metrics in one figure
 
@@ -2621,6 +2903,33 @@ def main():
                     print(f"GRASP DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {np.std(raw_grasp_dc_maes):.4f}")
                     print(f"GRASP DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {np.std(raw_grasp_dc_mses):.4f}")
                     print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {np.std(grasp_curve_corrs):.4f}")
+
+            # Always save the latest checkpoint after each epoch.
+            if global_rank == 0 or not config['training']['multigpu']:
+                train_curves, val_curves, eval_curves = _build_checkpoint_curves()
+                model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
+                save_checkpoint(
+                    model,
+                    optimizer,
+                    epoch + 1,
+                    train_curves,
+                    val_curves,
+                    eval_curves,
+                    target_w_ei,
+                    step0_train_ei_loss,
+                    epoch_train_mc_loss,
+                    avg_grasp_ssim,
+                    avg_grasp_psnr,
+                    avg_grasp_mse,
+                    avg_grasp_lpips,
+                    avg_grasp_dc_mse,
+                    avg_grasp_dc_mae,
+                    avg_grasp_curve_corr,
+                    avg_grasp_raw_dc_mae,
+                    avg_grasp_raw_dc_mse,
+                    model_save_path,
+                )
+                print(f"[Checkpoint] Latest model saved to {model_save_path}")
 
             if (
                 not mc_only_checkpoint_saved

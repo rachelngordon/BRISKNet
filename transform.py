@@ -421,6 +421,11 @@ class MonophasicTimeWarp(Transform):
         warp_baseline: str | None = None,
         baseline_seconds: float = 20.0,
         buffer_frames: int = 0,
+        start_mode: str = "baseline",
+        arrival_percentile: float = 0.95,
+        arrival_baseline_k: float = 2.0,
+        arrival_method: str = "threshold",
+        arrival_fraction: float = 0.1,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -433,6 +438,11 @@ class MonophasicTimeWarp(Transform):
         self.pre_contrast_baseline = pre_contrast_baseline
         self.baseline_seconds = float(baseline_seconds)
         self.buffer_frames = max(0, int(buffer_frames))
+        self.start_mode = (start_mode or "baseline").lower()
+        self.arrival_percentile = float(arrival_percentile)
+        self.arrival_baseline_k = float(arrival_baseline_k)
+        self.arrival_method = (arrival_method or "threshold").lower()
+        self.arrival_fraction = float(arrival_fraction)
 
     def _get_params(self, x: torch.Tensor) -> dict:
         """
@@ -689,6 +699,87 @@ class TimeReverse(Transform):
         return torch.flip(x, dims=[2])
 
 
+def estimate_bolus_arrival_index(
+    x: torch.Tensor,
+    percentile: float = 0.95,
+    baseline_k: float = 2.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+    pre_contrast_baseline: str = "n_frames",
+    baseline_seconds: float = 20.0,
+    total_seconds: float = 150.0,
+) -> int:
+    """
+    Returns an integer arrival index in [0, T-1] estimated from a robust
+    global curve (top-percentile intensity). This matches the logic used by
+    BolusArrivalTimeShift.
+    """
+    if x.dim() != 5:
+        raise ValueError(f"estimate_bolus_arrival_index expects 5D tensor, got {x.shape}.")
+    B, C, T, H, W = x.shape
+    if T <= 1:
+        return 0
+
+    def _baseline_len(num_frames: int) -> int:
+        if pre_contrast_baseline == "n_frames":
+            n_base = int(round(0.1 * num_frames))
+            n_base = max(4, min(10, n_base))
+        elif pre_contrast_baseline == "m_seconds":
+            seconds_per_frame = total_seconds / max(num_frames, 1)
+            n_base = int(round(baseline_seconds / max(seconds_per_frame, 1e-6)))
+            n_base = max(1, n_base)
+        else:
+            n_base = 1
+        return min(n_base, max(num_frames, 1))
+
+    mag = torch.sqrt(x[:, 0, ...] ** 2 + x[:, 1, ...] ** 2 + 1e-8)  # (B, T, H, W)
+    flat = mag.reshape(B, T, -1)
+    q = float(percentile)
+    q = min(max(q, 0.0), 1.0)
+
+    thr = torch.quantile(flat, q, dim=-1, keepdim=True)  # (B, T, 1)
+    mask = flat > thr
+    bright_sum = (flat * mask).sum(dim=-1)
+    bright_count = mask.sum(dim=-1)
+    curve = torch.where(
+        bright_count > 0,
+        bright_sum / bright_count.clamp_min(1),
+        thr.squeeze(-1),
+    )  # (B, T)
+
+    n_base = _baseline_len(T)
+    baseline = curve[:, :n_base]
+    mu = baseline.mean(dim=1)
+    sigma = baseline.std(dim=1)
+    method = (arrival_method or "threshold").lower()
+    if method in ("fraction", "fraction_of_peak", "fop"):
+        peak = curve.max(dim=1).values
+        frac = float(arrival_fraction)
+        frac = max(0.0, min(1.0, frac))
+        thr_curve = mu + frac * (peak - mu)
+    else:
+        thr_curve = mu + float(baseline_k) * sigma
+
+    # Enforce arrival after baseline window.
+    search_start = min(n_base, max(T - 1, 0))
+    above = curve[0] > thr_curve[0]
+    if search_start > 0:
+        above[:search_start] = False
+    if torch.any(above):
+        return int(torch.argmax(above.int()).item())
+
+    # Fallback: max derivative index (wash-in onset proxy)
+    d = curve[0, 1:] - curve[0, :-1]
+    if d.numel() == 0:
+        return int(min(search_start, max(T - 1, 0)))
+    if search_start > 0:
+        d = d[search_start - 1 :]
+        if d.numel() == 0:
+            return int(min(search_start, max(T - 1, 0)))
+        return int(torch.argmax(d).item() + search_start)
+    return int(torch.argmax(d).item() + 1)
+
+
 class BolusArrivalTimeShift(Transform):
     r"""
     Breast DCE temporal augmentation: jitter the sequence in time, but *anchored* to
@@ -717,6 +808,8 @@ class BolusArrivalTimeShift(Transform):
         max_shift: int = 2,
         percentile: float = 0.95,
         baseline_k: float = 2.0,
+        arrival_method: str = "threshold",
+        arrival_fraction: float = 0.1,
         pre_contrast_baseline: str = "n_frames",
         baseline_seconds: float = 20.0,
         total_seconds: float = 150.0,
@@ -727,6 +820,8 @@ class BolusArrivalTimeShift(Transform):
         self.max_shift = max(0, int(max_shift))
         self.percentile = float(percentile)
         self.baseline_k = float(baseline_k)
+        self.arrival_method = (arrival_method or "threshold").lower()
+        self.arrival_fraction = float(arrival_fraction)
         self.pre_contrast_baseline = pre_contrast_baseline
         self.baseline_seconds = float(baseline_seconds)
         self.total_seconds = float(total_seconds)
@@ -749,45 +844,16 @@ class BolusArrivalTimeShift(Transform):
         return torch.sqrt(x[:, 0, ...] ** 2 + x[:, 1, ...] ** 2 + 1e-8)
 
     def _estimate_arrival_index(self, x: torch.Tensor) -> int:
-        """
-        Returns an integer arrival index in [0, T-1] estimated from a robust
-        global curve (top-percentile intensity).
-        """
-        B, C, T, H, W = x.shape
-        if T <= 1:
-            return 0
-
-        mag = self._magnitude(x)  # (B, T, H, W)
-        flat = mag.reshape(B, T, -1)
-        q = float(self.percentile)
-        q = min(max(q, 0.0), 1.0)
-
-        thr = torch.quantile(flat, q, dim=-1, keepdim=True)  # (B, T, 1)
-        mask = flat > thr
-        # Mean of "bright" voxels per frame; if mask is empty, fall back to the quantile.
-        bright_sum = (flat * mask).sum(dim=-1)
-        bright_count = mask.sum(dim=-1)
-        curve = torch.where(
-            bright_count > 0,
-            bright_sum / bright_count.clamp_min(1),
-            thr.squeeze(-1),
-        )  # (B, T)
-
-        n_base = self._baseline_len(T)
-        baseline = curve[:, :n_base]
-        mu = baseline.mean(dim=1)
-        sigma = baseline.std(dim=1)
-        thr_curve = mu + self.baseline_k * sigma
-
-        above = curve[0] > thr_curve[0]
-        if torch.any(above):
-            return int(torch.argmax(above.int()).item())
-
-        # Fallback: max derivative index (wash-in onset proxy)
-        d = curve[0, 1:] - curve[0, :-1]
-        if d.numel() == 0:
-            return 0
-        return int(torch.argmax(d).item() + 1)
+        return estimate_bolus_arrival_index(
+            x,
+            percentile=self.percentile,
+            baseline_k=self.baseline_k,
+            arrival_method=self.arrival_method,
+            arrival_fraction=self.arrival_fraction,
+            pre_contrast_baseline=self.pre_contrast_baseline,
+            baseline_seconds=self.baseline_seconds,
+            total_seconds=self.total_seconds,
+        )
 
     def _get_params(self, x: torch.Tensor) -> dict:
         if self.max_shift == 0:
@@ -856,6 +922,11 @@ class BaselineEnhancementScale(Transform):
         baseline_seconds: float = 20.0,
         total_seconds: float = 150.0,
         buffer_frames: int = 0,
+        start_mode: str = "baseline",
+        arrival_percentile: float = 0.95,
+        arrival_baseline_k: float = 2.0,
+        arrival_method: str = "threshold",
+        arrival_fraction: float = 0.1,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -865,6 +936,11 @@ class BaselineEnhancementScale(Transform):
         self.baseline_seconds = float(baseline_seconds)
         self.total_seconds = float(total_seconds)
         self.buffer_frames = max(0, int(buffer_frames))
+        self.start_mode = (start_mode or "baseline").lower()
+        self.arrival_percentile = float(arrival_percentile)
+        self.arrival_baseline_k = float(arrival_baseline_k)
+        self.arrival_method = (arrival_method or "threshold").lower()
+        self.arrival_fraction = float(arrival_fraction)
 
     def _baseline_len(self, T: int) -> int:
         if self.pre_contrast_baseline == "n_frames":
@@ -895,7 +971,21 @@ class BaselineEnhancementScale(Transform):
 
         n_base = self._baseline_len(T)
         buffer_len = min(self.buffer_frames, max(0, T - n_base))
-        enh_start = n_base + buffer_len
+        if self.start_mode == "arrival":
+            arrival_idx = estimate_bolus_arrival_index(
+                x,
+                percentile=self.arrival_percentile,
+                baseline_k=self.arrival_baseline_k,
+                arrival_method=self.arrival_method,
+                arrival_fraction=self.arrival_fraction,
+                pre_contrast_baseline=self.pre_contrast_baseline,
+                baseline_seconds=self.baseline_seconds,
+                total_seconds=self.total_seconds,
+            )
+            enh_start = int(arrival_idx) + buffer_len
+        else:
+            enh_start = n_base + buffer_len
+        enh_start = max(0, min(enh_start, T))
 
         # Baseline image (complex, per-pixel)
         baseline = x[:, :, :n_base, :, :].mean(dim=2, keepdim=True)  # (1, C, 1, H, W)

@@ -12,6 +12,17 @@ from sigpy.mri import app
 from radial_lsfp import MCNUFFT
 import random
 from torch.nn.parallel import DistributedDataParallel as DDP
+from transform import estimate_bolus_arrival_index
+
+
+def _torch_load_checkpoint(path: str, map_location="cpu"):
+    """Load a checkpoint in the safest available way across torch versions."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+    except Exception:
+        return torch.load(path, map_location=map_location)
 
 
 def save_csmap_png(csmap, output_dir, tag, max_coils=16, cmap="viridis"):
@@ -350,7 +361,15 @@ def plot_enhancement_curve(
     model_output: torch.Tensor,
     percentile: float = 99.0,
     title: str = "Enhancement Curve Comparison",
-    output_filename: str = None
+    output_filename: str = None,
+    show_arrival: bool = False,
+    arrival_percentile: float = 0.95,
+    arrival_baseline_k: float = 2.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+    arrival_pre_contrast_baseline: str = "n_frames",
+    arrival_baseline_seconds: float = 20.0,
+    arrival_total_seconds: float = 150.0,
 ):
     """
     Calculates and plots the enhancement curves for a model output and a benchmark
@@ -385,7 +404,23 @@ def plot_enhancement_curve(
     
     # Plot model output curve
     plt.plot(time_axis, model_curve, label='Model Output', marker='o', linestyle='-', color='tab:blue')
-    
+
+    if show_arrival:
+        arrival_idx = estimate_bolus_arrival_index(
+            model_output.detach(),
+            percentile=arrival_percentile,
+            baseline_k=arrival_baseline_k,
+            arrival_method=arrival_method,
+            arrival_fraction=arrival_fraction,
+            pre_contrast_baseline=arrival_pre_contrast_baseline,
+            baseline_seconds=arrival_baseline_seconds,
+            total_seconds=arrival_total_seconds,
+        )
+        if arrival_idx is not None:
+            arrival_time = time_axis[arrival_idx]
+            plt.axvline(arrival_time, color='tab:red', linestyle='--', linewidth=1.5, label=f'Arrival t={arrival_time}')
+            plt.scatter([arrival_time], [model_curve[arrival_idx]], color='tab:red', zorder=5)
+
     # Plot benchmark curve
     # plt.plot(time_axis, benchmark_curve, label='GRASP Benchmark', marker='x', linestyle='--', color='tab:orange')
     
@@ -535,14 +570,14 @@ def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=N
         else:
             ax1 = axes[t]
 
-        ax1.imshow(img, cmap="gray")
+        ax1.imshow(img, cmap="gray_r")
         ax1.set_title(f"t = {t}")
         ax1.set_xticks([])
         ax1.set_yticks([])
 
         if grasp_img is not None:
             ax2 = axes[1, t]
-            ax2.imshow(grasp_img, cmap="gray")
+            ax2.imshow(grasp_img, cmap="gray_r")
             ax2.set_title(f"t = {t}")
             ax2.set_xticks([])
             ax2.set_yticks([])
@@ -606,7 +641,7 @@ def save_checkpoint(model, optimizer, epoch,
 
 
 def load_checkpoint(model, optimizer, filename):
-    ckpt = torch.load(filename, map_location="cpu")
+    ckpt = _torch_load_checkpoint(filename, map_location="cpu")
 
     model_to_load = model.module if isinstance(model, DDP) else model
 
@@ -621,6 +656,10 @@ def load_checkpoint(model, optimizer, filename):
         "weighted_train_mc_losses": ckpt.get("weighted_train_mc_losses", []),
         "weighted_train_ei_losses": ckpt.get("weighted_train_ei_losses", []),
         "weighted_train_adj_losses": ckpt.get("weighted_train_adj_losses", []),
+        "train_rebin_losses": ckpt.get("train_rebin_losses", []),
+        "weighted_train_rebin_losses": ckpt.get("weighted_train_rebin_losses", []),
+        "lr_history": ckpt.get("lr_history", []),
+        "lr_epochs": ckpt.get("lr_epochs", []),
     }
     val_curves = {
         "val_mc_losses": ckpt.get("val_mc_losses", []),
@@ -649,6 +688,52 @@ def load_checkpoint(model, optimizer, filename):
     }
 
     return model, optimizer, ckpt.get("epoch", 1), ckpt.get("ei_weight"), ckpt.get("step0_train_ei_loss"), ckpt.get("epoch_train_mc_loss"), train_curves, val_curves, eval_curves, ckpt.get("avg_grasp_ssim"), ckpt.get("avg_grasp_psnr"), ckpt.get("avg_grasp_mse"), ckpt.get("avg_grasp_lpips"), ckpt.get("avg_grasp_dc_mse"), ckpt.get("avg_grasp_dc_mae"), ckpt.get("avg_grasp_curve_corr"), ckpt.get("avg_grasp_raw_dc_mae"), ckpt.get("avg_grasp_raw_dc_mse")
+
+
+def load_pretrained_weights(model, filename, skip_prefixes=None):
+    """
+    Load model weights for warm-starting without optimizer/epoch state.
+
+    This is forgiving about missing/unexpected keys and shape mismatches,
+    which is useful when enabling new components (e.g., encodings).
+    """
+    ckpt = _torch_load_checkpoint(filename, map_location="cpu")
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    state_dict = remove_module_prefix(state_dict)
+
+    model_to_load = model.module if isinstance(model, DDP) else model
+    model_state = model_to_load.state_dict()
+
+    skip_prefixes = tuple(skip_prefixes or [])
+    filtered_state = {}
+    skipped_keys = []
+    mismatched_keys = []
+
+    for key, value in state_dict.items():
+        if skip_prefixes and key.startswith(skip_prefixes):
+            skipped_keys.append(key)
+            continue
+        if key not in model_state:
+            skipped_keys.append(key)
+            continue
+        if model_state[key].shape != value.shape:
+            mismatched_keys.append((key, tuple(value.shape), tuple(model_state[key].shape)))
+            continue
+        filtered_state[key] = value
+
+    incompatible = model_to_load.load_state_dict(filtered_state, strict=False)
+
+    info = {
+        "checkpoint_keys": len(state_dict),
+        "loaded_keys": len(filtered_state),
+        "skipped_keys": len(skipped_keys),
+        "skipped_sample": skipped_keys[:10],
+        "mismatched_keys": mismatched_keys,
+        "missing_keys": len(incompatible.missing_keys),
+        "unexpected_keys": len(incompatible.unexpected_keys),
+        "checkpoint_epoch": ckpt.get("epoch"),
+    }
+    return model, info
 
 def to_torch_complex(x: torch.Tensor):
     """(B, 2, ...) real -> (B, ...) complex"""
@@ -751,7 +836,7 @@ def GRASPRecon(csmaps, kspace, spokes_per_frame, num_frames, grasp_path):
     R1 = np.squeeze(R1.get())
 
     np.save(grasp_path, R1)
-    print(f"GRASP Recon with {spokes_per_frame} spokes/frame and {num_frames} timeframes saved to {grasp_path}")
+    print(f"GRASP with {spokes_per_frame} spokes/frame and {num_frames} timeframes saved to {grasp_path}")
 
     return R1
 

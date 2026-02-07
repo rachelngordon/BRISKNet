@@ -207,6 +207,13 @@ def log_slice_sampling_startup_report(
     cutoff_values = []
     eligible_fracs = []
 
+    volume_names = []
+    m_all_values = []
+    m_weighted_values = []
+    m_uniform_values = []
+    zero_score_counts = []
+    weighted_positive_counts = []
+
     expected_uniform_eligible = []
     expected_weighted_eligible = []
     expected_uniform_ineligible = []
@@ -237,9 +244,20 @@ def log_slice_sampling_startup_report(
             cutoff = float(np.min(weights)) if weights.size else 0.0
             eligible_mask = np.ones_like(weights, dtype=bool)
 
+        weights_after_filter = np.where(eligible_mask, weights, 0.0)
+        zero_score_count = int(np.count_nonzero(weights == 0))
+        weighted_positive_count = int(np.count_nonzero(weights_after_filter > 0))
+
         eligible_count = int(np.count_nonzero(eligible_mask))
         filtered_count = int(num_slices - eligible_count)
         eligible_frac = eligible_count / num_slices if num_slices else 0.0
+
+        volume_names.append(os.path.basename(file_path))
+        m_all_values.append(num_slices)
+        m_uniform_values.append(num_slices)
+        m_weighted_values.append(weighted_positive_count)
+        zero_score_counts.append(zero_score_count)
+        weighted_positive_counts.append(weighted_positive_count)
 
         eligible_fracs.append(eligible_frac)
         all_scores.append(weights)
@@ -286,6 +304,11 @@ def log_slice_sampling_startup_report(
     filtered_scores_arr = np.concatenate(filtered_scores) if filtered_scores else np.array([])
 
     eligible_fracs_arr = np.asarray(eligible_fracs, dtype=np.float64)
+    m_all_arr = np.asarray(m_all_values, dtype=np.float64)
+    m_weighted_arr = np.asarray(m_weighted_values, dtype=np.float64)
+    m_uniform_arr = np.asarray(m_uniform_values, dtype=np.float64)
+    zero_score_arr = np.asarray(zero_score_counts, dtype=np.float64)
+    weighted_positive_arr = np.asarray(weighted_positive_counts, dtype=np.float64)
     sample_counts_arr = np.asarray(sample_counts, dtype=np.float64)
 
     total_samples = float(sample_counts_arr.sum()) if sample_counts_arr.size else 0.0
@@ -317,6 +340,74 @@ def log_slice_sampling_startup_report(
         f"below-cutoff {_safe_percent(ineligible_share):.1f}%"
         + (f" (weighted fallback {_safe_percent(weighted_ineligible_share):.1f}%)" if weighted_ineligible_share > 0 else "")
     )
+
+    if m_all_arr.size:
+        fraction_weighted_arr = np.divide(
+            m_weighted_arr, m_all_arr, out=np.zeros_like(m_weighted_arr), where=m_all_arr > 0
+        )
+    else:
+        fraction_weighted_arr = np.array([])
+
+    if n_weighted > 0:
+        epochs_to_exhaust_weighted = np.floor(m_weighted_arr / float(n_weighted))
+    else:
+        epochs_to_exhaust_weighted = np.full_like(m_weighted_arr, np.nan, dtype=np.float64)
+
+    if num_random_slices > 0:
+        epochs_to_exhaust_total = np.floor(m_all_arr / float(num_random_slices))
+    else:
+        epochs_to_exhaust_total = np.full_like(m_all_arr, np.nan, dtype=np.float64)
+
+    def _summarize_epochs(name: str, arr: np.ndarray) -> Optional[dict]:
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            print(f"  {name}: n/a")
+            return None
+        summary = {
+            "min": float(np.min(finite)),
+            "median": float(np.median(finite)),
+            "p10": float(np.percentile(finite, 10)),
+        }
+        print(
+            f"  {name}: min {summary['min']:.0f}, "
+            f"median {summary['median']:.0f}, p10 {summary['p10']:.0f}"
+        )
+        return summary
+
+    print("  coverage/exhaustion estimates (epochs):")
+    if not no_replacement:
+        print("    note: no-replacement is disabled; exhaustion estimates are analytical only.")
+    print("    pool basis: all_slices (current implementation)")
+    print("    M_uniform definition: M_all (pool uses all slices)")
+    weighted_summary = _summarize_epochs("epochs_to_exhaust_weighted", epochs_to_exhaust_weighted)
+    total_summary = _summarize_epochs("epochs_to_exhaust_total", epochs_to_exhaust_total)
+
+    first_failure_candidates = []
+    first_failure_labels = []
+    if weighted_summary is not None:
+        first_failure_candidates.append(weighted_summary["min"])
+        first_failure_labels.append("weighted")
+    if total_summary is not None:
+        first_failure_candidates.append(total_summary["min"])
+        first_failure_labels.append("total")
+
+    if first_failure_candidates:
+        earliest = min(first_failure_candidates)
+        label = first_failure_labels[int(np.argmin(first_failure_candidates))]
+        print(f"  likely first failure epoch: {earliest:.0f} ({label})")
+
+    print("  per-volume coverage stats:")
+    for name, m_all, zero_count, weighted_pos, cutoff in zip(
+        volume_names, m_all_values, zero_score_counts, weighted_positive_counts,
+        cutoff_values if cutoff_values else [np.nan] * len(volume_names),
+    ):
+        frac_weighted = (weighted_pos / m_all) if m_all else 0.0
+        cutoff_str = f"{cutoff:.6g}" if np.isfinite(cutoff) else "n/a"
+        print(
+            f"    {name}: M_all={m_all}, M_uniform={m_all}, score==0={zero_count}, "
+            f"weight_after_filter>0={weighted_pos}, "
+            f"frac_weighted={frac_weighted:.3f}, cutoff={cutoff_str}"
+        )
 
     def _print_summary(name: str, arr: np.ndarray) -> None:
         summary = _summarize_scores(arr)
@@ -382,6 +473,65 @@ def log_slice_sampling_startup_report(
     fig.suptitle(f"{label} slice sampling scores ({score_desc})", fontsize=11)
     fig.savefig(hist_path, dpi=150)
     plt.close(fig)
+
+    if m_all_arr.size:
+        size_path = os.path.join(hist_dir, f"{label}_slice_sampling_pool_sizes.png")
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4), constrained_layout=True)
+        axes[0].hist(m_weighted_arr, bins=30, color="#4C78A8", alpha=0.8)
+        axes[0].set_title("M_weighted (weights>0)")
+        axes[0].set_xlabel("Slices")
+        axes[0].set_ylabel("Count")
+        axes[1].hist(fraction_weighted_arr, bins=30, color="#54A24B", alpha=0.8)
+        axes[1].set_title("M_weighted / M_all")
+        axes[1].set_xlabel("Fraction")
+        axes[1].set_ylabel("Count")
+        if cutoff_values:
+            axes[2].hist(cutoff_values, bins=30, color="#E45756", alpha=0.8)
+            axes[2].set_title(f"Cutoff values (q={filter_quantile:.2f})")
+            axes[2].set_xlabel("Cutoff")
+            axes[2].set_ylabel("Count")
+        else:
+            axes[2].set_axis_off()
+            axes[2].text(0.5, 0.5, "No cutoff values", ha="center", va="center")
+        fig.savefig(size_path, dpi=150)
+        plt.close(fig)
+
+        finite_epochs = []
+        if np.isfinite(epochs_to_exhaust_weighted).any():
+            finite_epochs.append(np.nanmax(epochs_to_exhaust_weighted))
+        if np.isfinite(epochs_to_exhaust_total).any():
+            finite_epochs.append(np.nanmax(epochs_to_exhaust_total))
+        max_est = int(max(finite_epochs)) if finite_epochs else 10
+        max_epochs = int(min(max(10, max_est * 2), 500))
+        epochs = np.arange(0, max_epochs + 1)
+
+        sort_idx = np.argsort(m_weighted_arr)
+        worst_idx = int(sort_idx[0])
+        median_idx = int(sort_idx[len(sort_idx) // 2])
+        best_idx = int(sort_idx[-1])
+        curve_specs = [
+            ("Worst (min M_weighted)", worst_idx),
+            ("Median", median_idx),
+            ("Best (max M_weighted)", best_idx),
+        ]
+
+        coverage_path = os.path.join(hist_dir, f"{label}_slice_sampling_coverage_curve.png")
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4), constrained_layout=True)
+        for ax, (title, idx) in zip(axes, curve_specs):
+            m_all = float(m_all_arr[idx])
+            m_weighted = float(m_weighted_arr[idx])
+            unique_uniform = np.minimum(m_all, epochs * float(n_uniform))
+            unique_weighted = np.minimum(m_weighted, epochs * float(n_weighted))
+            unique_total = np.minimum(m_all, unique_uniform + unique_weighted)
+            ax.plot(epochs, unique_uniform, label="uniform")
+            ax.plot(epochs, unique_weighted, label="weighted")
+            ax.plot(epochs, unique_total, label="total")
+            ax.set_title(title)
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Expected unique slices")
+            ax.legend()
+        fig.savefig(coverage_path, dpi=150)
+        plt.close(fig)
 
     if filter_quantile > 0 and cutoff_values:
         cutoff_path = os.path.join(hist_dir, f"{label}_slice_sampling_cutoffs.png")
@@ -678,6 +828,12 @@ class ZFSliceDataset(Dataset):
                         self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
                     else:
                         # Finish the current cycle first, then reset the pool.
+                        if self.slice_sampling_mode != "uniform" and self.slice_sampling_uniform_fraction < 1.0:
+                            print(
+                                "[SliceSampling] Reset no-replacement pool for "
+                                f"{os.path.basename(file_path)} (mode={self.slice_sampling_mode}, "
+                                f"pool_remaining={len(pool)}, num_random_slices={self.num_random_slices})."
+                            )
                         selected_slices = self._sample_from_pool(
                             file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=len(pool)
                         )
@@ -1213,6 +1369,12 @@ class SliceDataset(Dataset):
                         self._slice_remaining[file_path] = [idx for idx in pool if idx not in selected_slices]
                     else:
                         # Finish the current cycle first, then reset the pool.
+                        if self.slice_sampling_mode != "uniform" and self.slice_sampling_uniform_fraction < 1.0:
+                            print(
+                                "[SliceSampling] Reset no-replacement pool for "
+                                f"{os.path.basename(file_path)} (mode={self.slice_sampling_mode}, "
+                                f"pool_remaining={len(pool)}, num_random_slices={self.num_random_slices})."
+                            )
                         selected_slices = self._sample_from_pool(
                             file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=len(pool)
                         )

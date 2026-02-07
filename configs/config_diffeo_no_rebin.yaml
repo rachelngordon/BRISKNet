@@ -26,6 +26,7 @@ data:
 experiment:
   output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
+  pretrained_checkpoint: '/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_diffeo_36spf/ei_diffeo_36spf_best_model.pth'
 
 # DataLoader settings
 dataloader:
@@ -68,7 +69,7 @@ model:
   checkpoint_use_reentrant: false
   optimizer:
     name: "Adam"
-    lr: 0.0005
+    lr: 0.0001
     weight_decay: 0.0
     b1: 0.9
     b2: 0.999
@@ -82,27 +83,47 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "none"
-      spatial_transform: "all"
-      rotate_range: 20
+      temporal_transform: "arrival_shift_enh_scale"
+      spatial_transform: "diffeo"
+      rotate_range: 0
       weight: 10000
-      warmup: 10
-      duration: 5
+      warmup: 0
+      duration: 40
       subsample_ratio_min: 0.7
       subsample_ratio_max: 0.95
       warp_ratio_min: 0.6
       warp_ratio_max: 0.95
+      # --- arrival_shift params ---
+      arrival_shift_max_shift: 1
+      arrival_shift_percentile: 0.95
+      arrival_shift_baseline_k: 2.0
+      # --- enh_scale params ---
+      enh_scale_min: 0.85
+      enh_scale_max: 1.15
+      pre_contrast_baseline: "m_seconds"
+      baseline_seconds: 20.0
+      total_seconds: 150.0
       no_grad: false
+    # Operator-level (binning) equivariance (DDEI-ish).
+    rebin_loss:
+      enable: false
+      weight: 10000
+      factor: 2
+      metric: "MSE"
+      time_index_mode: "scaled"
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 600
+  epochs: 80
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
   multigpu: True
+  lr_schedule:
+    min_lr_factor: 0.2
+    warmup_epochs: 5
   edge_time_index_sampling: false
   curriculum_learning:
     enabled: False

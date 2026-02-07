@@ -4,6 +4,7 @@ import glob
 import math
 import os
 import time
+import warnings
 from typing import Tuple
 
 import h5py
@@ -29,6 +30,23 @@ from utils import (
     set_seed,
     sliding_window_inference,
 )
+
+# Silence torchmetrics/torch FutureWarning about torch.load(weights_only=...) defaults.
+warnings.filterwarnings(
+    "ignore",
+    message=r"You are using `torch\.load` with `weights_only=False`.*",
+    category=FutureWarning,
+)
+
+
+def _torch_load_checkpoint(path: str, map_location="cpu"):
+    """Load a checkpoint in the safest available way across torch versions."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+    except Exception:
+        return torch.load(path, map_location=map_location)
 
 
 ## COMMANDS
@@ -95,7 +113,7 @@ def _build_model(config: dict, device, block_dir: str):
 
 
 def _load_weights(model, ckpt_path: str):
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = _torch_load_checkpoint(ckpt_path, map_location="cpu")
     state_dict = ckpt.get("model_state_dict", ckpt)
     model.load_state_dict(remove_module_prefix(state_dict))
     return model
@@ -318,6 +336,10 @@ def main():
     device = torch.device(args.device or config["training"]["device"])
     rescale = config.get("evaluation", {}).get("rescale", True)
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
+    ei_cfg = config.get("model", {}).get("losses", {}).get("ei_loss", {})
+    arrival_method = (ei_cfg.get("arrival_method", "threshold") or "threshold").lower()
+    arrival_fraction = float(ei_cfg.get("arrival_fraction", 0.1))
+    arrival_k = float(ei_cfg.get("arrival_shift_baseline_k", 2.0))
     if args.raw_slice_idx is not None:
         raw_grasp_slice_idx = args.raw_slice_idx
 
@@ -587,6 +609,9 @@ def main():
         grasp_path=grasp_path,
         rescale=rescale,
         filename_suffix="raw_csmaps",
+        arrival_k=arrival_k,
+        arrival_method=arrival_method,
+        arrival_fraction=arrival_fraction,
     )
 
     grasp_metrics = eval_grasp(
@@ -618,6 +643,9 @@ def main():
         grasp_path=grasp_path,
         raw_slice_idx=raw_slice_idx,
         rescale=rescale,
+        arrival_k=arrival_k,
+        arrival_method=arrival_method,
+        arrival_fraction=arrival_fraction,
     )
     raw_grasp_dc_mse, raw_grasp_dc_mae = eval_grasp(
         raw_kspace,
