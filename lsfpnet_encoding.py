@@ -879,8 +879,10 @@ class ArtifactRemovalLSFPNet(nn.Module):
             y_norm = y
             scale = 1.0
 
-        # Generate style embedding from the acceleration factor and/or time start index
-        if acceleration or start_timepoint_index:                                          # already small
+        # Generate style embedding from the acceleration factor and/or time start index.
+        # Important: start_timepoint_index can legitimately be 0, so we must test for None
+        # explicitly instead of relying on tensor truthiness.
+        if (acceleration is not None) or (start_timepoint_index is not None):
 
             if start_timepoint_index is not None:
                 # feature 2: start index as fraction of total frames
