@@ -42,9 +42,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--dro_sim_source",
-        default="espirit",
+        default=None,
         choices=("original", "espirit"),
-        help="DRO simulated k-space/GRASP source to pass to run_inference (default: espirit).",
+        help=(
+            "Override DRO simulated k-space/GRASP source passed to run_inference.py. "
+            "If omitted, run_inference.py defaults are used."
+        ),
     )
     parser.add_argument(
         "--dry_run",
@@ -80,9 +83,10 @@ def main() -> int:
             exp_dir,
             "--device",
             f"cuda:{gpu_id}",
-            "--dro_sim_source",
-            args.dro_sim_source,
-        ] + passthrough
+        ]
+        if args.dro_sim_source is not None:
+            cmd.extend(["--dro_sim_source", args.dro_sim_source])
+        cmd += passthrough
         print("Running:", " ".join(shlex.quote(c) for c in cmd))
         if args.dry_run:
             return None
