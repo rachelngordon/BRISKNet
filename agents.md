@@ -2,8 +2,14 @@
 
 This project trains a reconstruction agent for highly undersampled breast DCE-MRI using the Dynamic Diffeomorphic Equivariant Imaging (DDEI) framework. The goal is to recover diagnostic-quality temporal dynamics for cancer treatment, diagnosis, and risk prediction without requiring ground-truth images during training.
 
+## Development Principles
+- This is research code: prefer fail-fast behavior over defensive fallback chains.
+- Do not add broad catch-and-continue logic to hide configuration/environment problems.
+- When a required dependency/path/config is wrong, raise a clear error and fix the root cause.
+
 ## Core Ideas
 - **Unsupervised objective**: Combine a measurement consistency (MC) loss in k-space with an equivariant imaging (EI) loss in image space to enforce physics fidelity and artifact removal without paired labels (`mc.py`, `ei.py`).
+- **Supervision source**: Training uses only measured/ground-truth k-space data as supervision; there are no ground-truth image targets during training.
 - **Backbone**: LSFPNet unrolls the Low-rank + Sparsity with Framelet transform and primal–dual fixed-point optimization; includes learnable cascades, Film-style modulation, and optional low-k DC (`lsfpnet.py`, `lsfpnet_encoding.py`, `radial_lsfp.py`).
 - **Flexible transforms**: EI loss supports spatial transforms (rotation, warp, subsample) and optional noise/augmentation scheduling via YAML config.
 
