@@ -102,11 +102,25 @@ model:
       no_grad: false
     # Operator-level (binning) equivariance (DDEI-ish).
     rebin_loss:
-      enable: false
+      enable: true
       weight: 10000
-      factor: 2
+      factor: 4
       metric: "MSE"
       time_index_mode: "scaled"
+      teacher_branch: "lo"
+      teacher_stopgrad: true
+      offset_mode: "random"
+      temporal_mode: "temporal_difference"
+      baseline_frames: 4
+      dynamic_mask:
+        enable: true
+        warmup_epochs: 10
+        fraction: 0.01
+        min_pixels: 256
+        smooth_kernel: 5
+        clip_min: 0.0
+        clip_max: 1.0
+        stop_grad: true
   norm: "both"
 
 

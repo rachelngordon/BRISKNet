@@ -443,6 +443,194 @@ def plot_enhancement_curve(
         
     plt.close()
 
+
+def _ensure_b2hwt(x: torch.Tensor) -> torch.Tensor:
+    """
+    Ensure a complex 2-channel video tensor is shaped (B, 2, H, W, T).
+
+    Accepts:
+      - (B, 2, H, W, T)  [preferred in this repo]
+      - (B, 2, T, H, W)  [some plotting utilities]
+      - (2, H, W, T) / (2, T, H, W) [no batch]
+    """
+    if not torch.is_tensor(x):
+        raise TypeError(f"Expected torch.Tensor, got {type(x)}")
+
+    if x.dim() == 4:
+        x = x.unsqueeze(0)
+
+    if x.dim() != 5 or x.shape[1] != 2:
+        raise ValueError(f"Expected shape (B, 2, ..., ..., ...), got {tuple(x.shape)}")
+
+    # Decide which of dims {2,3,4} is time by assuming time is the smallest.
+    d2, d3, d4 = int(x.shape[2]), int(x.shape[3]), int(x.shape[4])
+    dims = np.array([d2, d3, d4], dtype=np.int64)
+    time_axis = int(np.argmin(dims))
+
+    if time_axis == 0:
+        # (B,2,T,H,W) -> (B,2,H,W,T)
+        return rearrange(x, "b c t h w -> b c h w t")
+    if time_axis == 1:
+        # (B,2,H,T,W) -> (B,2,H,W,T)
+        return rearrange(x, "b c h t w -> b c h w t")
+    return x
+
+
+def _downsample_time_mean_b2hwt(x: torch.Tensor, factor: int) -> torch.Tensor:
+    if factor <= 1:
+        return x
+    B, C, H, W, T = x.shape
+    T_lo = T // factor
+    if T_lo <= 0:
+        return x[:, :, :, :, :0]
+    x_cropped = x[:, :, :, :, : T_lo * factor]
+    x_grouped = x_cropped.view(B, C, H, W, T_lo, factor)
+    return x_grouped.mean(dim=-1)
+
+
+def _masked_mean_curve_mag_b2hwt(x: torch.Tensor, mask_hw: torch.Tensor) -> torch.Tensor:
+    x = _ensure_b2hwt(x)
+    if mask_hw.dim() != 2:
+        raise ValueError(f"Expected mask with shape (H,W), got {tuple(mask_hw.shape)}")
+    if mask_hw.shape[0] != x.shape[2] or mask_hw.shape[1] != x.shape[3]:
+        raise ValueError(
+            f"Mask shape {tuple(mask_hw.shape)} does not match spatial dims {(int(x.shape[2]), int(x.shape[3]))}"
+        )
+
+    # mag: (B,H,W,T)
+    mag = torch.sqrt(x[:, 0] ** 2 + x[:, 1] ** 2)
+    mag0 = mag[0].reshape(-1, mag.shape[-1])
+    mask_flat = mask_hw.reshape(-1).to(dtype=torch.bool, device=mag0.device)
+    if int(mask_flat.sum().item()) <= 0:
+        return torch.zeros((mag0.shape[-1],), dtype=mag0.dtype, device=mag0.device)
+    return mag0[mask_flat].mean(dim=0)
+
+
+def plot_rebin_consistency_diagnostic(
+    x_hi: torch.Tensor,
+    x_lo: torch.Tensor,
+    factor: int,
+    output_filename: str,
+    *,
+    x_hi_down: Optional[torch.Tensor] = None,
+    mask_fraction: float = 0.01,
+    min_pixels: int = 256,
+    baseline_frames: int = 4,
+    title: Optional[str] = None,
+):
+    """
+    Save a simple, training-safe diagnostic plot for the rebin branch:
+      - dynamic mask from temporal std of |x_hi|
+      - baseline-subtracted masked mean curves for x_hi, Avg_factor(x_hi), and x_lo
+
+    This is meant to run once at startup (or on a checkpoint) to sanity-check whether
+    the rebin branch is learning dynamics or collapsing to a flat curve.
+    """
+    factor = max(1, int(factor))
+    if factor <= 1:
+        raise ValueError("factor must be > 1 for a rebin diagnostic.")
+
+    if not (0.0 < float(mask_fraction) <= 1.0):
+        raise ValueError("mask_fraction must be in (0, 1].")
+
+    x_hi_b2hwt = _ensure_b2hwt(x_hi.detach())
+    x_lo_b2hwt = _ensure_b2hwt(x_lo.detach())
+    if x_hi_down is None:
+        x_hi_down_b2hwt = _downsample_time_mean_b2hwt(x_hi_b2hwt, factor)
+    else:
+        x_hi_down_b2hwt = _ensure_b2hwt(x_hi_down.detach())
+
+    if x_hi_down_b2hwt.shape[-1] != x_lo_b2hwt.shape[-1]:
+        raise ValueError(
+            "x_hi_down and x_lo must have the same number of frames. "
+            f"Got {int(x_hi_down_b2hwt.shape[-1])} vs {int(x_lo_b2hwt.shape[-1])}."
+        )
+
+    # Compute a dynamic-region mask from temporal std of |x_hi|.
+    mag_hi = torch.sqrt(x_hi_b2hwt[:, 0] ** 2 + x_hi_b2hwt[:, 1] ** 2)  # (B,H,W,T)
+    std_map = mag_hi[0].std(dim=-1)  # (H,W)
+    std_flat = std_map.reshape(-1)
+    numel = int(std_flat.numel())
+    # min_pixels is deprecated for diagnostics; fraction controls mask size.
+    target_pixels = int(round(float(mask_fraction) * numel))
+    target_pixels = min(max(target_pixels, 1), numel)
+    topk_idx = torch.topk(std_flat, k=target_pixels, largest=True, sorted=False).indices
+    mask_flat = torch.zeros_like(std_flat, dtype=torch.bool)
+    mask_flat[topk_idx] = True
+    mask_hw = mask_flat.view_as(std_map)
+
+    # Curves.
+    curve_hi = _masked_mean_curve_mag_b2hwt(x_hi_b2hwt, mask_hw)
+    curve_hi_down = _masked_mean_curve_mag_b2hwt(x_hi_down_b2hwt, mask_hw)
+    curve_lo = _masked_mean_curve_mag_b2hwt(x_lo_b2hwt, mask_hw)
+
+    T_hi = int(curve_hi.shape[0])
+    T_lo = int(curve_lo.shape[0])
+    baseline_hi = max(1, min(int(baseline_frames), T_hi))
+    baseline_lo = max(1, min(int(np.ceil(baseline_hi / float(factor))), T_lo))
+
+    curve_hi = (curve_hi - curve_hi[:baseline_hi].mean()).cpu().numpy()
+    curve_hi_down = (curve_hi_down - curve_hi_down[:baseline_lo].mean()).cpu().numpy()
+    curve_lo = (curve_lo - curve_lo[:baseline_lo].mean()).cpu().numpy()
+
+    t_hi = np.arange(T_hi)
+    t_lo = np.arange(T_lo) * factor + (factor - 1) / 2.0
+
+    std_np = std_map.detach().cpu().numpy()
+    mask_np = mask_hw.detach().cpu().numpy().astype(np.float32)
+
+    os.makedirs(os.path.dirname(output_filename) or ".", exist_ok=True)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={"width_ratios": [1, 1.3]})
+
+    axes[0].imshow(std_np, cmap="magma")
+    axes[0].imshow(mask_np, cmap="Reds", alpha=0.35, vmin=0.0, vmax=1.0)
+    axes[0].set_title(f"Temporal std(|x_hi|), mask={target_pixels} px")
+    axes[0].axis("off")
+
+    axes[1].plot(t_hi, curve_hi, label=f"x_hi (T={T_hi})", color="tab:blue", linewidth=2)
+    axes[1].plot(
+        t_lo,
+        curve_hi_down,
+        label=f"Avg_{factor}(x_hi) (T={T_lo})",
+        color="tab:orange",
+        linewidth=2,
+        marker="o",
+        markersize=3,
+    )
+    axes[1].plot(
+        t_lo,
+        curve_lo,
+        label=f"x_lo (rebinned) (T={T_lo})",
+        color="tab:green",
+        linewidth=2,
+        marker="o",
+        markersize=3,
+    )
+    axes[1].axhline(0.0, color="k", linewidth=1, alpha=0.3)
+    axes[1].set_xlabel("High-temporal frame index")
+    axes[1].set_ylabel("Masked mean |x| (baseline-subtracted)")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend(loc="best")
+
+    if title is None:
+        title = f"Rebin diagnostic (factor={factor}, mask_fraction={mask_fraction:g})"
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(output_filename, dpi=200)
+    plt.close(fig)
+
+    return {
+        "factor": factor,
+        "mask_fraction": float(mask_fraction),
+        "mask_pixels": int(target_pixels),
+        "baseline_hi_frames": int(baseline_hi),
+        "baseline_lo_bins": int(baseline_lo),
+        "curve_hi": curve_hi,
+        "curve_hi_down": curve_hi_down,
+        "curve_lo": curve_lo,
+    }
+
     
 
 def get_cosine_ei_weight(

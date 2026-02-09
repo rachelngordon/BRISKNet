@@ -25,7 +25,7 @@ from ei import EILoss
 from mc import MCLoss
 from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
 from radial_lsfp import MCNUFFT
-from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
+from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
 from eval import eval_grasp, eval_sample
 import csv
 import math
@@ -509,6 +509,32 @@ def main():
     rebin_factor = int(rebin_cfg.get("factor", 2))
     rebin_metric_name = str(rebin_cfg.get("metric", "MSE"))
     rebin_time_index_mode = str(rebin_cfg.get("time_index_mode", "none"))
+    rebin_teacher_branch = str(rebin_cfg.get("teacher_branch", "none"))
+    rebin_teacher_stopgrad = bool(rebin_cfg.get("teacher_stopgrad", False))
+    rebin_offset_mode = str(rebin_cfg.get("offset_mode", "none"))
+    rebin_temporal_mode = str(rebin_cfg.get("temporal_mode", "absolute"))
+    rebin_baseline_frames = int(rebin_cfg.get("baseline_frames", 4))
+    rebin_percent_enhancement_eps = float(rebin_cfg.get("percent_enhancement_eps", 1e-4))
+
+    rebin_dynamic_mask_cfg = rebin_cfg.get("dynamic_mask", {})
+    if isinstance(rebin_dynamic_mask_cfg, dict):
+        rebin_dynamic_mask_enable = bool(rebin_dynamic_mask_cfg.get("enable", False))
+        rebin_dynamic_mask_fraction = float(rebin_dynamic_mask_cfg.get("fraction", 0.01))
+        rebin_dynamic_mask_min_pixels = int(rebin_dynamic_mask_cfg.get("min_pixels", 256))
+        rebin_dynamic_mask_warmup_epochs = int(rebin_dynamic_mask_cfg.get("warmup_epochs", 0))
+        rebin_dynamic_mask_smooth_kernel = int(rebin_dynamic_mask_cfg.get("smooth_kernel", 0))
+        rebin_dynamic_mask_clip_min = float(rebin_dynamic_mask_cfg.get("clip_min", 0.0))
+        rebin_dynamic_mask_clip_max = float(rebin_dynamic_mask_cfg.get("clip_max", 1.0))
+        rebin_dynamic_mask_stop_grad = bool(rebin_dynamic_mask_cfg.get("stop_grad", True))
+    else:
+        rebin_dynamic_mask_enable = bool(rebin_dynamic_mask_cfg)
+        rebin_dynamic_mask_fraction = float(rebin_cfg.get("dynamic_mask_fraction", 0.01))
+        rebin_dynamic_mask_min_pixels = int(rebin_cfg.get("dynamic_mask_min_pixels", 256))
+        rebin_dynamic_mask_warmup_epochs = int(rebin_cfg.get("dynamic_mask_warmup_epochs", 0))
+        rebin_dynamic_mask_smooth_kernel = int(rebin_cfg.get("dynamic_mask_smooth_kernel", 0))
+        rebin_dynamic_mask_clip_min = float(rebin_cfg.get("dynamic_mask_clip_min", 0.0))
+        rebin_dynamic_mask_clip_max = float(rebin_cfg.get("dynamic_mask_clip_max", 1.0))
+        rebin_dynamic_mask_stop_grad = bool(rebin_cfg.get("dynamic_mask_stop_grad", True))
 
     save_interval = config["training"]["save_interval"]
     plot_interval = config["training"]["plot_interval"]
@@ -1002,9 +1028,216 @@ def main():
             factor=rebin_factor,
             metric=rebin_metric,
             time_index_mode=rebin_time_index_mode,
+            teacher_branch=rebin_teacher_branch,
+            teacher_stopgrad=rebin_teacher_stopgrad,
+            offset_mode=rebin_offset_mode,
+            temporal_mode=rebin_temporal_mode,
+            baseline_frames=rebin_baseline_frames,
+            percent_enhancement_eps=rebin_percent_enhancement_eps,
+            dynamic_mask_enable=rebin_dynamic_mask_enable,
+            dynamic_mask_fraction=rebin_dynamic_mask_fraction,
+            dynamic_mask_min_pixels=rebin_dynamic_mask_min_pixels,
+            dynamic_mask_warmup_epochs=rebin_dynamic_mask_warmup_epochs,
+            dynamic_mask_smooth_kernel=rebin_dynamic_mask_smooth_kernel,
+            dynamic_mask_clip_min=rebin_dynamic_mask_clip_min,
+            dynamic_mask_clip_max=rebin_dynamic_mask_clip_max,
+            dynamic_mask_stop_grad=rebin_dynamic_mask_stop_grad,
         )
+        if global_rank == 0 or not config['training']['multigpu']:
+            print(
+                "[Rebin] "
+                f"factor={rebin_factor}, teacher={rebin_teacher_branch}, stopgrad={rebin_teacher_stopgrad}, "
+                f"offset_mode={rebin_offset_mode}, temporal_mode={rebin_temporal_mode}, "
+                f"dynamic_mask={rebin_dynamic_mask_enable}"
+            )
     else:
         rebin_loss_fn = None
+
+    # Optional: one-shot diagnostic plot for rebin consistency (runs before training).
+    rebin_diag_cfg = config.get("debugging", {}).get("rebin_diagnostic", {})
+    rebin_diag_enabled = bool(rebin_diag_cfg.get("enable", False))
+    if rebin_diag_enabled and (global_rank == 0 or not config['training']['multigpu']):
+        def _scalar_int(val, default: int = 0) -> int:
+            try:
+                if torch.is_tensor(val):
+                    if val.numel() == 0:
+                        return int(default)
+                    if val.numel() == 1:
+                        return int(val.item())
+                    return int(val.reshape(-1)[0].item())
+                return int(val)
+            except Exception:
+                return int(default)
+
+        diag_factor = int(rebin_diag_cfg.get("factor", rebin_factor))
+        diag_start_mode = str(rebin_diag_cfg.get("start_time_index", "middle")).lower()
+        diag_search_batches = _scalar_int(rebin_diag_cfg.get("search_batches", 8), default=8)
+        diag_mask_fraction = float(rebin_diag_cfg.get("mask_fraction", 0.01))
+        diag_min_pixels = _scalar_int(rebin_diag_cfg.get("min_pixels", 256), default=256)
+        diag_baseline_frames = _scalar_int(rebin_diag_cfg.get("baseline_frames", 4), default=4)
+        diag_time_index_mode = str(rebin_diag_cfg.get("time_index_mode", rebin_time_index_mode)).lower()
+        diag_out_subdir = str(rebin_diag_cfg.get("out_subdir", "rebin_diagnostics"))
+
+        if diag_factor > 1:
+            try:
+                os.makedirs(os.path.join(output_dir, diag_out_subdir), exist_ok=True)
+
+                # Pick a batch, preferably at the highest acceleration (smallest spokes/frame).
+                best_batch = None
+                best_spf = None
+                min_spf_target = min(initial_train_spokes_range) if initial_train_spokes_range else None
+                for i, batch in enumerate(iter(train_loader)):
+                    if include_sample_indices:
+                        _, measured_kspace, csmap, N_samples, N_spokes, N_time = batch
+                    else:
+                        measured_kspace, csmap, N_samples, N_spokes, N_time = batch
+
+                    spf = _scalar_int(N_spokes, default=10**9)
+                    if best_batch is None or spf < best_spf:
+                        best_batch = (measured_kspace, csmap, N_samples, N_spokes, N_time)
+                        best_spf = spf
+                        if min_spf_target is not None and best_spf <= int(min_spf_target):
+                            break
+
+                    if i + 1 >= max(1, diag_search_batches):
+                        break
+
+                if best_batch is None:
+                    raise RuntimeError("Rebin diagnostic: could not fetch a batch from train_loader.")
+
+                measured_kspace, csmap, N_samples, N_spokes, N_time = best_batch
+                if measured_kspace.shape[0] != 1:
+                    measured_kspace = measured_kspace[:1]
+                    csmap = csmap[:1]
+
+                N_samples_i = _scalar_int(N_samples, default=0)
+                N_spokes_i = _scalar_int(N_spokes, default=0)
+                N_time_i = _scalar_int(N_time, default=0)
+
+                # prepare inputs
+                measured_kspace_cplx = to_torch_complex(measured_kspace)
+                measured_kspace_cplx = measured_kspace_cplx[0]  # (T,co,sp,sam)
+                measured_kspace_cplx = rearrange(measured_kspace_cplx, 't co sp sam -> co (sp sam) t')
+
+                # prep physics operators
+                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
+                    N_samples_i, N_spokes_i, N_time_i, traj_method=traj_method
+                )
+                ktraj = ktraj.to(device)
+                dcomp = dcomp.to(device)
+                nufft_ob = nufft_ob.to(device)
+                adjnufft_ob = adjnufft_ob.to(device)
+
+                # Crop to training window length (Ng) for a faithful diagnostic.
+                if N_time_i > Ng:
+                    max_idx = N_time_i - Ng
+                    if diag_start_mode == "random":
+                        start_idx = sample_start_time_index(max_idx, use_edge_time_index_sampling)
+                    elif diag_start_mode == "zero":
+                        start_idx = 0
+                    elif diag_start_mode == "middle":
+                        start_idx = max_idx // 2
+                    else:
+                        start_idx = _scalar_int(diag_start_mode, default=0)
+                        start_idx = max(0, min(int(start_idx), int(max_idx)))
+
+                    measured_kspace_cplx = measured_kspace_cplx[..., start_idx:start_idx + Ng]
+                    ktraj_chunk = ktraj[..., start_idx:start_idx + Ng]
+                    dcomp_chunk = dcomp[..., start_idx:start_idx + Ng]
+                    physics = MCNUFFT(nufft_ob, adjnufft_ob, ktraj_chunk, dcomp_chunk)
+                    start_timepoint_index = torch.tensor([start_idx], dtype=torch.float, device=device)
+                else:
+                    physics = MCNUFFT(nufft_ob, adjnufft_ob, ktraj, dcomp)
+                    start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
+
+                y_hi = measured_kspace_cplx.to(device)
+                csmap = csmap.to(device).to(y_hi.dtype)
+
+                acceleration = torch.tensor([N_full / int(N_spokes_i)], dtype=torch.float, device=device)
+                acceleration_encoding = acceleration if config['model']['encode_acceleration'] else None
+                if config['model']['encode_time_index'] == False:
+                    start_timepoint_index = None
+
+                # High-temporal recon.
+                model_was_training = model.training
+                model.eval()
+                with torch.no_grad():
+                    with amp_autocast():
+                        x_hi, *_ = model(
+                            y_hi,
+                            physics,
+                            csmap,
+                            acceleration_encoding,
+                            start_timepoint_index,
+                            epoch="rebin_diag_hi",
+                            norm=config['model']['norm'],
+                        )
+
+                # Low-temporal recon from rebinned measurement/operator.
+                x_hi_down = RebinConsistencyLoss._downsample_time_mean(x_hi, diag_factor)
+                y_lo = RebinConsistencyLoss._rebin_kspace(y_hi, N_spokes_i, N_samples_i, diag_factor)
+                ktraj_lo, dcomp_lo = RebinConsistencyLoss._rebin_ktraj_dcomp(
+                    physics, N_spokes_i, N_samples_i, diag_factor
+                )
+                physics_lo = MCNUFFT(physics.nufft_ob, physics.adjnufft_ob, ktraj_lo, dcomp_lo).to(csmap.device)
+
+                if acceleration_encoding is None:
+                    acceleration_lo = None
+                else:
+                    acceleration_lo = acceleration_encoding / float(diag_factor)
+
+                if diag_time_index_mode == "none":
+                    start_idx_lo = None
+                elif diag_time_index_mode == "scaled":
+                    start_idx_lo = None if start_timepoint_index is None else (start_timepoint_index / float(diag_factor))
+                else:  # inherit
+                    start_idx_lo = start_timepoint_index
+
+                with torch.no_grad():
+                    with amp_autocast():
+                        x_lo, *_ = model(
+                            y_lo,
+                            physics_lo,
+                            csmap,
+                            acceleration_lo,
+                            start_idx_lo,
+                            epoch="rebin_diag_lo",
+                            norm=config['model']['norm'],
+                        )
+
+                out_path = os.path.join(
+                    output_dir,
+                    diag_out_subdir,
+                    f"rebin_diag_spf{int(N_spokes_i)}_factor{int(diag_factor)}.png",
+                )
+                diag_title = (
+                    f"Rebin diagnostic (spf_hi={int(N_spokes_i)}, AF={float(acceleration.item()):.2f}, "
+                    f"factor={int(diag_factor)}, start={diag_start_mode})"
+                )
+                diag = plot_rebin_consistency_diagnostic(
+                    x_hi,
+                    x_lo,
+                    diag_factor,
+                    out_path,
+                    x_hi_down=x_hi_down,
+                    mask_fraction=diag_mask_fraction,
+                    min_pixels=diag_min_pixels,
+                    baseline_frames=diag_baseline_frames,
+                    title=diag_title,
+                )
+                try:
+                    curve_corr = float(np.corrcoef(diag["curve_hi_down"], diag["curve_lo"])[0, 1])
+                except Exception:
+                    curve_corr = float("nan")
+                print(
+                    "[Debug] Saved rebin diagnostic plot to "
+                    f"{out_path} (corr(Avg(x_hi), x_lo)={curve_corr:.3f})."
+                )
+
+                if model_was_training:
+                    model.train()
+            except Exception as exc:
+                print(f"[Debug] Rebin diagnostic plot skipped: {exc}")
 
 
     # define EI loss transformations
@@ -1713,6 +1946,15 @@ def main():
 
 
 
+    # Step-0 metrics are only populated when calc_step_0 is enabled (or restored from checkpoint).
+    # Keep explicit defaults so checkpoint saving cannot fail when step-0 is skipped.
+    if "step0_train_mc_loss" not in locals():
+        step0_train_mc_loss = 0.0
+    if "step0_train_ei_loss" not in locals():
+        step0_train_ei_loss = 0.0
+    if "step0_train_adj_loss" not in locals():
+        step0_train_adj_loss = 0.0
+
     # Training Loop
     svd_fail_count = 0
     if (epochs + 1) == start_epoch:
@@ -1950,6 +2192,7 @@ def main():
                                 spokes_per_frame=int(N_spokes),
                                 samples_per_spoke=int(N_samples),
                                 norm=config['model']['norm'],
+                                epoch=epoch,
                             )
                             running_rebin_loss += rebin_loss.item()
                         else:
@@ -2136,7 +2379,17 @@ def main():
                 )
                 with torch.no_grad():
                     val_batches = 0
-                    for val_dro_kspace_batch, val_csmap, val_ground_truth, val_dro_grasp_img, val_mask, grasp_path, val_raw_kspace, val_raw_grasp_img, val_raw_csmaps in tqdm(val_dro_loader):
+                    for (
+                        val_dro_kspace_batch,
+                        val_csmap,
+                        val_ground_truth,
+                        val_dro_grasp_img,
+                        val_mask,
+                        grasp_path,
+                        val_raw_kspace,
+                        val_raw_grasp_img,
+                        val_raw_csmaps,
+                    ) in val_loader_tqdm:
 
                         val_csmap = val_csmap.squeeze(0).to(device)   # Remove batch dim
                         val_ground_truth = val_ground_truth.to(device) # Shape: (1, 2, T, H, W)
