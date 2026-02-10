@@ -7,7 +7,7 @@ import warnings
 import yaml
 from dataloader import ZFSliceDataset, SimulatedDataset, SimulatedSPFDataset, log_slice_sampling_startup_report
 from einops import rearrange
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 import numpy as np
 from transform import (
@@ -195,6 +195,28 @@ def _print_sample_check_summary(epoch, all_rank_samples, sample_check_batches):
             "some overlap can be expected. Sample overlaps: "
             f"{preview}"
         )
+
+
+def _build_strided_shard_indices(num_items, rank, world_size):
+    if num_items < 0:
+        raise ValueError(f"num_items must be non-negative, got {num_items}.")
+    if world_size <= 1:
+        return list(range(num_items))
+    if rank < 0 or rank >= world_size:
+        raise ValueError(f"Invalid rank/world_size pair: rank={rank}, world_size={world_size}.")
+    return list(range(rank, num_items, world_size))
+
+
+def _flatten_gathered_records(gathered_records):
+    flat = []
+    for record_list in gathered_records:
+        if not record_list:
+            continue
+        if isinstance(record_list, list):
+            flat.extend(record_list)
+        else:
+            flat.append(record_list)
+    return flat
 
 def main():
 
@@ -505,7 +527,13 @@ def main():
 
     rebin_cfg = config["model"]["losses"].get("rebin_loss", {})
     use_rebin_loss = bool(rebin_cfg.get("enable", False))
-    rebin_loss_weight = float(rebin_cfg.get("weight", 0.0))
+    rebin_target_w = float(rebin_cfg.get("weight", 0.0))
+    rebin_warmup = int(rebin_cfg.get("warmup", 0))
+    rebin_duration = int(rebin_cfg.get("duration", 0))
+    if rebin_warmup < 0:
+        raise ValueError("model.losses.rebin_loss.warmup must be >= 0.")
+    if rebin_duration < 0:
+        raise ValueError("model.losses.rebin_loss.duration must be >= 0.")
     rebin_factor = int(rebin_cfg.get("factor", 2))
     rebin_metric_name = str(rebin_cfg.get("metric", "MSE"))
     rebin_time_index_mode = str(rebin_cfg.get("time_index_mode", "none"))
@@ -786,6 +814,42 @@ def main():
         pin_memory=True,
     )
 
+    distributed_eval = bool(config.get("evaluation", {}).get("distributed_eval", True)) and config['training']['multigpu']
+
+    def _build_val_dro_eval_loader(dataset):
+        if not distributed_eval:
+            return DataLoader(
+                dataset,
+                batch_size=config["dataloader"]["batch_size"],
+                shuffle=False,
+                num_workers=config["dataloader"]["num_workers"],
+                pin_memory=True,
+            )
+        shard_indices = _build_strided_shard_indices(len(dataset), global_rank, world_size)
+        shard_dataset = Subset(dataset, shard_indices)
+        return DataLoader(
+            shard_dataset,
+            batch_size=config["dataloader"]["batch_size"],
+            shuffle=False,
+            num_workers=config["dataloader"]["num_workers"],
+            pin_memory=True,
+        )
+
+    val_dro_eval_loader = _build_val_dro_eval_loader(val_dro_dataset)
+
+    if distributed_eval:
+        local_eval_count = len(getattr(val_dro_eval_loader, "dataset", []))
+        local_eval_count_tensor = torch.tensor([local_eval_count], dtype=torch.int64, device=device)
+        gathered_counts = [torch.zeros_like(local_eval_count_tensor) for _ in range(world_size)]
+        dist.all_gather(gathered_counts, local_eval_count_tensor)
+        if global_rank == 0:
+            per_rank_counts = [int(x.item()) for x in gathered_counts]
+            print(
+                "[Eval] Distributed validation enabled: "
+                f"total_samples={len(val_dro_dataset)}, "
+                f"per-rank min/median/max={min(per_rank_counts)}/{int(np.median(per_rank_counts))}/{max(per_rank_counts)}"
+            )
+
     save_csmaps = config.get("debugging", {}).get("save_csmap_pngs", False)
     if save_csmaps and (global_rank == 0 or not config['training']['multigpu']):
         csmap_dir = os.path.join(output_dir, "csmap_checks")
@@ -1048,7 +1112,8 @@ def main():
                 "[Rebin] "
                 f"factor={rebin_factor}, teacher={rebin_teacher_branch}, stopgrad={rebin_teacher_stopgrad}, "
                 f"offset_mode={rebin_offset_mode}, temporal_mode={rebin_temporal_mode}, "
-                f"dynamic_mask={rebin_dynamic_mask_enable}"
+                f"dynamic_mask={rebin_dynamic_mask_enable}, "
+                f"target_weight={rebin_target_w}, warmup={rebin_warmup}, duration={rebin_duration}"
             )
     else:
         rebin_loss_fn = None
@@ -1361,6 +1426,8 @@ def main():
         lr_epochs = train_curves.get("lr_epochs", [])
         ei_weight_history = train_curves.get("ei_weight_history", [])
         ei_weight_epochs = train_curves.get("ei_weight_epochs", [])
+        rebin_weight_history = train_curves.get("rebin_weight_history", [])
+        rebin_weight_epochs = train_curves.get("rebin_weight_epochs", [])
         eval_ssims = eval_curves["eval_ssims"]
         eval_psnrs = eval_curves["eval_psnrs"]
         eval_mses = eval_curves["eval_mses"]
@@ -1391,6 +1458,8 @@ def main():
         lr_epochs = []
         ei_weight_history = []
         ei_weight_epochs = []
+        rebin_weight_history = []
+        rebin_weight_epochs = []
         eval_ssims = []
         eval_lpipses = []
         eval_psnrs = []
@@ -1452,6 +1521,8 @@ def main():
             lr_epochs=lr_epochs,
             ei_weight_history=ei_weight_history,
             ei_weight_epochs=ei_weight_epochs,
+            rebin_weight_history=rebin_weight_history,
+            rebin_weight_epochs=rebin_weight_epochs,
         )
         val_curves = dict(
             val_mc_losses=val_mc_losses,
@@ -1505,6 +1576,25 @@ def main():
         avg_grasp_curve_corr = 0.0
         avg_grasp_raw_dc_mae = 0.0
         avg_grasp_raw_dc_mse = 0.0
+
+    def _mean_or_nan(values):
+        return float(np.mean(values)) if values else float("nan")
+
+    def _std_or_zero(values):
+        return float(np.std(values)) if values else 0.0
+
+    def _grasp_baseline_ready():
+        required = (
+            avg_grasp_ssim,
+            avg_grasp_psnr,
+            avg_grasp_mse,
+            avg_grasp_lpips,
+            avg_grasp_dc_mse,
+            avg_grasp_dc_mae,
+            avg_grasp_raw_dc_mae,
+            avg_grasp_raw_dc_mse,
+        )
+        return all(val is not None and np.isfinite(val) for val in required)
 
     lambda_Ls = []
     lambda_Ss = []
@@ -2058,6 +2148,7 @@ def main():
                                     num_workers=config["dataloader"]["num_workers"],
                                     pin_memory=True,
                                 )
+                                val_dro_eval_loader = _build_val_dro_eval_loader(val_dro_dataset)
 
             # if use_ei_loss:
 
@@ -2095,6 +2186,21 @@ def main():
                 compute_ei_this_epoch = ei_loss_weight > 0.0
             ei_weight_history.append(ei_loss_weight)
             ei_weight_epochs.append(epoch)
+
+            # Rebin schedule is epoch-wise; skip rebin compute whenever its weight is zero.
+            rebin_loss_weight = 0.0
+            compute_rebin_this_epoch = False
+            if use_rebin_loss:
+                scheduled_rebin_w = get_cosine_ei_weight(
+                    current_epoch=epoch,
+                    warmup_epochs=rebin_warmup,
+                    schedule_duration=rebin_duration,
+                    target_weight=rebin_target_w,
+                )
+                rebin_loss_weight = scheduled_rebin_w
+                compute_rebin_this_epoch = rebin_loss_weight > 0.0
+            rebin_weight_history.append(rebin_loss_weight)
+            rebin_weight_epochs.append(epoch)
 
             # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
             t_img = None
@@ -2180,7 +2286,7 @@ def main():
                         mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
                         running_mc_loss += mc_loss.item()
 
-                        if use_rebin_loss:
+                        if use_rebin_loss and compute_rebin_this_epoch:
                             rebin_loss = rebin_loss_fn(
                                 measured_kspace.to(device),
                                 x_recon,
@@ -2339,7 +2445,7 @@ def main():
             train_adj_losses.append(epoch_train_adj_loss)
             weighted_train_adj_losses.append(epoch_train_adj_loss*adj_loss_weight)
 
-            if use_rebin_loss:
+            if use_rebin_loss and compute_rebin_this_epoch:
                 epoch_train_rebin_loss = running_rebin_loss / len(train_loader)
             else:
                 epoch_train_rebin_loss = 0.0
@@ -2353,6 +2459,7 @@ def main():
                 writer.add_scalar('Loss/Train_EI', epoch_train_ei_loss, epoch)
                 writer.add_scalar('Loss/Train_Adj', epoch_train_adj_loss, epoch)
                 if use_rebin_loss:
+                    writer.add_scalar('Loss/Rebin_Weight', rebin_loss_weight, epoch)
                     writer.add_scalar('Loss/Train_Rebin', epoch_train_rebin_loss, epoch)
                     writer.add_scalar('Loss/Train_Weighted_Rebin', epoch_train_rebin_loss * rebin_loss_weight, epoch)
 
@@ -2371,11 +2478,45 @@ def main():
                 val_running_mc_loss = 0.0
                 val_running_ei_loss = 0.0
                 val_running_adj_loss = 0.0
+                distributed_eval_this_epoch = distributed_eval and config['training']['multigpu']
+                run_eval_metrics_this_rank = (
+                    (not config['training']['multigpu'])
+                    or distributed_eval_this_epoch
+                    or (global_rank == 0)
+                )
+                if distributed_eval_this_epoch:
+                    if global_rank == 0:
+                        collect_grasp_baseline_root = int((not _grasp_baseline_ready()) or len(grasp_ssims) == 0)
+                    else:
+                        collect_grasp_baseline_root = 0
+                    collect_grasp_baseline_tensor = torch.tensor(
+                        [collect_grasp_baseline_root], dtype=torch.int32, device=device
+                    )
+                    dist.broadcast(collect_grasp_baseline_tensor, src=0)
+                    collect_grasp_baseline = bool(int(collect_grasp_baseline_tensor.item()))
+                else:
+                    collect_grasp_baseline = (
+                        (global_rank == 0 or not config['training']['multigpu'])
+                        and (not _grasp_baseline_ready() or len(grasp_ssims) == 0)
+                    )
+                if (global_rank == 0 or not config['training']['multigpu']) and collect_grasp_baseline:
+                    grasp_ssims.clear()
+                    grasp_psnrs.clear()
+                    grasp_mses.clear()
+                    grasp_lpipses.clear()
+                    grasp_dc_mses.clear()
+                    grasp_dc_maes.clear()
+                    grasp_curve_corrs.clear()
+                    raw_grasp_dc_mses.clear()
+                    raw_grasp_dc_maes.clear()
+                    print(f"[Eval] Epoch {epoch}: collecting GRASP baseline metrics from validation set.")
+                local_eval_records = []
                 val_loader_tqdm = tqdm(
-                    val_dro_loader,
+                    val_dro_eval_loader if distributed_eval_this_epoch else val_dro_loader,
                     desc=f"Epoch {epoch}/{epochs}  Validation",
                     unit="batch",
                     leave=False,
+                    disable=config['training']['multigpu'] and global_rank != 0,
                 )
                 with torch.no_grad():
                     val_batches = 0
@@ -2462,8 +2603,8 @@ def main():
 
 
                             ## Evaluation
-                            if global_rank == 0 or not config['training']['multigpu']:
-                                ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, _, temporal_metrics = eval_sample(
+                            if run_eval_metrics_this_rank:
+                                ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = eval_sample(
                                     val_dro_kspace_batch,
                                     val_csmap,
                                     val_ground_truth,
@@ -2490,28 +2631,34 @@ def main():
                                     arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
                                     arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                                 )
-                                epoch_eval_ssims.append(ssim)
-                                epoch_eval_psnrs.append(psnr)
-                                epoch_eval_mses.append(mse)
-                                epoch_eval_lpipses.append(lpips)
-                                epoch_eval_dc_mses.append(dc_mse)
-                                epoch_eval_dc_maes.append(dc_mae)
-                                
-                                if recon_corr is not None:
-                                    epoch_eval_curve_corrs.append(recon_corr)
+
+                                ssim_grasp = None
+                                psnr_grasp = None
+                                mse_grasp = None
+                                lpips_grasp = None
+                                dc_mse_grasp = None
+                                dc_mae_grasp = None
+                                if collect_grasp_baseline:
+                                    ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(
+                                        val_dro_kspace_batch,
+                                        val_csmap,
+                                        val_ground_truth,
+                                        val_dro_grasp_img,
+                                        eval_physics,
+                                        device,
+                                        eval_dir,
+                                        rescale=config['evaluation']['rescale'],
+                                        dro_eval=True,
+                                    )
+                                curve_mae = None
+                                ttae_sec = None
+                                iauc10_err = None
+                                peak_err = None
                                 if temporal_metrics:
                                     curve_mae = temporal_metrics.get("dl_all_curve_mae")
                                     ttae_sec = temporal_metrics.get("dl_all_ttae_sec")
                                     iauc10_err = temporal_metrics.get("dl_all_iauc10_err")
                                     peak_err = temporal_metrics.get("dl_all_peak_err")
-                                    if curve_mae is not None and np.isfinite(curve_mae):
-                                        epoch_eval_curve_maes.append(curve_mae)
-                                    if ttae_sec is not None and np.isfinite(ttae_sec):
-                                        epoch_eval_ttae_secs.append(ttae_sec)
-                                    if iauc10_err is not None and np.isfinite(iauc10_err):
-                                        epoch_eval_iauc10_errs.append(iauc10_err)
-                                    if peak_err is not None and np.isfinite(peak_err):
-                                        epoch_eval_peak_errs.append(peak_err)
 
                                 # raw k-space eval
                                 dc_mse_raw, dc_mae_raw, _ = eval_sample(
@@ -2543,8 +2690,81 @@ def main():
                                     arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                                 )
 
-                                epoch_eval_raw_dc_mses.append(dc_mse_raw)
-                                epoch_eval_raw_dc_maes.append(dc_mae_raw)
+                                dc_mse_raw_grasp = None
+                                dc_mae_raw_grasp = None
+                                if collect_grasp_baseline:
+                                    dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(
+                                        val_raw_kspace,
+                                        val_raw_csmaps,
+                                        val_ground_truth,
+                                        val_raw_grasp_img,
+                                        eval_physics,
+                                        device,
+                                        eval_dir,
+                                        rescale=config['evaluation']['rescale'],
+                                        dro_eval=False,
+                                    )
+                                if distributed_eval_this_epoch:
+                                    local_eval_records.append(
+                                        {
+                                            "ssim": float(ssim),
+                                            "psnr": float(psnr),
+                                            "mse": float(mse),
+                                            "lpips": float(lpips),
+                                            "dc_mse": float(dc_mse),
+                                            "dc_mae": float(dc_mae),
+                                            "recon_corr": (float(recon_corr) if recon_corr is not None else None),
+                                            "curve_mae": (float(curve_mae) if curve_mae is not None and np.isfinite(curve_mae) else None),
+                                            "ttae_sec": (float(ttae_sec) if ttae_sec is not None and np.isfinite(ttae_sec) else None),
+                                            "iauc10_err": (float(iauc10_err) if iauc10_err is not None and np.isfinite(iauc10_err) else None),
+                                            "peak_err": (float(peak_err) if peak_err is not None and np.isfinite(peak_err) else None),
+                                            "raw_dc_mse": float(dc_mse_raw),
+                                            "raw_dc_mae": float(dc_mae_raw),
+                                            "grasp_corr": (float(grasp_corr) if grasp_corr is not None else None),
+                                            "grasp_ssim": (float(ssim_grasp) if ssim_grasp is not None else None),
+                                            "grasp_psnr": (float(psnr_grasp) if psnr_grasp is not None else None),
+                                            "grasp_mse": (float(mse_grasp) if mse_grasp is not None else None),
+                                            "grasp_lpips": (float(lpips_grasp) if lpips_grasp is not None else None),
+                                            "grasp_dc_mse": (float(dc_mse_grasp) if dc_mse_grasp is not None else None),
+                                            "grasp_dc_mae": (float(dc_mae_grasp) if dc_mae_grasp is not None else None),
+                                            "raw_grasp_dc_mse": (float(dc_mse_raw_grasp) if dc_mse_raw_grasp is not None else None),
+                                            "raw_grasp_dc_mae": (float(dc_mae_raw_grasp) if dc_mae_raw_grasp is not None else None),
+                                        }
+                                    )
+                                else:
+                                    if collect_grasp_baseline:
+                                        grasp_ssims.append(ssim_grasp)
+                                        grasp_psnrs.append(psnr_grasp)
+                                        grasp_mses.append(mse_grasp)
+                                        grasp_lpipses.append(lpips_grasp)
+                                        grasp_dc_mses.append(dc_mse_grasp)
+                                        grasp_dc_maes.append(dc_mae_grasp)
+                                        if grasp_corr is not None:
+                                            grasp_curve_corrs.append(grasp_corr)
+                                        if dc_mse_raw_grasp is not None:
+                                            raw_grasp_dc_mses.append(dc_mse_raw_grasp)
+                                        if dc_mae_raw_grasp is not None:
+                                            raw_grasp_dc_maes.append(dc_mae_raw_grasp)
+                                    epoch_eval_ssims.append(ssim)
+                                    epoch_eval_psnrs.append(psnr)
+                                    epoch_eval_mses.append(mse)
+                                    epoch_eval_lpipses.append(lpips)
+                                    epoch_eval_dc_mses.append(dc_mse)
+                                    epoch_eval_dc_maes.append(dc_mae)
+
+                                    if recon_corr is not None:
+                                        epoch_eval_curve_corrs.append(recon_corr)
+                                    if curve_mae is not None and np.isfinite(curve_mae):
+                                        epoch_eval_curve_maes.append(curve_mae)
+                                    if ttae_sec is not None and np.isfinite(ttae_sec):
+                                        epoch_eval_ttae_secs.append(ttae_sec)
+                                    if iauc10_err is not None and np.isfinite(iauc10_err):
+                                        epoch_eval_iauc10_errs.append(iauc10_err)
+                                    if peak_err is not None and np.isfinite(peak_err):
+                                        epoch_eval_peak_errs.append(peak_err)
+
+                                    epoch_eval_raw_dc_mses.append(dc_mse_raw)
+                                    epoch_eval_raw_dc_maes.append(dc_mae_raw)
 
                             val_batches += 1
                             if max_val_batches is not None and val_batches >= int(max_val_batches):
@@ -2563,9 +2783,76 @@ def main():
                                 raise  # re-raise other errors
 
 
+                if distributed_eval_this_epoch:
+                    loss_reduce = torch.tensor(
+                        [val_running_mc_loss, val_running_ei_loss, val_running_adj_loss, float(val_batches)],
+                        dtype=torch.float64,
+                        device=device,
+                    )
+                    dist.all_reduce(loss_reduce, op=dist.ReduceOp.SUM)
+                    val_running_mc_loss = float(loss_reduce[0].item())
+                    val_running_ei_loss = float(loss_reduce[1].item())
+                    val_running_adj_loss = float(loss_reduce[2].item())
+                    val_batches = int(loss_reduce[3].item())
+                    gathered_eval_records = [None for _ in range(world_size)]
+                    dist.all_gather_object(gathered_eval_records, local_eval_records)
+
+                    if global_rank == 0:
+                        all_eval_records = _flatten_gathered_records(gathered_eval_records)
+                        if not all_eval_records:
+                            raise RuntimeError(f"Epoch {epoch}: distributed eval collected zero records.")
+
+                        epoch_eval_ssims = [r["ssim"] for r in all_eval_records]
+                        epoch_eval_psnrs = [r["psnr"] for r in all_eval_records]
+                        epoch_eval_mses = [r["mse"] for r in all_eval_records]
+                        epoch_eval_lpipses = [r["lpips"] for r in all_eval_records]
+                        epoch_eval_dc_mses = [r["dc_mse"] for r in all_eval_records]
+                        epoch_eval_dc_maes = [r["dc_mae"] for r in all_eval_records]
+                        epoch_eval_raw_dc_mses = [r["raw_dc_mse"] for r in all_eval_records]
+                        epoch_eval_raw_dc_maes = [r["raw_dc_mae"] for r in all_eval_records]
+                        epoch_eval_curve_corrs = [r["recon_corr"] for r in all_eval_records if r.get("recon_corr") is not None]
+                        epoch_eval_curve_maes = [r["curve_mae"] for r in all_eval_records if r.get("curve_mae") is not None]
+                        epoch_eval_ttae_secs = [r["ttae_sec"] for r in all_eval_records if r.get("ttae_sec") is not None]
+                        epoch_eval_iauc10_errs = [r["iauc10_err"] for r in all_eval_records if r.get("iauc10_err") is not None]
+                        epoch_eval_peak_errs = [r["peak_err"] for r in all_eval_records if r.get("peak_err") is not None]
+
+                        if collect_grasp_baseline:
+                            grasp_ssims = [r["grasp_ssim"] for r in all_eval_records if r.get("grasp_ssim") is not None]
+                            grasp_psnrs = [r["grasp_psnr"] for r in all_eval_records if r.get("grasp_psnr") is not None]
+                            grasp_mses = [r["grasp_mse"] for r in all_eval_records if r.get("grasp_mse") is not None]
+                            grasp_lpipses = [r["grasp_lpips"] for r in all_eval_records if r.get("grasp_lpips") is not None]
+                            grasp_dc_mses = [r["grasp_dc_mse"] for r in all_eval_records if r.get("grasp_dc_mse") is not None]
+                            grasp_dc_maes = [r["grasp_dc_mae"] for r in all_eval_records if r.get("grasp_dc_mae") is not None]
+                            grasp_curve_corrs = [r["grasp_corr"] for r in all_eval_records if r.get("grasp_corr") is not None]
+                            raw_grasp_dc_mses = [r["raw_grasp_dc_mse"] for r in all_eval_records if r.get("raw_grasp_dc_mse") is not None]
+                            raw_grasp_dc_maes = [r["raw_grasp_dc_mae"] for r in all_eval_records if r.get("raw_grasp_dc_mae") is not None]
 
                 # Calculate and store average validation evaluation metrics
                 if global_rank == 0 or not config['training']['multigpu']:
+                    if collect_grasp_baseline:
+                        if len(grasp_ssims) == 0:
+                            raise RuntimeError(
+                                f"Epoch {epoch}: GRASP baseline collection returned zero samples."
+                            )
+                        avg_grasp_ssim = _mean_or_nan(grasp_ssims)
+                        avg_grasp_psnr = _mean_or_nan(grasp_psnrs)
+                        avg_grasp_mse = _mean_or_nan(grasp_mses)
+                        avg_grasp_lpips = _mean_or_nan(grasp_lpipses)
+                        avg_grasp_dc_mse = _mean_or_nan(grasp_dc_mses)
+                        avg_grasp_dc_mae = _mean_or_nan(grasp_dc_maes)
+                        avg_grasp_curve_corr = _mean_or_nan(grasp_curve_corrs)
+                        avg_grasp_raw_dc_mae = _mean_or_nan(raw_grasp_dc_maes)
+                        avg_grasp_raw_dc_mse = _mean_or_nan(raw_grasp_dc_mses)
+                        if not _grasp_baseline_ready():
+                            raise RuntimeError(
+                                f"Epoch {epoch}: GRASP baseline metrics are non-finite after collection."
+                            )
+                        print(
+                            f"[Eval] Epoch {epoch}: GRASP baseline set "
+                            f"(SSIM={avg_grasp_ssim:.4f}, PSNR={avg_grasp_psnr:.4f}, "
+                            f"LPIPS={avg_grasp_lpips:.4f}, CurveCorr={avg_grasp_curve_corr:.4f})."
+                        )
+
                     epoch_eval_ssim = np.mean(epoch_eval_ssims)
                     epoch_eval_psnr = np.mean(epoch_eval_psnrs)
                     epoch_eval_mse = np.mean(epoch_eval_mses)
@@ -2685,7 +2972,10 @@ def main():
 
 
                 # Calculate and store average validation losses
-                denom = val_batches if val_batches > 0 else len(val_dro_loader)
+                if distributed_eval_this_epoch:
+                    denom = val_batches if val_batches > 0 else 1
+                else:
+                    denom = val_batches if val_batches > 0 else len(val_dro_loader)
                 epoch_val_mc_loss = val_running_mc_loss / denom
                 val_mc_losses.append(epoch_val_mc_loss)
 
@@ -3147,15 +3437,19 @@ def main():
                     print(f"Recon Raw DC MSE: {epoch_eval_raw_dc_mse:.4f} ± {np.std(epoch_eval_raw_dc_mses):.4f}")
                     print(f"Recon Raw DC MAE: {epoch_eval_raw_dc_mae:.4f} ± {np.std(epoch_eval_raw_dc_maes):.4f}")
                     print(f"Recon Enhancement Curve Correlation: {epoch_eval_curve_corr:.4f} ± {np.std(epoch_eval_curve_corrs):.4f}")
-                    print(f"GRASP SSIM: {avg_grasp_ssim:.4f} ± {np.std(grasp_ssims):.4f}")
-                    print(f"GRASP PSNR: {avg_grasp_psnr:.4f} ± {np.std(grasp_psnrs):.4f}")
-                    print(f"GRASP MSE: {avg_grasp_mse:.4f} ± {np.std(grasp_mses):.4f}")
-                    print(f"GRASP LPIPS: {avg_grasp_lpips:.4f} ± {np.std(grasp_lpipses):.4f}")
-                    print(f"GRASP DC MSE: {avg_grasp_dc_mse:.6f} ± {np.std(grasp_dc_mses):.4f}")
-                    print(f"GRASP DC MAE: {avg_grasp_dc_mae:.6f} ± {np.std(grasp_dc_maes):.4f}")
-                    print(f"GRASP DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {np.std(raw_grasp_dc_maes):.4f}")
-                    print(f"GRASP DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {np.std(raw_grasp_dc_mses):.4f}")
-                    print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {np.std(grasp_curve_corrs):.4f}")
+                    if not _grasp_baseline_ready():
+                        raise RuntimeError(
+                            f"Epoch {epoch}: GRASP baseline metrics unavailable; cannot log baseline."
+                        )
+                    print(f"GRASP SSIM: {avg_grasp_ssim:.4f} ± {_std_or_zero(grasp_ssims):.4f}")
+                    print(f"GRASP PSNR: {avg_grasp_psnr:.4f} ± {_std_or_zero(grasp_psnrs):.4f}")
+                    print(f"GRASP MSE: {avg_grasp_mse:.4f} ± {_std_or_zero(grasp_mses):.4f}")
+                    print(f"GRASP LPIPS: {avg_grasp_lpips:.4f} ± {_std_or_zero(grasp_lpipses):.4f}")
+                    print(f"GRASP DC MSE: {avg_grasp_dc_mse:.6f} ± {_std_or_zero(grasp_dc_mses):.4f}")
+                    print(f"GRASP DC MAE: {avg_grasp_dc_mae:.6f} ± {_std_or_zero(grasp_dc_maes):.4f}")
+                    print(f"GRASP Raw DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {_std_or_zero(raw_grasp_dc_mses):.4f}")
+                    print(f"GRASP Raw DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {_std_or_zero(raw_grasp_dc_maes):.4f}")
+                    print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {_std_or_zero(grasp_curve_corrs):.4f}")
 
             # Always save the latest checkpoint after each epoch.
             if global_rank == 0 or not config['training']['multigpu']:
