@@ -6,6 +6,7 @@ This project trains a reconstruction agent for highly undersampled breast DCE-MR
 - This is research code: prefer fail-fast behavior over defensive fallback chains.
 - Do not add broad catch-and-continue logic to hide configuration/environment problems.
 - When a required dependency/path/config is wrong, raise a clear error and fix the root cause.
+- Prefer architecture-driven behavior over redundant configuration knobs; if a feature is architecture-specific, hard-disable it for other architectures instead of requiring users to set a redundant value (for example, adjoint loss is LSFP-only and disabled for Mamba).
 
 ## Core Ideas
 - **Unsupervised objective**: Combine a measurement consistency (MC) loss in k-space with an equivariant imaging (EI) loss in image space to enforce physics fidelity and artifact removal without paired labels (`mc.py`, `ei.py`).
