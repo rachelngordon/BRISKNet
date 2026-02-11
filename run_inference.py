@@ -170,6 +170,14 @@ def parse_args():
         action="store_false",
         help="Disable writing val_inference_logs for this run.",
     )
+    parser.add_argument(
+        "--overwrite_logs",
+        action="store_true",
+        help=(
+            "Overwrite matching entries in val_inference_logs.json "
+            "(by exp_name for BRISKNet and by eval params for GRASP)."
+        ),
+    )
     parser.add_argument("--num_samples", type=int, help="Number of validation samples to evaluate (default: config value).")
     parser.add_argument("--device", default=None, help="Torch device to use (default: config training.device).")
     parser.add_argument("--eval_spokes", type=int, help="Override spokes per frame for inference.")
@@ -1773,6 +1781,7 @@ def main():
             "seconds_per_frame": seconds_per_frame,
             "DRO_noise_level": val_noise_level,
             "avg_inference_time": None if mean_infer is None else float(mean_infer),
+            "std_inference_time": None if std_infer is None else float(std_infer),
             "num_samples": int(num_samples),
             "training_epochs": None if trained_epochs is None else int(trained_epochs),
             "spatial_metrics": {},
@@ -1810,6 +1819,8 @@ def main():
         raw_dc_mse = _extract_mean_std(raw_summary.get("raw_dc_mse"))
         raw_grasp_dc_mae = _extract_mean_std(raw_summary.get("raw_grasp_dc_mae"))
         raw_grasp_dc_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_mse"))
+        raw_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_ssdu_nmse"))
+        raw_grasp_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_grasp_ssdu_nmse"))
 
         log_row["dc_metrics"] = {
             "dro_dc_mae_mean": dl_dc_mae["mean"],
@@ -1820,6 +1831,8 @@ def main():
             "raw_dc_mae_stddev": raw_dc_mae["std"],
             "raw_dc_mse_mean": raw_dc_mse["mean"],
             "raw_dc_mse_stddev": raw_dc_mse["std"],
+            "raw_ssdu_nmse_mean": raw_ssdu_nmse["mean"],
+            "raw_ssdu_nmse_stddev": raw_ssdu_nmse["std"],
         }
         grasp_agg_row["dc_metrics"] = {
             "dro_dc_mae_mean": grasp_dc_mae["mean"],
@@ -1830,6 +1843,8 @@ def main():
             "raw_dc_mae_stddev": raw_grasp_dc_mae["std"],
             "raw_dc_mse_mean": raw_grasp_dc_mse["mean"],
             "raw_dc_mse_stddev": raw_grasp_dc_mse["std"],
+            "raw_grasp_ssdu_nmse_mean": raw_grasp_ssdu_nmse["mean"],
+            "raw_grasp_ssdu_nmse_stddev": raw_grasp_ssdu_nmse["std"],
         }
 
         temporal_blocks = [
@@ -1868,6 +1883,22 @@ def main():
         grasp_exists = False
         for row in existing_rows:
             row_type = row.get("type")
+            if args.overwrite_logs:
+                if row_type == "BRISKNet" and row.get("exp_name") == exp_name:
+                    continue
+                if row_type == "GRASP":
+                    row_noise = row.get("DRO_noise_level") or row.get("dro_noise_level")
+                    row_accel = row.get("acceleration") or row.get("acceleration_factor")
+                    if (
+                        str(row.get("spokes_per_frame")) == str(int(N_spokes_eval))
+                        and str(row.get("num_frames")) == str(int(N_time_eval))
+                        and str(row_noise) == str(val_noise_level)
+                        and str(row_accel) == str(accel_factor)
+                    ):
+                        continue
+                filtered_rows.append(row)
+                continue
+
             if row_type == "BRISKNet" and row.get("exp_name") == exp_name:
                 brisk_exists = True
             if row_type == "GRASP":
@@ -1880,10 +1911,14 @@ def main():
                     grasp_exists = True
             filtered_rows.append(row)
 
-        if not brisk_exists:
+        if args.overwrite_logs:
             filtered_rows.append(log_row)
-        if not grasp_exists:
             filtered_rows.append(grasp_agg_row)
+        else:
+            if not brisk_exists:
+                filtered_rows.append(log_row)
+            if not grasp_exists:
+                filtered_rows.append(grasp_agg_row)
 
         with open(log_path, "w") as f:
             json.dump(filtered_rows, f, indent=2, sort_keys=False)

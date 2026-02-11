@@ -94,9 +94,9 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_diffeo_from_ckpt_36spf"
-    config_path = '/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_diffeo.yaml'
-    num_nodes = 2
+    job_name = "ei_diffeo_36spf"
+    config_path = '/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_ei_diffeo.yaml'
+    num_nodes = 1
     gpus_per_node = 4
 
     log_dir = f"submitit_logs/{job_name}"

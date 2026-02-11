@@ -125,6 +125,7 @@ training:
   device: "cuda"  # or "cpu"
   multigpu: True
   lr_schedule:
+    warmup_mode: cosine
     min_lr_factor: 0.2
     warmup_epochs: 5
   edge_time_index_sampling: false
@@ -158,5 +159,5 @@ evaluation:
 debugging:
   calc_step_0: True
   calc_step_0_val: True
-  enable_gradient_monitoring: true
+  enable_gradient_monitoring: false
   monitoring_interval: 5

@@ -8,7 +8,7 @@ import yaml
 
 
 SPATIAL_METRICS = ["ssim", "psnr", "mse", "lpips"]
-MC_METRICS = ["dro_dc_mae", "raw_dc_mae"]
+MC_METRICS = ["dro_dc_mae", "dro_dc_mse","raw_dc_mae", "raw_dc_mse", "raw_ssdu_nmse"]
 TEMPORAL_METRICS = [
     "curve_corr",
     "curve_mae",
@@ -69,6 +69,36 @@ def _format_one_decimal(value) -> str:
     if value is None:
         return ""
     return f"{value:.1f}"
+
+
+def _extract_timing_stats(row: Dict[str, str]) -> Tuple[float | None, float | None]:
+    mean = _to_float(row.get("avg_inference_time"))
+    if mean is None:
+        mean = _to_float(row.get("avg_grasp_recon_time"))
+    if mean is None:
+        mean = _to_float(row.get("avg_recon_time"))
+
+    std = _to_float(row.get("std_inference_time"))
+    if std is None:
+        std = _to_float(row.get("std_grasp_recon_time"))
+    if std is None:
+        std = _to_float(row.get("std_recon_time"))
+    return mean, std
+
+
+def _extract_timing_stats_flat(row: Dict[str, str], prefix: str) -> Tuple[float | None, float | None]:
+    mean = _to_float(row.get(f"{prefix}_avg_inference_time"))
+    if mean is None:
+        mean = _to_float(row.get(f"{prefix}_avg_grasp_recon_time"))
+    if mean is None:
+        mean = _to_float(row.get(f"{prefix}_avg_recon_time"))
+
+    std = _to_float(row.get(f"{prefix}_std_inference_time"))
+    if std is None:
+        std = _to_float(row.get(f"{prefix}_std_grasp_recon_time"))
+    if std is None:
+        std = _to_float(row.get(f"{prefix}_std_recon_time"))
+    return mean, std
 
 
 def _load_config(exp_name: str, exp_base_dirs: List[str], cache: Dict[str, Dict]) -> Dict | None:
@@ -136,15 +166,10 @@ def _group_rows(rows: Iterable[Dict[str, str]]):
         r for r in rows
         if r.get("type") == "GRASP" or r.get("row_type") == "grasp_agg"
     ]
-    grasp_index = {}
+    grasp_index = defaultdict(list)
     for row in grasp_rows:
-        key = (
-            row.get("acceleration_factor") if row.get("type") != "GRASP" else row.get("acceleration"),
-            row.get("spokes_per_frame"),
-            row.get("num_frames"),
-            row.get("dro_noise_level") if row.get("type") != "GRASP" else row.get("DRO_noise_level"),
-        )
-        grasp_index[key] = row
+        key = _match_key(row)
+        grasp_index[key].append(row)
     return exp_rows, grasp_index
 
 
@@ -156,6 +181,14 @@ def _row_key(row: Dict[str, str]) -> Tuple[float, int, int, str]:
     return accel, spf, frames, noise
 
 
+def _match_key(row: Dict[str, str]) -> Tuple[str, str, str]:
+    return (
+        row.get("spokes_per_frame"),
+        row.get("num_frames"),
+        row.get("dro_noise_level") or row.get("DRO_noise_level"),
+    )
+
+
 def _format_row(values: List[str]) -> str:
     return " & ".join(values) + " \\\\"
 
@@ -164,9 +197,11 @@ def _metric_columns(metric_type: str, temporal_metrics: List[str]) -> List[str]:
     if metric_type == "spatial":
         return ["SSIM", "PSNR", "MSE", "LPIPS"]
     if metric_type == "mc":
-        return ["DRO DC MAE", "Raw DC MAE"]
+        return ["DRO DC MAE", "DRO DC MSE", "Raw DC MAE", "Raw DC MSE", "Raw SSDU NMSE"]
     if metric_type == "temporal":
         return temporal_metrics
+    if metric_type == "timing":
+        return ["Avg Inference Time (s)"]
     raise ValueError(f"Unknown metric_type {metric_type}")
 
 
@@ -194,12 +229,13 @@ def _collect_metric_values(row: Dict[str, str], model_prefix: str, metric_type: 
                 values.append(_format_mean_std(mean, std, decimals))
         elif metric_type == "mc":
             dc = row.get("dc_metrics", {})
-            mean = _to_float(dc.get("dro_dc_mae_mean"))
-            std = _to_float(dc.get("dro_dc_mae_stddev"))
-            values.append(_format_mean_std(mean, std, decimals))
-            mean = _to_float(dc.get("raw_dc_mae_mean"))
-            std = _to_float(dc.get("raw_dc_mae_stddev"))
-            values.append(_format_mean_std(mean, std, decimals))
+            for metric in MC_METRICS:
+                metric_key = metric
+                if metric == "raw_ssdu_nmse" and row.get("type") == "GRASP":
+                    metric_key = "raw_grasp_ssdu_nmse"
+                mean = _to_float(dc.get(f"{metric_key}_mean"))
+                std = _to_float(dc.get(f"{metric_key}_stddev"))
+                values.append(_format_mean_std(mean, std, decimals))
         elif metric_type == "temporal":
             temporal = row.get("temporal_metrics", {})
             block = temporal.get(_temporal_block_name(temporal_subset, temporal_region), {})
@@ -207,6 +243,9 @@ def _collect_metric_values(row: Dict[str, str], model_prefix: str, metric_type: 
                 mean = _to_float(block.get(f"{metric}_mean"))
                 std = _to_float(block.get(f"{metric}_stddev"))
                 values.append(_format_mean_std(mean, std, decimals))
+        elif metric_type == "timing":
+            mean, std = _extract_timing_stats(row)
+            values.append(_format_mean_std(mean, std, decimals))
         else:
             raise ValueError(f"Unknown metric_type {metric_type}")
         return values
@@ -216,32 +255,58 @@ def _collect_metric_values(row: Dict[str, str], model_prefix: str, metric_type: 
             mean, std = _extract_mean_std_flat(row, f"{model_prefix}_{metric}")
             values.append(_format_mean_std(mean, std, decimals))
     elif metric_type == "mc":
-        mean, std = _extract_mean_std_flat(row, f"{model_prefix}_dc_mae")
-        values.append(_format_mean_std(mean, std, decimals))
-        if model_prefix == "dl":
-            mean, std = _extract_mean_std_flat(row, "raw_ssdu_nmse")
-        else:
-            mean, std = _extract_mean_std_flat(row, "raw_grasp_ssdu_nmse")
-        values.append(_format_mean_std(mean, std, decimals))
+        for metric in MC_METRICS:
+            metric_key = metric
+            if metric == "raw_ssdu_nmse" and model_prefix == "grasp":
+                metric_key = "raw_grasp_ssdu_nmse"
+            mean, std = _extract_mean_std_flat(row, f"{model_prefix}_{metric_key}")
+            values.append(_format_mean_std(mean, std, decimals))
+        # mean, std = _extract_mean_std_flat(row, f"{model_prefix}_dc_mae")
+        # values.append(_format_mean_std(mean, std, decimals))
+        # if model_prefix == "dl":
+        #     mean, std = _extract_mean_std_flat(row, "raw_ssdu_nmse")
+        # else:
+        #     mean, std = _extract_mean_std_flat(row, "raw_grasp_ssdu_nmse")
+        # values.append(_format_mean_std(mean, std, decimals))
     elif metric_type == "temporal":
         prefix = "" if temporal_region == "malignant" else "benign_"
         for metric in temporal_metrics:
             key = f"{prefix}{model_prefix}_{temporal_subset}_{metric}"
             mean, std = _extract_mean_std_flat(row, key)
             values.append(_format_mean_std(mean, std, decimals))
+    elif metric_type == "timing":
+        mean, std = _extract_timing_stats_flat(row, model_prefix)
+        values.append(_format_mean_std(mean, std, decimals))
     else:
         raise ValueError(f"Unknown metric_type {metric_type}")
     return values
 
 
-def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, str, str], Dict[str, str]],
+def _select_grasp_row(grasp_rows: List[Dict[str, str]] | None, metric_type: str) -> Dict[str, str] | None:
+    if not grasp_rows:
+        return None
+    if metric_type == "timing":
+        for row in grasp_rows:
+            mean, _ = _extract_timing_stats(row)
+            if mean is not None:
+                return row
+        return grasp_rows[0]
+    for row in grasp_rows:
+        if row.get("spatial_metrics") or row.get("dc_metrics") or row.get("temporal_metrics"):
+            return row
+    return grasp_rows[0]
+
+
+def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, str], List[Dict[str, str]]],
                 metric_type: str, temporal_metrics: List[str], temporal_subset: str, temporal_region: str,
                 decimals: int, caption: str, label: str, config_cols: List[Tuple[str, str]],
-                exp_base_dirs: List[str], config_cache: Dict[str, Dict]) -> str:
+                exp_base_dirs: List[str], config_cache: Dict[str, Dict],
+                include_timing_cols: bool) -> str:
+    timing_cols = ["AF", "Seconds/Frame"] if include_timing_cols else []
     if config_cols:
-        header_cols = ["Method"] + [col for col, _ in config_cols] + ["AF", "Seconds/Frame"]
+        header_cols = ["Method"] + [col for col, _ in config_cols] + timing_cols
     else:
-        header_cols = ["Method", "Exp", "AF", "Seconds/Frame"]
+        header_cols = ["Method", "Exp"] + timing_cols
     header_cols += _metric_columns(metric_type, temporal_metrics)
     col_spec = "|" + "|".join(["l"] + ["c"] * (len(header_cols) - 1)) + "|"
 
@@ -260,13 +325,8 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
         accel = _format_one_decimal(row.get("acceleration_factor") or row.get("acceleration"))
         sec_per_frame = _format_one_decimal(row.get("seconds_per_frame"))
         exp_name = row.get("exp_name") or ""
-        key = (
-            row.get("acceleration_factor") or row.get("acceleration"),
-            row.get("spokes_per_frame"),
-            row.get("num_frames"),
-            row.get("dro_noise_level") or row.get("DRO_noise_level"),
-        )
-        grasp_row = grasp_index.get(key, row)
+        match_key = _match_key(row)
+        grasp_row = _select_grasp_row(grasp_index.get(match_key), metric_type) or row
 
         accel_key = _to_float(row.get("acceleration_factor") or row.get("acceleration") or grasp_row.get("acceleration")) or 0.0
         if accel_key not in unique_grasp_rows:
@@ -290,7 +350,8 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
             temporal_region,
             decimals,
         )
-        lines.append(_format_row(["BRISKNet"] + config_vals + [str(accel), str(sec_per_frame)] + brisk_vals))
+        timing_vals = [str(accel), str(sec_per_frame)] if include_timing_cols else []
+        lines.append(_format_row(["BRISKNet"] + config_vals + timing_vals + brisk_vals))
         lines.append("\\hline")
 
     if unique_grasp_rows:
@@ -308,7 +369,8 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
                 temporal_region,
                 decimals,
             )
-            lines.append(_format_row(["GRASP"] + empty_config_vals + [str(grasp_accel), str(grasp_sec_per_frame)] + grasp_vals))
+            timing_vals = [str(grasp_accel), str(grasp_sec_per_frame)] if include_timing_cols else []
+            lines.append(_format_row(["GRASP"] + empty_config_vals + timing_vals + grasp_vals))
             lines.append("\\hline")
 
     lines.append("\\end{tabular}")
@@ -325,7 +387,7 @@ def main():
     parser.add_argument("--exp_names", required=True, help="Comma-separated experiment names to include.")
     parser.add_argument(
         "--metric_type",
-        choices=("spatial", "mc", "temporal"),
+        choices=("spatial", "mc", "temporal", "timing"),
         required=True,
         help="Metric type to include in table.",
     )
@@ -349,6 +411,11 @@ def main():
     parser.add_argument("--decimals", type=int, default=2, help="Decimal places for mean/std.")
     parser.add_argument("--caption", default="", help="LaTeX table caption.")
     parser.add_argument("--label", default="", help="LaTeX table label.")
+    parser.add_argument(
+        "--exclude_timing_cols",
+        action="store_true",
+        help="Exclude AF and Seconds/Frame columns from the table.",
+    )
     parser.add_argument(
         "--exp_base_dir",
         default="output",
@@ -395,6 +462,7 @@ def main():
                 config_cols,
                 exp_base_dirs,
                 config_cache,
+                include_timing_cols=not args.exclude_timing_cols,
             )
         )
         return
@@ -416,6 +484,7 @@ def main():
                 config_cols,
                 exp_base_dirs,
                 config_cache,
+                include_timing_cols=not args.exclude_timing_cols,
             )
         )
     print("\n\n".join(outputs))
