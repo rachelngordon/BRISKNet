@@ -218,6 +218,53 @@ def _flatten_gathered_records(gathered_records):
             flat.append(record_list)
     return flat
 
+
+def _as_int_scalar(val, default: int = 0) -> int:
+    try:
+        if torch.is_tensor(val):
+            if val.numel() == 0:
+                return int(default)
+            return int(val.reshape(-1)[0].item())
+        return int(val)
+    except Exception:
+        return int(default)
+
+
+def _build_nufft_getter(device, traj_method: str):
+    """Cache NUFFT trajectory/operators by (samples, spokes, time, traj_method)."""
+    cache = {}
+
+    def _get_nufft(N_samples, N_spokes, N_time):
+        n_samples_i = _as_int_scalar(N_samples)
+        n_spokes_i = _as_int_scalar(N_spokes)
+        n_time_i = _as_int_scalar(N_time)
+        key = (n_samples_i, n_spokes_i, n_time_i, str(traj_method))
+        if key not in cache:
+            ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
+                n_samples_i, n_spokes_i, n_time_i, traj_method=traj_method
+            )
+            cache[key] = (
+                ktraj.to(device, non_blocking=True),
+                dcomp.to(device, non_blocking=True),
+                nufft_ob.to(device),
+                adjnufft_ob.to(device),
+            )
+        return cache[key]
+
+    return _get_nufft
+
+
+def _normalize_optional_checkpoint_path(value, field_name: str):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string path or null, got {type(value).__name__}.")
+    path = value.strip()
+    if path.lower() in ("", "none", "null"):
+        return None
+    return path
+
+
 def main():
 
     set_seed(12)
@@ -251,12 +298,47 @@ def main():
         new_config = yaml.safe_load(file)
     new_config = apply_cluster_paths(new_config)
 
+    experiment_cfg = new_config.get("experiment", {})
+    resume_checkpoint_cfg = _normalize_optional_checkpoint_path(
+        experiment_cfg.get("resume_checkpoint", None),
+        "experiment.resume_checkpoint",
+    )
+    init_checkpoint_cfg = _normalize_optional_checkpoint_path(
+        experiment_cfg.get("init_checkpoint", None),
+        "experiment.init_checkpoint",
+    )
+    legacy_pretrained_cfg = _normalize_optional_checkpoint_path(
+        experiment_cfg.get("pretrained_checkpoint", None),
+        "experiment.pretrained_checkpoint",
+    )
+    if resume_checkpoint_cfg and init_checkpoint_cfg:
+        raise ValueError(
+            "experiment.resume_checkpoint and experiment.init_checkpoint are mutually exclusive."
+        )
+    if init_checkpoint_cfg and legacy_pretrained_cfg:
+        raise ValueError(
+            "Both experiment.init_checkpoint and deprecated experiment.pretrained_checkpoint are set. "
+            "Use only experiment.init_checkpoint."
+        )
+    init_checkpoint = init_checkpoint_cfg or legacy_pretrained_cfg
+    init_checkpoint_source = (
+        "experiment.init_checkpoint"
+        if init_checkpoint_cfg
+        else ("experiment.pretrained_checkpoint" if legacy_pretrained_cfg else None)
+    )
+
     output_dir = os.path.join(new_config["experiment"]["output_dir"], exp_name)
-    checkpoint_file = os.path.join(output_dir, f"{exp_name}_model.pth")
-    resume_from_checkpoint = os.path.isfile(checkpoint_file)
+    default_checkpoint_file = os.path.join(output_dir, f"{exp_name}_model.pth")
+    checkpoint_file = resume_checkpoint_cfg or default_checkpoint_file
+    if resume_checkpoint_cfg:
+        if not os.path.isfile(checkpoint_file):
+            raise FileNotFoundError(f"Resume checkpoint not found: {checkpoint_file}")
+        resume_from_checkpoint = True
+    else:
+        resume_from_checkpoint = os.path.isfile(checkpoint_file)
 
     if resume_from_checkpoint:
-        config_path = os.path.join(output_dir, "config.yaml")
+        config_path = os.path.join(os.path.dirname(checkpoint_file), "config.yaml")
         if os.path.isfile(config_path):
             with open(config_path, "r") as file:
                 config = yaml.safe_load(file)
@@ -356,10 +438,27 @@ def main():
         print(f"Running experiment on Git commit: {commit_hash}")
 
         print(f"Experiment: {exp_name}")
+        print(f"[AMP] enabled={amp_enabled}, dtype={amp_dtype_str}, grad_scaler={use_scaler}")
         if resume_from_checkpoint:
             print(f"[Checkpoint] Resuming from {checkpoint_file}")
+            if init_checkpoint:
+                print(
+                    f"[Checkpoint] Found {init_checkpoint_source}={init_checkpoint}, "
+                    "but resume checkpoint takes precedence."
+                )
         else:
-            print("[Checkpoint] No existing checkpoint found; starting new run.")
+            if init_checkpoint:
+                if init_checkpoint_source == "experiment.pretrained_checkpoint":
+                    print(
+                        "[Checkpoint] experiment.pretrained_checkpoint is deprecated; "
+                        "use experiment.init_checkpoint instead."
+                    )
+                print(
+                    f"[Checkpoint] No run checkpoint found; warm-starting from "
+                    f"{init_checkpoint_source}: {init_checkpoint}"
+                )
+            else:
+                print("[Checkpoint] No existing checkpoint found; starting new run.")
 
 
 
@@ -524,6 +623,9 @@ def main():
     target_w_ei = config["model"]["losses"]["ei_loss"]["weight"]
     warmup = config["model"]["losses"]["ei_loss"]["warmup"]
     duration = config["model"]["losses"]["ei_loss"]["duration"]
+    checkpoint_before_loss_transitions = bool(
+        config.get("training", {}).get("checkpoint_before_loss_transitions", True)
+    )
 
     rebin_cfg = config["model"]["losses"].get("rebin_loss", {})
     use_rebin_loss = bool(rebin_cfg.get("enable", False))
@@ -984,33 +1086,26 @@ def main():
     )
 
 
-    pretrained_checkpoint = config.get("experiment", {}).get("pretrained_checkpoint", None)
-    if isinstance(pretrained_checkpoint, str):
-        if pretrained_checkpoint.strip().lower() in ("", "none", "null"):
-            pretrained_checkpoint = None
-
     # Load the checkpoint to resume training
     if resume_from_checkpoint:
-        # if global_rank == 0 or config['training']['multigpu'] == False:
-        checkpoint_file = os.path.join(output_dir, f'{exp_name}_model.pth')
         model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
-        if pretrained_checkpoint and (global_rank == 0 or not config['training']['multigpu']):
+        if init_checkpoint and (global_rank == 0 or not config['training']['multigpu']):
             print(
-                f"[Checkpoint] Found pretrained_checkpoint={pretrained_checkpoint}, "
-                "but an existing run checkpoint was detected; resuming instead."
+                f"[Checkpoint] Found {init_checkpoint_source}={init_checkpoint}, "
+                "but an existing resume checkpoint was detected; resuming instead."
             )
 
     else:
         start_epoch = 1
-        if pretrained_checkpoint:
-            if not os.path.isfile(pretrained_checkpoint):
+        if init_checkpoint:
+            if not os.path.isfile(init_checkpoint):
                 raise FileNotFoundError(
-                    f"Pretrained checkpoint not found: {pretrained_checkpoint}"
+                    f"Init checkpoint not found: {init_checkpoint}"
                 )
 
             skip_prefixes = []
             enc_skip_reason = None
-            ckpt_cfg_path = os.path.join(os.path.dirname(pretrained_checkpoint), "config.yaml")
+            ckpt_cfg_path = os.path.join(os.path.dirname(init_checkpoint), "config.yaml")
             if os.path.isfile(ckpt_cfg_path):
                 try:
                     with open(ckpt_cfg_path, "r") as file:
@@ -1032,11 +1127,16 @@ def main():
 
             model, preload_info = load_pretrained_weights(
                 model,
-                pretrained_checkpoint,
+                init_checkpoint,
                 skip_prefixes=skip_prefixes,
             )
             if global_rank == 0 or not config['training']['multigpu']:
-                print(f"[Checkpoint] Loaded pretrained weights from {pretrained_checkpoint}")
+                if init_checkpoint_source == "experiment.pretrained_checkpoint":
+                    print(
+                        "[Checkpoint] experiment.pretrained_checkpoint is deprecated; "
+                        "use experiment.init_checkpoint instead."
+                    )
+                print(f"[Checkpoint] Loaded init weights from {init_checkpoint}")
                 if enc_skip_reason:
                     print(f"[Checkpoint] Skipping encoding weights: {enc_skip_reason}")
                 if preload_info.get("mismatched_keys"):
@@ -1053,9 +1153,10 @@ def main():
                 )
                 if run_state is not None:
                     with state_lock:
-                        run_state["pretrained_checkpoint"] = {
+                        run_state["init_checkpoint"] = {
                             "loaded": True,
-                            "path": pretrained_checkpoint,
+                            "path": init_checkpoint,
+                            "source": init_checkpoint_source,
                             "epoch": preload_info.get("checkpoint_epoch"),
                         }
                         _save_run_state(run_state_path, run_state)
@@ -1550,9 +1651,38 @@ def main():
         )
         return train_curves, val_curves, eval_curves
 
-    mc_only_checkpoint_saved = True
-    if use_ei_loss and warmup > 0 and start_epoch <= warmup:
-        mc_only_checkpoint_saved = False
+    loss_transition_checkpoints = {}
+
+    def _register_transition_checkpoint(epoch_idx: int, tag: str):
+        epoch_i = int(epoch_idx)
+        if epoch_i <= 0:
+            return
+        if start_epoch > epoch_i:
+            return
+        loss_transition_checkpoints.setdefault(epoch_i, [])
+        if tag not in loss_transition_checkpoints[epoch_i]:
+            loss_transition_checkpoints[epoch_i].append(tag)
+
+    if checkpoint_before_loss_transitions:
+        if use_ei_loss and warmup > 0:
+            _register_transition_checkpoint(warmup, "pre_ei_loss")
+        if use_rebin_loss and rebin_warmup > 0:
+            _register_transition_checkpoint(rebin_warmup, "pre_rebin_loss")
+
+        if global_rank == 0 or not config['training']['multigpu']:
+            if loss_transition_checkpoints:
+                transitions = ", ".join(
+                    [
+                        f"epoch {ep}: {', '.join(tags)}"
+                        for ep, tags in sorted(loss_transition_checkpoints.items())
+                    ]
+                )
+                print(f"[Checkpoint] Transition checkpoints enabled: {transitions}")
+            else:
+                print("[Checkpoint] Transition checkpoints enabled, but no future transition epochs found.")
+    else:
+        if global_rank == 0 or not config['training']['multigpu']:
+            print("[Checkpoint] Transition checkpoints disabled by config.")
 
 
     grasp_ssims = []
@@ -3478,43 +3608,38 @@ def main():
                 )
                 print(f"[Checkpoint] Latest model saved to {model_save_path}")
 
-            if (
-                not mc_only_checkpoint_saved
-                and use_ei_loss
-                and warmup > 0
-                and epoch == warmup
-            ):
+            transition_tags = loss_transition_checkpoints.get(epoch, [])
+            if transition_tags:
                 if global_rank == 0 or not config['training']['multigpu']:
                     train_curves, val_curves, eval_curves = _build_checkpoint_curves()
-                    mc_only_epochs = epoch
-                    mc_only_checkpoint_path = os.path.join(
-                        output_dir, f"{exp_name}_mc_{mc_only_epochs}epochs.pth"
-                    )
-                    save_checkpoint(
-                        model,
-                        optimizer,
-                        epoch + 1,
-                        train_curves,
-                        val_curves,
-                        eval_curves,
-                        target_w_ei,
-                        step0_train_ei_loss,
-                        epoch_train_mc_loss,
-                        avg_grasp_ssim,
-                        avg_grasp_psnr,
-                        avg_grasp_mse,
-                        avg_grasp_lpips,
-                        avg_grasp_dc_mse,
-                        avg_grasp_dc_mae,
-                        avg_grasp_curve_corr,
-                        avg_grasp_raw_dc_mae,
-                        avg_grasp_raw_dc_mse,
-                        mc_only_checkpoint_path,
-                    )
-                    print(
-                        f"[Checkpoint] MC-only checkpoint saved to {mc_only_checkpoint_path}"
-                    )
-                mc_only_checkpoint_saved = True
+                    for tag in transition_tags:
+                        transition_checkpoint_path = os.path.join(
+                            output_dir, f"{exp_name}_{tag}_epoch{epoch}.pth"
+                        )
+                        save_checkpoint(
+                            model,
+                            optimizer,
+                            epoch + 1,
+                            train_curves,
+                            val_curves,
+                            eval_curves,
+                            target_w_ei,
+                            step0_train_ei_loss,
+                            epoch_train_mc_loss,
+                            avg_grasp_ssim,
+                            avg_grasp_psnr,
+                            avg_grasp_mse,
+                            avg_grasp_lpips,
+                            avg_grasp_dc_mse,
+                            avg_grasp_dc_mae,
+                            avg_grasp_curve_corr,
+                            avg_grasp_raw_dc_mae,
+                            avg_grasp_raw_dc_mse,
+                            transition_checkpoint_path,
+                        )
+                        print(
+                            f"[Checkpoint] Transition checkpoint ({tag}) saved to {transition_checkpoint_path}"
+                        )
 
             if torch.cuda.is_available():
                 torch.cuda.synchronize(device)

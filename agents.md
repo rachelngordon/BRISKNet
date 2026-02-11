@@ -21,7 +21,8 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - **Temporal setup**: 8 spokes per frame → 36 timepoints. Training draws a random 24-frame window per scan; evaluation reconstructs with a sliding window of 24 frames with 12-frame overlap.
 
 ## Training Pipeline
-- **Entry point**: `train_zf.py --config <yaml> --exp_name <run_id> [--from_checkpoint true]`. Multi-GPU uses NCCL; logs, configs, checkpoints, evals stored under `output/<exp_name>/`.
+- **Entry point**: `train_zf.py --config <yaml> --exp_name <run_id>`. Multi-GPU uses NCCL; logs, configs, checkpoints, evals stored under `output/<exp_name>/`.
+- **Checkpoint config**: use `experiment.resume_checkpoint` for full-state resume (optimizer/epoch/curves), and `experiment.init_checkpoint` for weights-only warm start. `experiment.pretrained_checkpoint` is supported as a deprecated alias for `init_checkpoint`.
 - **Config example**: `configs/config_ei_no_noise_encode_both.yaml` (LSFPNet, EI on, MC weight 10, adjoint loss weight 1, Adam lr 5e-4, batch size 1, curriculum optional).
 - **Loss terms**:
   - MC loss on forward NUFFT outputs (`MCLoss`).
