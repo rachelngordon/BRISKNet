@@ -678,6 +678,22 @@ def get_cosine_ei_weight(
 
 
 
+def _select_plot_time_indices(n_timeframes: int, max_points: int = 12):
+    n_timeframes = int(n_timeframes)
+    if n_timeframes <= max_points:
+        return list(range(n_timeframes))
+
+    # Prefer an evenly divisible selection (stride = integer) close to max_points.
+    for n_show in range(min(max_points, n_timeframes), 1, -1):
+        if n_timeframes % n_show == 0:
+            stride = n_timeframes // n_show
+            return list(range(0, n_timeframes, stride))
+
+    # Fallback: approximately even spacing if divisibility is not available.
+    idx = np.linspace(0, n_timeframes - 1, num=max_points, dtype=int)
+    return np.unique(idx).tolist()
+
+
 def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=None, batch_idx=0, transform=False):
     """
     Plot reconstruction sample showing magnitude images across timeframes.
@@ -698,7 +714,9 @@ def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=N
         x_recon_mag = x_recon
 
 
-    n_timeframes = x_recon_mag.shape[-1]
+    n_timeframes = int(x_recon_mag.shape[-1])
+    time_indices = _select_plot_time_indices(n_timeframes=n_timeframes, max_points=12)
+    n_plot = len(time_indices)
 
     if grasp_img is not None:
         grasp_img_mag = torch.sqrt(grasp_img[:, 0, ...] ** 2 + grasp_img[:, 1, ...] ** 2)
@@ -712,8 +730,8 @@ def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=N
 
         fig, axes = plt.subplots(
             nrows=2,
-            ncols=n_timeframes,
-            figsize=(n_timeframes * 3, 8),
+            ncols=n_plot,
+            figsize=(n_plot * 3, 8),
             squeeze=False,
         )
 
@@ -732,13 +750,12 @@ def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=N
     else:
         fig, axes = plt.subplots(
             nrows=1,
-            ncols=n_timeframes,
-            figsize=(n_timeframes * 3, 4),
-            squeeze=True,
+            ncols=n_plot,
+            figsize=(n_plot * 3, 4),
+            squeeze=False,
         )
 
-    
-    for t in range(n_timeframes):
+    for col, t in enumerate(time_indices):
         
         if x_recon_mag.shape[1] == n_timeframes:
             img = x_recon_mag[batch_idx, t, :, :].cpu().detach().numpy()
@@ -747,16 +764,16 @@ def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=N
 
         if grasp_img is not None:
             if grasp_img_mag.shape[1] == n_timeframes:
-                grasp_img = grasp_img_mag[batch_idx, t, :, :].cpu().detach().numpy()
+                grasp_img_frame = grasp_img_mag[batch_idx, t, :, :].cpu().detach().numpy()
             elif grasp_img_mag.shape[-1] == n_timeframes:
-                grasp_img = grasp_img_mag[batch_idx, :, :, t].cpu().detach().numpy()
+                grasp_img_frame = grasp_img_mag[batch_idx, :, :, t].cpu().detach().numpy()
             else:
-                grasp_img = grasp_img_mag[batch_idx, :, t, :].cpu().detach().numpy()
+                grasp_img_frame = grasp_img_mag[batch_idx, :, t, :].cpu().detach().numpy()
 
 
-            ax1 = axes[0, t]
+            ax1 = axes[0, col]
         else:
-            ax1 = axes[t]
+            ax1 = axes[0, col]
 
         ax1.imshow(img, cmap="gray_r")
         ax1.set_title(f"t = {t}")
@@ -764,8 +781,8 @@ def plot_reconstruction_sample(x_recon, title, filename, output_dir, grasp_img=N
         ax1.set_yticks([])
 
         if grasp_img is not None:
-            ax2 = axes[1, t]
-            ax2.imshow(grasp_img, cmap="gray_r")
+            ax2 = axes[1, col]
+            ax2.imshow(grasp_img_frame, cmap="gray_r")
             ax2.set_title(f"t = {t}")
             ax2.set_xticks([])
             ax2.set_yticks([])
@@ -870,6 +887,14 @@ def load_checkpoint(model, optimizer, filename):
         "eval_ttae_secs": ckpt.get("eval_ttae_secs", []),
         "eval_iauc10_errs": ckpt.get("eval_iauc10_errs", []),
         "eval_peak_errs": ckpt.get("eval_peak_errs", []),
+        "eval_dl_dc_mae_bestfits": ckpt.get("eval_dl_dc_mae_bestfits", []),
+        "eval_raw_ssdu_nmses": ckpt.get("eval_raw_ssdu_nmses", []),
+        "avg_grasp_curve_mae": ckpt.get("avg_grasp_curve_mae", float("nan")),
+        "avg_grasp_ttae_sec": ckpt.get("avg_grasp_ttae_sec", float("nan")),
+        "avg_grasp_iauc10_err": ckpt.get("avg_grasp_iauc10_err", float("nan")),
+        "avg_grasp_peak_err": ckpt.get("avg_grasp_peak_err", float("nan")),
+        "avg_grasp_dc_mae_bestfit": ckpt.get("avg_grasp_dc_mae_bestfit", float("nan")),
+        "avg_grasp_raw_ssdu_nmse": ckpt.get("avg_grasp_raw_ssdu_nmse", float("nan")),
         "eval_spf_curves": ckpt.get("eval_spf_curves", {}),
         "best_psnr": ckpt.get("best_psnr"),
         "best_epoch": ckpt.get("best_epoch"),
@@ -1223,7 +1248,8 @@ def sliding_window_inference(
     start_timepoint_index,  # ignored here; recomputed per chunk if time-encoding is enabled
     model, epoch, device,
     norm: str = "both",
-    window_kind: str = "hann"
+    window_kind: str = "hann",
+    collect_adj_loss: bool = True,
 ):
     """
     Edge-safe temporal stitching using Hann overlap-add:
@@ -1238,8 +1264,8 @@ def sliding_window_inference(
     weight_sum     = torch.zeros(1, 1, 1, 1, N_frames, device=device, dtype=torch.float32)
 
     csmap = csmap.to(device)
-    # Keep track of adjoint-loss across chunks (report mean)
-    adj_losses = []
+    # Keep track of adjoint-loss across chunks only when requested.
+    adj_losses = [] if collect_adj_loss else None
 
     for i, (start_idx, end_idx) in enumerate(chunk_indices):
         print(f"Processing chunk {i+1}/{len(chunk_indices)}: frames {start_idx}-{end_idx}")
@@ -1259,7 +1285,7 @@ def sliding_window_inference(
             sti = torch.tensor([start_idx], dtype=torch.float32, device=device)
 
         # Forward pass
-        x_recon_chunk, adj_loss, *_ = model(
+        model_out = model(
             kspace_chunk,
             physics_chunk,
             csmap,
@@ -1269,8 +1295,10 @@ def sliding_window_inference(
             norm=norm,
             total_frames=N_frames,
         )
+        x_recon_chunk = model_out[0]
         # x_recon_chunk: (1, 2, H, W, T_chunk)
-        adj_losses.append(adj_loss.item())
+        if collect_adj_loss:
+            adj_losses.append(model_out[1].item())
 
         # Build temporal window for this chunk and overlap-add
         T_chunk = end_idx - start_idx
@@ -1285,5 +1313,8 @@ def sliding_window_inference(
     # Normalize by accumulated weights (safe divide)
     stitched_recon = stitched_recon / torch.clamp(weight_sum, min=1e-8)
 
-    mean_adj_loss = float(np.mean(adj_losses)) if len(adj_losses) else 0.0
+    if collect_adj_loss and adj_losses is not None and len(adj_losses):
+        mean_adj_loss = float(np.mean(adj_losses))
+    else:
+        mean_adj_loss = 0.0
     return stitched_recon, mean_adj_loss

@@ -26,7 +26,7 @@ from mc import MCLoss
 from model_factory import build_recon_model, is_lsfp_model
 from radial_lsfp import MCNUFFT
 from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
-from eval import eval_grasp, eval_sample
+from eval import eval_grasp, eval_sample, compute_ssdu_kspace_nmse
 import csv
 import math
 import random
@@ -615,18 +615,23 @@ def main():
     slice_sampling_cache_rank = global_rank if config['training']['multigpu'] else None
     slice_sampling_cache_rank_only = 0 if config['training']['multigpu'] else None
 
-    mc_loss_weight = config["model"]["losses"]["mc_loss"]["weight"]
-    adj_loss_weight = config["model"]["losses"]["adj_loss"]["weight"]
+    losses_cfg = config["model"]["losses"]
+    mc_loss_weight = float(losses_cfg["mc_loss"]["weight"])
+    adj_loss_cfg = losses_cfg.get("adj_loss", {})
+    if not isinstance(adj_loss_cfg, dict):
+        raise TypeError(
+            f"model.losses.adj_loss must be a mapping, got {type(adj_loss_cfg).__name__}."
+        )
 
-    use_ei_loss = config["model"]["losses"]["use_ei_loss"]
-    target_w_ei = config["model"]["losses"]["ei_loss"]["weight"]
-    warmup = config["model"]["losses"]["ei_loss"]["warmup"]
-    duration = config["model"]["losses"]["ei_loss"]["duration"]
+    use_ei_loss = losses_cfg["use_ei_loss"]
+    target_w_ei = losses_cfg["ei_loss"]["weight"]
+    warmup = losses_cfg["ei_loss"]["warmup"]
+    duration = losses_cfg["ei_loss"]["duration"]
     checkpoint_before_loss_transitions = bool(
         config.get("training", {}).get("checkpoint_before_loss_transitions", True)
     )
 
-    rebin_cfg = config["model"]["losses"].get("rebin_loss", {})
+    rebin_cfg = losses_cfg.get("rebin_loss", {})
     use_rebin_loss = bool(rebin_cfg.get("enable", False))
     rebin_target_w = float(rebin_cfg.get("weight", 0.0))
     rebin_warmup = int(rebin_cfg.get("warmup", 0))
@@ -670,6 +675,15 @@ def main():
 
     model_type = config["model"]["name"]
     model_type_is_lsfp = is_lsfp_model(model_type)
+    use_adj_loss = model_type_is_lsfp
+    if use_adj_loss:
+        if "weight" not in adj_loss_cfg:
+            raise KeyError("model.losses.adj_loss.weight is required for LSFPNet.")
+        adj_loss_weight = float(adj_loss_cfg["weight"])
+    else:
+        # For non-LSFP architectures (e.g., Mamba), adjoint loss is disabled by design.
+        # This is architecture-driven and not configurable.
+        adj_loss_weight = 0.0
 
     H, W = config["data"]["height"], config["data"]["width"]
     N_time, N_samples, N_coils = (
@@ -697,6 +711,12 @@ def main():
     dro_sim_source = eval_cfg.get("dro_sim_source", "espirit")
     dro_csmaps_source = eval_cfg.get("dro_csmaps_source", "espirit")
     dro_espirit_csmaps_dir = eval_cfg.get("dro_espirit_csmaps_dir")
+    compute_ssdu_eval = bool(eval_cfg.get("compute_ssdu", False))
+    try:
+        ssdu_k_folds = int(eval_cfg.get("ssdu_k_folds", 4))
+    except (TypeError, ValueError):
+        ssdu_k_folds = 4
+    ssdu_weighting = str(eval_cfg.get("ssdu_weighting", "sqrt_dcomp"))
     deterministic_val_ei = bool(eval_cfg.get("deterministic_val_ei", False))
     deterministic_val_ei_seed = eval_cfg.get("deterministic_val_ei_seed", 0)
     try:
@@ -1515,6 +1535,14 @@ def main():
         eval_ttae_secs = eval_curves.get("eval_ttae_secs", [])
         eval_iauc10_errs = eval_curves.get("eval_iauc10_errs", [])
         eval_peak_errs = eval_curves.get("eval_peak_errs", [])
+        eval_dl_dc_mae_bestfits = eval_curves.get("eval_dl_dc_mae_bestfits", [])
+        eval_raw_ssdu_nmses = eval_curves.get("eval_raw_ssdu_nmses", [])
+        avg_grasp_curve_mae = eval_curves.get("avg_grasp_curve_mae", float("nan"))
+        avg_grasp_ttae_sec = eval_curves.get("avg_grasp_ttae_sec", float("nan"))
+        avg_grasp_iauc10_err = eval_curves.get("avg_grasp_iauc10_err", float("nan"))
+        avg_grasp_peak_err = eval_curves.get("avg_grasp_peak_err", float("nan"))
+        avg_grasp_dc_mae_bestfit = eval_curves.get("avg_grasp_dc_mae_bestfit", float("nan"))
+        avg_grasp_raw_ssdu_nmse = eval_curves.get("avg_grasp_raw_ssdu_nmse", float("nan"))
     else:
         train_mc_losses = []
         val_mc_losses = []
@@ -1547,6 +1575,14 @@ def main():
         eval_ttae_secs = []
         eval_iauc10_errs = []
         eval_peak_errs = []
+        eval_dl_dc_mae_bestfits = []
+        eval_raw_ssdu_nmses = []
+        avg_grasp_curve_mae = float("nan")
+        avg_grasp_ttae_sec = float("nan")
+        avg_grasp_iauc10_err = float("nan")
+        avg_grasp_peak_err = float("nan")
+        avg_grasp_dc_mae_bestfit = float("nan")
+        avg_grasp_raw_ssdu_nmse = float("nan")
 
 
     eval_spf_curves = {}
@@ -1617,6 +1653,14 @@ def main():
             eval_ttae_secs=eval_ttae_secs,
             eval_iauc10_errs=eval_iauc10_errs,
             eval_peak_errs=eval_peak_errs,
+            eval_dl_dc_mae_bestfits=eval_dl_dc_mae_bestfits,
+            eval_raw_ssdu_nmses=eval_raw_ssdu_nmses,
+            avg_grasp_curve_mae=avg_grasp_curve_mae,
+            avg_grasp_ttae_sec=avg_grasp_ttae_sec,
+            avg_grasp_iauc10_err=avg_grasp_iauc10_err,
+            avg_grasp_peak_err=avg_grasp_peak_err,
+            avg_grasp_dc_mae_bestfit=avg_grasp_dc_mae_bestfit,
+            avg_grasp_raw_ssdu_nmse=avg_grasp_raw_ssdu_nmse,
             eval_spf_curves=eval_spf_curves,
             best_psnr=best_psnr,
             best_epoch=best_epoch,
@@ -1663,9 +1707,14 @@ def main():
     grasp_lpipses = []
     grasp_dc_mses = []
     grasp_dc_maes = []
+    grasp_dc_mae_bestfits = []
     grasp_curve_corrs = []
     raw_grasp_dc_mses = []
     raw_grasp_dc_maes = []
+    grasp_curve_maes = []
+    grasp_ttae_secs = []
+    grasp_iauc10_errs = []
+    grasp_peak_errs = []
 
     # Defaults so checkpointing works even if Step-0 validation is skipped
     if not resume_from_checkpoint:
@@ -1678,6 +1727,12 @@ def main():
         avg_grasp_curve_corr = 0.0
         avg_grasp_raw_dc_mae = 0.0
         avg_grasp_raw_dc_mse = 0.0
+        avg_grasp_curve_mae = float("nan")
+        avg_grasp_ttae_sec = float("nan")
+        avg_grasp_iauc10_err = float("nan")
+        avg_grasp_peak_err = float("nan")
+        avg_grasp_dc_mae_bestfit = float("nan")
+        avg_grasp_raw_ssdu_nmse = float("nan")
 
     def _mean_or_nan(values):
         return float(np.mean(values)) if values else float("nan")
@@ -1695,6 +1750,10 @@ def main():
             avg_grasp_dc_mae,
             avg_grasp_raw_dc_mae,
             avg_grasp_raw_dc_mse,
+            avg_grasp_curve_mae,
+            avg_grasp_ttae_sec,
+            avg_grasp_iauc10_err,
+            avg_grasp_peak_err,
         )
         return all(val is not None and np.isfinite(val) for val in required)
 
@@ -1734,6 +1793,8 @@ def main():
         initial_eval_ttae_secs = []
         initial_eval_iauc10_errs = []
         initial_eval_peak_errs = []
+        initial_eval_dl_dc_mae_bestfits = []
+        initial_eval_raw_ssdu_nmses = []
 
 
         with torch.no_grad():
@@ -1793,7 +1854,8 @@ def main():
                     )
 
                     # calculate losses
-                    initial_train_adj_loss += adj_loss.item()
+                    if use_adj_loss:
+                        initial_train_adj_loss += adj_loss.item()
 
                     mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
                     initial_train_mc_loss += mc_loss.item()
@@ -1817,7 +1879,10 @@ def main():
             step0_train_ei_loss = initial_train_ei_loss / denom
             train_ei_losses.append(step0_train_ei_loss)
 
-            step0_train_adj_loss = initial_train_adj_loss / denom
+            if use_adj_loss:
+                step0_train_adj_loss = initial_train_adj_loss / denom
+            else:
+                step0_train_adj_loss = 0.0
             train_adj_losses.append(step0_train_adj_loss)
 
 
@@ -1825,7 +1890,7 @@ def main():
                 writer.add_scalar('Loss/Train_MC', step0_train_mc_loss, 0)
                 writer.add_scalar('Loss/Train_EI', step0_train_ei_loss, 0)
                 writer.add_scalar('Loss/Train_Weighted_EI', 0, 0)
-                writer.add_scalar('Loss/Train_Adj', step0_train_ei_loss, 0)
+                writer.add_scalar('Loss/Train_Adj', step0_train_adj_loss, 0)
 
 
             lambda_Ls.append(lambda_L.item())
@@ -1868,8 +1933,8 @@ def main():
                     # inference + losses
                     with amp_autocast():
                         if N_time_eval > eval_chunk_size:
-                            x_recon, adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, dro_kspace, csmap, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
-                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
+                            x_recon, adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, dro_kspace, csmap, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
+                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
                         else:
                             x_recon, adj_loss, *_ = model(
                             dro_kspace.to(device), eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
@@ -1883,7 +1948,8 @@ def main():
                         # raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
     
                         # compute losses
-                        initial_val_adj_loss += adj_loss
+                        if use_adj_loss:
+                            initial_val_adj_loss += adj_loss
                         
                         mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics, csmap)
                         initial_val_mc_loss += mc_loss.item()
@@ -1904,13 +1970,35 @@ def main():
     
                     # calculate grasp metrics
                     if global_rank == 0 or not config['training']['multigpu']:
-                        ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(dro_kspace, csmap, ground_truth, dro_grasp_img, eval_physics, device, eval_dir, rescale=config['evaluation']['rescale'], dro_eval=True)
+                        (
+                            ssim_grasp,
+                            psnr_grasp,
+                            mse_grasp,
+                            lpips_grasp,
+                            dc_mse_grasp,
+                            dc_mae_grasp,
+                            grasp_aux,
+                        ) = eval_grasp(
+                            dro_kspace,
+                            csmap,
+                            ground_truth,
+                            dro_grasp_img,
+                            eval_physics,
+                            device,
+                            eval_dir,
+                            rescale=config['evaluation']['rescale'],
+                            dro_eval=True,
+                            return_aux=True,
+                        )
                         grasp_ssims.append(ssim_grasp)
                         grasp_psnrs.append(psnr_grasp)
                         grasp_mses.append(mse_grasp)
                         grasp_lpipses.append(lpips_grasp)
                         grasp_dc_mses.append(dc_mse_grasp)
                         grasp_dc_maes.append(dc_mae_grasp)
+                        grasp_dc_mae_bestfit = None if grasp_aux is None else grasp_aux.get("grasp_dc_mae_bestfit")
+                        if grasp_dc_mae_bestfit is not None and np.isfinite(grasp_dc_mae_bestfit):
+                            grasp_dc_mae_bestfits.append(float(grasp_dc_mae_bestfit))
     
                         ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = eval_sample(
                             dro_kspace,
@@ -1954,6 +2042,11 @@ def main():
                             ttae_sec = temporal_metrics.get("dl_all_ttae_sec")
                             iauc10_err = temporal_metrics.get("dl_all_iauc10_err")
                             peak_err = temporal_metrics.get("dl_all_peak_err")
+                            grasp_curve_mae = temporal_metrics.get("grasp_all_curve_mae")
+                            grasp_ttae_sec = temporal_metrics.get("grasp_all_ttae_sec")
+                            grasp_iauc10_err = temporal_metrics.get("grasp_all_iauc10_err")
+                            grasp_peak_err = temporal_metrics.get("grasp_all_peak_err")
+                            dl_dc_mae_bestfit = temporal_metrics.get("dl_dc_mae_bestfit")
                             if curve_mae is not None and np.isfinite(curve_mae):
                                 initial_eval_curve_maes.append(curve_mae)
                             if ttae_sec is not None and np.isfinite(ttae_sec):
@@ -1962,6 +2055,16 @@ def main():
                                 initial_eval_iauc10_errs.append(iauc10_err)
                             if peak_err is not None and np.isfinite(peak_err):
                                 initial_eval_peak_errs.append(peak_err)
+                            if grasp_curve_mae is not None and np.isfinite(grasp_curve_mae):
+                                grasp_curve_maes.append(float(grasp_curve_mae))
+                            if grasp_ttae_sec is not None and np.isfinite(grasp_ttae_sec):
+                                grasp_ttae_secs.append(float(grasp_ttae_sec))
+                            if grasp_iauc10_err is not None and np.isfinite(grasp_iauc10_err):
+                                grasp_iauc10_errs.append(float(grasp_iauc10_err))
+                            if grasp_peak_err is not None and np.isfinite(grasp_peak_err):
+                                grasp_peak_errs.append(float(grasp_peak_err))
+                            if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit):
+                                initial_eval_dl_dc_mae_bestfits.append(float(dl_dc_mae_bestfit))
     
                         # raw k-space eval
                         print("performing non-DRO eval...")
@@ -1999,6 +2102,30 @@ def main():
                         raw_grasp_dc_maes.append(dc_mae_raw_grasp)
                         initial_eval_raw_dc_mses.append(dc_mse_raw)
                         initial_eval_raw_dc_maes.append(dc_mae_raw)
+                        if compute_ssdu_eval:
+                            ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
+                            ssdu_result = compute_ssdu_kspace_nmse(
+                                model,
+                                raw_kspace,
+                                raw_csmaps,
+                                eval_ktraj,
+                                eval_dcomp,
+                                eval_nufft_ob,
+                                eval_adjnufft_ob,
+                                spokes_per_frame=int(N_spokes),
+                                K_folds=ssdu_k_folds,
+                                baseline_weighting=ssdu_weighting,
+                                device=device,
+                                acceleration_encoding=acceleration_encoding,
+                                start_timepoint_index=start_timepoint_index,
+                                norm=config["model"]["norm"],
+                                epoch="val0",
+                                chunk_size=ssdu_chunk_size,
+                                chunk_overlap=eval_chunk_overlap,
+                            )
+                            raw_ssdu_nmse = ssdu_result.get("ssdu_nmse_mean")
+                            if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse):
+                                initial_eval_raw_ssdu_nmses.append(float(raw_ssdu_nmse))
 
                     step0_val_batches += 1
                     if max_step0_val_batches is not None and step0_val_batches >= int(max_step0_val_batches):
@@ -2013,7 +2140,10 @@ def main():
                 step0_val_ei_loss = initial_val_ei_loss / denom
                 val_ei_losses.append(step0_val_ei_loss)
 
-                step0_val_adj_loss = initial_val_adj_loss / denom
+                if use_adj_loss:
+                    step0_val_adj_loss = initial_val_adj_loss / denom
+                else:
+                    step0_val_adj_loss = 0.0
                 val_adj_losses.append(step0_val_adj_loss)
 
 
@@ -2037,6 +2167,12 @@ def main():
                 initial_eval_ttae_sec = np.mean(initial_eval_ttae_secs) if initial_eval_ttae_secs else np.nan
                 initial_eval_iauc10_err = np.mean(initial_eval_iauc10_errs) if initial_eval_iauc10_errs else np.nan
                 initial_eval_peak_err = np.mean(initial_eval_peak_errs) if initial_eval_peak_errs else np.nan
+                initial_eval_dl_dc_mae_bestfit = (
+                    np.mean(initial_eval_dl_dc_mae_bestfits) if initial_eval_dl_dc_mae_bestfits else np.nan
+                )
+                initial_eval_raw_ssdu_nmse = (
+                    np.mean(initial_eval_raw_ssdu_nmses) if initial_eval_raw_ssdu_nmses else np.nan
+                )
 
                 eval_ssims.append(initial_eval_ssim)
                 eval_psnrs.append(initial_eval_psnr)
@@ -2052,6 +2188,8 @@ def main():
                 eval_ttae_secs.append(initial_eval_ttae_sec)
                 eval_iauc10_errs.append(initial_eval_iauc10_err)
                 eval_peak_errs.append(initial_eval_peak_err)
+                eval_dl_dc_mae_bestfits.append(initial_eval_dl_dc_mae_bestfit)
+                eval_raw_ssdu_nmses.append(initial_eval_raw_ssdu_nmse)
 
                 spf_key = int(N_spokes_eval)
                 if spf_key in eval_spf_curves:
@@ -2081,6 +2219,10 @@ def main():
                         writer.add_scalar('Metric/Temporal_IAUC10_err', initial_eval_iauc10_err, 0)
                     if np.isfinite(initial_eval_peak_err):
                         writer.add_scalar('Metric/Temporal_Peak_err', initial_eval_peak_err, 0)
+                    if np.isfinite(initial_eval_dl_dc_mae_bestfit):
+                        writer.add_scalar('Metric/DL_DC_MAE_BESTFIT', initial_eval_dl_dc_mae_bestfit, 0)
+                    if np.isfinite(initial_eval_raw_ssdu_nmse):
+                        writer.add_scalar('Metric/RAW_SSDU_NMSE', initial_eval_raw_ssdu_nmse, 0)
 
         print(f"Step 0 Train Losses: MC: {step0_train_mc_loss}, EI: {step0_train_ei_loss}, Adj: {step0_train_adj_loss}")
         if step0_do_val:
@@ -2099,6 +2241,14 @@ def main():
             avg_grasp_curve_corr = np.mean(grasp_curve_corrs)
             avg_grasp_raw_dc_mae = np.mean(raw_grasp_dc_maes)
             avg_grasp_raw_dc_mse = np.mean(raw_grasp_dc_mses)
+            avg_grasp_curve_mae = _mean_or_nan(grasp_curve_maes)
+            avg_grasp_ttae_sec = _mean_or_nan(grasp_ttae_secs)
+            avg_grasp_iauc10_err = _mean_or_nan(grasp_iauc10_errs)
+            avg_grasp_peak_err = _mean_or_nan(grasp_peak_errs)
+            avg_grasp_dc_mae_bestfit = (
+                np.mean(grasp_dc_mae_bestfits) if grasp_dc_mae_bestfits else float("nan")
+            )
+            avg_grasp_raw_ssdu_nmse = float("nan")
 
             if global_rank == 0 or not config['training']['multigpu']:
                 if np.isfinite(initial_eval_psnr) and initial_eval_psnr > best_psnr:
@@ -2176,6 +2326,8 @@ def main():
             epoch_eval_ttae_secs = []
             epoch_eval_iauc10_errs = []
             epoch_eval_peak_errs = []
+            epoch_eval_dl_dc_mae_bestfits = []
+            epoch_eval_raw_ssdu_nmses = []
 
 
             # cosine LR with warmup (set before first step of the epoch)
@@ -2380,7 +2532,8 @@ def main():
                         )
 
                         # compute losses
-                        running_adj_loss += adj_loss.item()
+                        if use_adj_loss:
+                            running_adj_loss += adj_loss.item()
 
                         mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
                         running_mc_loss += mc_loss.item()
@@ -2403,15 +2556,13 @@ def main():
                         else:
                             rebin_loss = None
 
+                        ei_loss = None
                         if use_ei_loss and compute_ei_this_epoch:
                             ei_loss, t_img = ei_loss_fn(
                                 x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
                             )
 
                             running_ei_loss += ei_loss.item()
-                            total_loss = mc_loss * mc_loss_weight + ei_loss * ei_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-                            if rebin_loss is not None and rebin_loss_weight > 0:
-                                total_loss = total_loss + rebin_loss * rebin_loss_weight
                             train_loader_tqdm.set_postfix(
                                 mc_loss=mc_loss.item(),
                                 ei_loss=ei_loss.item(),
@@ -2419,14 +2570,18 @@ def main():
                             )
 
                         else:
-                            total_loss = mc_loss * mc_loss_weight + torch.mul(adj_loss_weight, adj_loss)
-
-                            if rebin_loss is not None and rebin_loss_weight > 0:
-                                total_loss = total_loss + rebin_loss * rebin_loss_weight
                             train_loader_tqdm.set_postfix(
                                 mc_loss=mc_loss.item(),
                                 rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
                             )
+
+                        total_loss = mc_loss * mc_loss_weight
+                        if ei_loss is not None:
+                            total_loss = total_loss + ei_loss * ei_loss_weight
+                        if use_adj_loss:
+                            total_loss = total_loss + torch.mul(adj_loss_weight, adj_loss)
+                        if rebin_loss is not None and rebin_loss_weight > 0:
+                            total_loss = total_loss + rebin_loss * rebin_loss_weight
 
                     if torch.isnan(total_loss):
                         print(
@@ -2540,7 +2695,10 @@ def main():
             train_ei_losses.append(epoch_train_ei_loss)
             weighted_train_ei_losses.append(epoch_train_ei_loss*ei_loss_weight)
 
-            epoch_train_adj_loss = running_adj_loss / len(train_loader)
+            if use_adj_loss:
+                epoch_train_adj_loss = running_adj_loss / len(train_loader)
+            else:
+                epoch_train_adj_loss = 0.0
             train_adj_losses.append(epoch_train_adj_loss)
             weighted_train_adj_losses.append(epoch_train_adj_loss*adj_loss_weight)
 
@@ -2605,9 +2763,14 @@ def main():
                     grasp_lpipses.clear()
                     grasp_dc_mses.clear()
                     grasp_dc_maes.clear()
+                    grasp_dc_mae_bestfits.clear()
                     grasp_curve_corrs.clear()
                     raw_grasp_dc_mses.clear()
                     raw_grasp_dc_maes.clear()
+                    grasp_curve_maes.clear()
+                    grasp_ttae_secs.clear()
+                    grasp_iauc10_errs.clear()
+                    grasp_peak_errs.clear()
                     print(f"[Eval] Epoch {epoch}: collecting GRASP baseline metrics from validation set.")
                 local_eval_records = []
                 val_loader_tqdm = tqdm(
@@ -2659,8 +2822,8 @@ def main():
                         try:
                             with amp_autocast():
                                 if N_time_eval > eval_chunk_size:
-                                    val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device, norm=config["model"]["norm"])  
-                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"])  
+                                    val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
+                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
                                 else:
                                     val_x_recon, val_adj_loss, *_ = model(
                                     val_dro_kspace_batch.to(device), eval_physics, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
@@ -2674,7 +2837,8 @@ def main():
                                 # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
 
                                 # compute losses
-                                val_running_adj_loss += val_adj_loss
+                                if use_adj_loss:
+                                    val_running_adj_loss += val_adj_loss
 
                                 val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
                                 val_running_mc_loss += val_mc_loss.item()
@@ -2737,8 +2901,17 @@ def main():
                                 lpips_grasp = None
                                 dc_mse_grasp = None
                                 dc_mae_grasp = None
+                                grasp_dc_mae_bestfit = None
                                 if collect_grasp_baseline:
-                                    ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp, dc_mse_grasp, dc_mae_grasp = eval_grasp(
+                                    (
+                                        ssim_grasp,
+                                        psnr_grasp,
+                                        mse_grasp,
+                                        lpips_grasp,
+                                        dc_mse_grasp,
+                                        dc_mae_grasp,
+                                        grasp_aux,
+                                    ) = eval_grasp(
                                         val_dro_kspace_batch,
                                         val_csmap,
                                         val_ground_truth,
@@ -2748,16 +2921,29 @@ def main():
                                         eval_dir,
                                         rescale=config['evaluation']['rescale'],
                                         dro_eval=True,
+                                        return_aux=True,
                                     )
+                                    if grasp_aux is not None:
+                                        grasp_dc_mae_bestfit = grasp_aux.get("grasp_dc_mae_bestfit")
                                 curve_mae = None
                                 ttae_sec = None
                                 iauc10_err = None
                                 peak_err = None
+                                grasp_curve_mae = None
+                                grasp_ttae_sec = None
+                                grasp_iauc10_err = None
+                                grasp_peak_err = None
+                                dl_dc_mae_bestfit = None
                                 if temporal_metrics:
                                     curve_mae = temporal_metrics.get("dl_all_curve_mae")
                                     ttae_sec = temporal_metrics.get("dl_all_ttae_sec")
                                     iauc10_err = temporal_metrics.get("dl_all_iauc10_err")
                                     peak_err = temporal_metrics.get("dl_all_peak_err")
+                                    grasp_curve_mae = temporal_metrics.get("grasp_all_curve_mae")
+                                    grasp_ttae_sec = temporal_metrics.get("grasp_all_ttae_sec")
+                                    grasp_iauc10_err = temporal_metrics.get("grasp_all_iauc10_err")
+                                    grasp_peak_err = temporal_metrics.get("grasp_all_peak_err")
+                                    dl_dc_mae_bestfit = temporal_metrics.get("dl_dc_mae_bestfit")
 
                                 # raw k-space eval
                                 dc_mse_raw, dc_mae_raw, _ = eval_sample(
@@ -2803,6 +2989,29 @@ def main():
                                         rescale=config['evaluation']['rescale'],
                                         dro_eval=False,
                                     )
+                                raw_ssdu_nmse = None
+                                if compute_ssdu_eval:
+                                    ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
+                                    ssdu_result = compute_ssdu_kspace_nmse(
+                                        model,
+                                        val_raw_kspace,
+                                        val_raw_csmaps,
+                                        eval_ktraj,
+                                        eval_dcomp,
+                                        eval_nufft_ob,
+                                        eval_adjnufft_ob,
+                                        spokes_per_frame=int(N_spokes),
+                                        K_folds=ssdu_k_folds,
+                                        baseline_weighting=ssdu_weighting,
+                                        device=device,
+                                        acceleration_encoding=acceleration_encoding,
+                                        start_timepoint_index=start_timepoint_index,
+                                        norm=config["model"]["norm"],
+                                        epoch=f"val{epoch}",
+                                        chunk_size=ssdu_chunk_size,
+                                        chunk_overlap=eval_chunk_overlap,
+                                    )
+                                    raw_ssdu_nmse = ssdu_result.get("ssdu_nmse_mean")
                                 if distributed_eval_this_epoch:
                                     local_eval_records.append(
                                         {
@@ -2817,8 +3026,18 @@ def main():
                                             "ttae_sec": (float(ttae_sec) if ttae_sec is not None and np.isfinite(ttae_sec) else None),
                                             "iauc10_err": (float(iauc10_err) if iauc10_err is not None and np.isfinite(iauc10_err) else None),
                                             "peak_err": (float(peak_err) if peak_err is not None and np.isfinite(peak_err) else None),
+                                            "dl_dc_mae_bestfit": (
+                                                float(dl_dc_mae_bestfit)
+                                                if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit)
+                                                else None
+                                            ),
                                             "raw_dc_mse": float(dc_mse_raw),
                                             "raw_dc_mae": float(dc_mae_raw),
+                                            "raw_ssdu_nmse": (
+                                                float(raw_ssdu_nmse)
+                                                if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse)
+                                                else None
+                                            ),
                                             "grasp_corr": (float(grasp_corr) if grasp_corr is not None else None),
                                             "grasp_ssim": (float(ssim_grasp) if ssim_grasp is not None else None),
                                             "grasp_psnr": (float(psnr_grasp) if psnr_grasp is not None else None),
@@ -2826,6 +3045,31 @@ def main():
                                             "grasp_lpips": (float(lpips_grasp) if lpips_grasp is not None else None),
                                             "grasp_dc_mse": (float(dc_mse_grasp) if dc_mse_grasp is not None else None),
                                             "grasp_dc_mae": (float(dc_mae_grasp) if dc_mae_grasp is not None else None),
+                                            "grasp_dc_mae_bestfit": (
+                                                float(grasp_dc_mae_bestfit)
+                                                if grasp_dc_mae_bestfit is not None and np.isfinite(grasp_dc_mae_bestfit)
+                                                else None
+                                            ),
+                                            "grasp_curve_mae": (
+                                                float(grasp_curve_mae)
+                                                if grasp_curve_mae is not None and np.isfinite(grasp_curve_mae)
+                                                else None
+                                            ),
+                                            "grasp_ttae_sec": (
+                                                float(grasp_ttae_sec)
+                                                if grasp_ttae_sec is not None and np.isfinite(grasp_ttae_sec)
+                                                else None
+                                            ),
+                                            "grasp_iauc10_err": (
+                                                float(grasp_iauc10_err)
+                                                if grasp_iauc10_err is not None and np.isfinite(grasp_iauc10_err)
+                                                else None
+                                            ),
+                                            "grasp_peak_err": (
+                                                float(grasp_peak_err)
+                                                if grasp_peak_err is not None and np.isfinite(grasp_peak_err)
+                                                else None
+                                            ),
                                             "raw_grasp_dc_mse": (float(dc_mse_raw_grasp) if dc_mse_raw_grasp is not None else None),
                                             "raw_grasp_dc_mae": (float(dc_mae_raw_grasp) if dc_mae_raw_grasp is not None else None),
                                         }
@@ -2844,6 +3088,14 @@ def main():
                                             raw_grasp_dc_mses.append(dc_mse_raw_grasp)
                                         if dc_mae_raw_grasp is not None:
                                             raw_grasp_dc_maes.append(dc_mae_raw_grasp)
+                                        if grasp_curve_mae is not None and np.isfinite(grasp_curve_mae):
+                                            grasp_curve_maes.append(float(grasp_curve_mae))
+                                        if grasp_ttae_sec is not None and np.isfinite(grasp_ttae_sec):
+                                            grasp_ttae_secs.append(float(grasp_ttae_sec))
+                                        if grasp_iauc10_err is not None and np.isfinite(grasp_iauc10_err):
+                                            grasp_iauc10_errs.append(float(grasp_iauc10_err))
+                                        if grasp_peak_err is not None and np.isfinite(grasp_peak_err):
+                                            grasp_peak_errs.append(float(grasp_peak_err))
                                     epoch_eval_ssims.append(ssim)
                                     epoch_eval_psnrs.append(psnr)
                                     epoch_eval_mses.append(mse)
@@ -2861,9 +3113,19 @@ def main():
                                         epoch_eval_iauc10_errs.append(iauc10_err)
                                     if peak_err is not None and np.isfinite(peak_err):
                                         epoch_eval_peak_errs.append(peak_err)
+                                    if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit):
+                                        epoch_eval_dl_dc_mae_bestfits.append(float(dl_dc_mae_bestfit))
 
                                     epoch_eval_raw_dc_mses.append(dc_mse_raw)
                                     epoch_eval_raw_dc_maes.append(dc_mae_raw)
+                                    if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse):
+                                        epoch_eval_raw_ssdu_nmses.append(float(raw_ssdu_nmse))
+                                    if (
+                                        collect_grasp_baseline
+                                        and grasp_dc_mae_bestfit is not None
+                                        and np.isfinite(grasp_dc_mae_bestfit)
+                                    ):
+                                        grasp_dc_mae_bestfits.append(float(grasp_dc_mae_bestfit))
 
                             val_batches += 1
                             if max_val_batches is not None and val_batches >= int(max_val_batches):
@@ -2914,6 +3176,12 @@ def main():
                         epoch_eval_ttae_secs = [r["ttae_sec"] for r in all_eval_records if r.get("ttae_sec") is not None]
                         epoch_eval_iauc10_errs = [r["iauc10_err"] for r in all_eval_records if r.get("iauc10_err") is not None]
                         epoch_eval_peak_errs = [r["peak_err"] for r in all_eval_records if r.get("peak_err") is not None]
+                        epoch_eval_dl_dc_mae_bestfits = [
+                            r["dl_dc_mae_bestfit"] for r in all_eval_records if r.get("dl_dc_mae_bestfit") is not None
+                        ]
+                        epoch_eval_raw_ssdu_nmses = [
+                            r["raw_ssdu_nmse"] for r in all_eval_records if r.get("raw_ssdu_nmse") is not None
+                        ]
 
                         if collect_grasp_baseline:
                             grasp_ssims = [r["grasp_ssim"] for r in all_eval_records if r.get("grasp_ssim") is not None]
@@ -2922,9 +3190,26 @@ def main():
                             grasp_lpipses = [r["grasp_lpips"] for r in all_eval_records if r.get("grasp_lpips") is not None]
                             grasp_dc_mses = [r["grasp_dc_mse"] for r in all_eval_records if r.get("grasp_dc_mse") is not None]
                             grasp_dc_maes = [r["grasp_dc_mae"] for r in all_eval_records if r.get("grasp_dc_mae") is not None]
+                            grasp_dc_mae_bestfits = [
+                                r["grasp_dc_mae_bestfit"]
+                                for r in all_eval_records
+                                if r.get("grasp_dc_mae_bestfit") is not None
+                            ]
                             grasp_curve_corrs = [r["grasp_corr"] for r in all_eval_records if r.get("grasp_corr") is not None]
                             raw_grasp_dc_mses = [r["raw_grasp_dc_mse"] for r in all_eval_records if r.get("raw_grasp_dc_mse") is not None]
                             raw_grasp_dc_maes = [r["raw_grasp_dc_mae"] for r in all_eval_records if r.get("raw_grasp_dc_mae") is not None]
+                            grasp_curve_maes = [
+                                r["grasp_curve_mae"] for r in all_eval_records if r.get("grasp_curve_mae") is not None
+                            ]
+                            grasp_ttae_secs = [
+                                r["grasp_ttae_sec"] for r in all_eval_records if r.get("grasp_ttae_sec") is not None
+                            ]
+                            grasp_iauc10_errs = [
+                                r["grasp_iauc10_err"] for r in all_eval_records if r.get("grasp_iauc10_err") is not None
+                            ]
+                            grasp_peak_errs = [
+                                r["grasp_peak_err"] for r in all_eval_records if r.get("grasp_peak_err") is not None
+                            ]
 
                 # Calculate and store average validation evaluation metrics
                 if global_rank == 0 or not config['training']['multigpu']:
@@ -2939,9 +3224,15 @@ def main():
                         avg_grasp_lpips = _mean_or_nan(grasp_lpipses)
                         avg_grasp_dc_mse = _mean_or_nan(grasp_dc_mses)
                         avg_grasp_dc_mae = _mean_or_nan(grasp_dc_maes)
+                        avg_grasp_dc_mae_bestfit = _mean_or_nan(grasp_dc_mae_bestfits)
                         avg_grasp_curve_corr = _mean_or_nan(grasp_curve_corrs)
                         avg_grasp_raw_dc_mae = _mean_or_nan(raw_grasp_dc_maes)
                         avg_grasp_raw_dc_mse = _mean_or_nan(raw_grasp_dc_mses)
+                        avg_grasp_curve_mae = _mean_or_nan(grasp_curve_maes)
+                        avg_grasp_ttae_sec = _mean_or_nan(grasp_ttae_secs)
+                        avg_grasp_iauc10_err = _mean_or_nan(grasp_iauc10_errs)
+                        avg_grasp_peak_err = _mean_or_nan(grasp_peak_errs)
+                        avg_grasp_raw_ssdu_nmse = float("nan")
                         if not _grasp_baseline_ready():
                             raise RuntimeError(
                                 f"Epoch {epoch}: GRASP baseline metrics are non-finite after collection."
@@ -2965,6 +3256,12 @@ def main():
                     epoch_eval_ttae_sec = np.mean(epoch_eval_ttae_secs) if epoch_eval_ttae_secs else np.nan
                     epoch_eval_iauc10_err = np.mean(epoch_eval_iauc10_errs) if epoch_eval_iauc10_errs else np.nan
                     epoch_eval_peak_err = np.mean(epoch_eval_peak_errs) if epoch_eval_peak_errs else np.nan
+                    epoch_eval_dl_dc_mae_bestfit = (
+                        np.mean(epoch_eval_dl_dc_mae_bestfits) if epoch_eval_dl_dc_mae_bestfits else np.nan
+                    )
+                    epoch_eval_raw_ssdu_nmse = (
+                        np.mean(epoch_eval_raw_ssdu_nmses) if epoch_eval_raw_ssdu_nmses else np.nan
+                    )
 
                     eval_ssims.append(epoch_eval_ssim)
                     eval_psnrs.append(epoch_eval_psnr)
@@ -2980,6 +3277,8 @@ def main():
                     eval_ttae_secs.append(epoch_eval_ttae_sec)
                     eval_iauc10_errs.append(epoch_eval_iauc10_err)
                     eval_peak_errs.append(epoch_eval_peak_err)
+                    eval_dl_dc_mae_bestfits.append(epoch_eval_dl_dc_mae_bestfit)
+                    eval_raw_ssdu_nmses.append(epoch_eval_raw_ssdu_nmse)
 
                     spf_key = int(N_spokes_eval)
                     if spf_key in eval_spf_curves:
@@ -3009,6 +3308,10 @@ def main():
                         writer.add_scalar('Metric/Temporal_IAUC10_err', epoch_eval_iauc10_err, epoch)
                     if np.isfinite(epoch_eval_peak_err):
                         writer.add_scalar('Metric/Temporal_Peak_err', epoch_eval_peak_err, epoch)
+                    if np.isfinite(epoch_eval_dl_dc_mae_bestfit):
+                        writer.add_scalar('Metric/DL_DC_MAE_BESTFIT', epoch_eval_dl_dc_mae_bestfit, epoch)
+                    if np.isfinite(epoch_eval_raw_ssdu_nmse):
+                        writer.add_scalar('Metric/RAW_SSDU_NMSE', epoch_eval_raw_ssdu_nmse, epoch)
 
 
                     
@@ -3085,7 +3388,7 @@ def main():
 
                 val_ei_losses.append(epoch_val_ei_loss)
 
-                if model_type_is_lsfp:
+                if use_adj_loss:
                     epoch_val_adj_loss = val_running_adj_loss / denom
                 else:
                     epoch_val_adj_loss = 0.0
@@ -3286,51 +3589,52 @@ def main():
                         # Set the seaborn style
                         sns.set_style("whitegrid")
 
-                        # Create a figure and a set of subplots
-                        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+                        eval_plot_specs = [
+                            ("DRO SSIM", "SSIM", eval_ssims, avg_grasp_ssim),
+                            ("DRO PSNR", "PSNR", eval_psnrs, avg_grasp_psnr),
+                            ("DRO Image MSE", "MSE", eval_mses, avg_grasp_mse),
+                            ("DRO LPIPS", "LPIPS", eval_lpipses, avg_grasp_lpips),
+                            ("DRO k-space MAE (sim)", "MAE", eval_dc_maes, avg_grasp_dc_mae),
+                            ("Non-DRO k-space MAE", "MAE", eval_raw_dc_maes, avg_grasp_raw_dc_mae),
+                            (
+                                "DRO Curve Correlation",
+                                "Pearson Correlation Coefficient",
+                                eval_curve_corrs,
+                                avg_grasp_curve_corr,
+                            ),
+                            (
+                                "DRO k-space MAE (best-fit gain)",
+                                "MAE",
+                                eval_dl_dc_mae_bestfits,
+                                avg_grasp_dc_mae_bestfit,
+                            ),
+                            ("Non-DRO SSDU NMSE", "NMSE", eval_raw_ssdu_nmses, avg_grasp_raw_ssdu_nmse),
+                        ]
+
+                        ncols = 4
+                        nrows = int(math.ceil(len(eval_plot_specs) / ncols))
+                        fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6, nrows * 4.5))
+                        axes = np.array(axes, ndmin=1).reshape(nrows, ncols)
                         fig.suptitle(f'Evaluation Metrics Over Epochs ({N_spokes_eval} spokes/frame)', fontsize=20)
 
-                        sns.lineplot(x=range(0, len(eval_ssims)*eval_frequency, eval_frequency), y=eval_ssims, ax=axes[0, 0])
-                        axes[0, 0].set_title("DRO Evaluation SSIM")
-                        axes[0, 0].set_xlabel("Epoch")
-                        axes[0, 0].set_ylabel("SSIM")
-                        axes[0, 0].axhline(y=avg_grasp_ssim, color='red', linestyle='--', linewidth=2)
-
-                        sns.lineplot(x=range(0, len(eval_psnrs)*eval_frequency, eval_frequency), y=eval_psnrs, ax=axes[0, 1])
-                        axes[0, 1].set_title("DRO Evaluation PSNR")
-                        axes[0, 1].set_xlabel("Epoch")
-                        axes[0, 1].set_ylabel("PSNR")
-                        axes[0, 1].axhline(y=avg_grasp_psnr, color='red', linestyle='--', linewidth=2)
-
-                        sns.lineplot(x=range(0, len(eval_mses)*eval_frequency, eval_frequency), y=eval_mses, ax=axes[0, 2])
-                        axes[0, 2].set_title("DRO Evaluation Image MSE")
-                        axes[0, 2].set_xlabel("Epoch")
-                        axes[0, 2].set_ylabel("MSE")
-                        axes[0, 2].axhline(y=avg_grasp_mse, color='red', linestyle='--', linewidth=2)
-
-                        sns.lineplot(x=range(0, len(eval_lpipses)*eval_frequency, eval_frequency), y=eval_lpipses, ax=axes[1, 0])
-                        axes[1, 0].set_title("Evaluation LPIPS")
-                        axes[1, 0].set_xlabel("Epoch")
-                        axes[1, 0].set_ylabel("LPIPS")
-                        axes[1, 0].axhline(y=avg_grasp_lpips, color='red', linestyle='--', linewidth=2)
-
-                        # sns.lineplot(x=range(0, len(eval_dc_maes)*eval_frequency, eval_frequency), y=eval_dc_maes, ax=axes[1, 0])
-                        # axes[1, 0].set_title("DRO Evaluation Simulated k-space MAE")
-                        # axes[1, 0].set_xlabel("Epoch")
-                        # axes[1, 0].set_ylabel("MAE")
-                        # axes[1, 0].axhline(y=avg_grasp_dc_mae, color='red', linestyle='--', linewidth=2)
-
-                        sns.lineplot(x=range(0, len(eval_raw_dc_maes)*eval_frequency, eval_frequency), y=eval_raw_dc_maes, ax=axes[1, 1])
-                        axes[1, 1].set_title("Non-DRO Evaluation Raw k-space MAE")
-                        axes[1, 1].set_xlabel("Epoch")
-                        axes[1, 1].set_ylabel("MAE")
-                        axes[1, 1].axhline(y=avg_grasp_raw_dc_mae, color='red', linestyle='--', linewidth=2)
-
-                        sns.lineplot(x=range(0, len(eval_curve_corrs)*eval_frequency, eval_frequency), y=eval_curve_corrs, ax=axes[1, 2])
-                        axes[1, 2].set_title("DRO Tumor Enhancement Curve Correlation")
-                        axes[1, 2].set_xlabel("Epoch")
-                        axes[1, 2].set_ylabel("Pearson Correlation Coefficient")
-                        axes[1, 2].axhline(y=avg_grasp_curve_corr, color='red', linestyle='--', linewidth=2)
+                        for idx, (title, ylabel, series, grasp_baseline) in enumerate(eval_plot_specs):
+                            ax = axes[idx // ncols, idx % ncols]
+                            if eval_temporal_epochs and len(eval_temporal_epochs) == len(series):
+                                x = eval_temporal_epochs
+                            else:
+                                x = list(range(0, len(series) * eval_frequency, eval_frequency))
+                            finite_values = [v for v in series if v is not None and np.isfinite(v)]
+                            if finite_values:
+                                sns.lineplot(x=x, y=series, ax=ax)
+                            else:
+                                ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+                            if grasp_baseline is not None and np.isfinite(grasp_baseline):
+                                ax.axhline(y=grasp_baseline, color='red', linestyle='--', linewidth=2)
+                            ax.set_title(title)
+                            ax.set_xlabel("Epoch")
+                            ax.set_ylabel(ylabel)
+                        for idx in range(len(eval_plot_specs), nrows * ncols):
+                            axes[idx // ncols, idx % ncols].axis("off")
 
                         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
                         plt.savefig(os.path.join(output_dir, "eval_metrics.png"))
@@ -3403,7 +3707,7 @@ def main():
                                     y=spf_curves["eval_ssims"],
                                     ax=axes[0, 0],
                                 )
-                                axes[0, 0].set_title("DRO Evaluation SSIM")
+                                axes[0, 0].set_title("DRO SSIM")
                                 axes[0, 0].set_xlabel("Epoch")
                                 axes[0, 0].set_ylabel("SSIM")
 
@@ -3412,7 +3716,7 @@ def main():
                                     y=spf_curves["eval_psnrs"],
                                     ax=axes[0, 1],
                                 )
-                                axes[0, 1].set_title("DRO Evaluation PSNR")
+                                axes[0, 1].set_title("DRO PSNR")
                                 axes[0, 1].set_xlabel("Epoch")
                                 axes[0, 1].set_ylabel("PSNR")
 
@@ -3421,7 +3725,7 @@ def main():
                                     y=spf_curves["eval_mses"],
                                     ax=axes[0, 2],
                                 )
-                                axes[0, 2].set_title("DRO Evaluation Image MSE")
+                                axes[0, 2].set_title("DRO Image MSE")
                                 axes[0, 2].set_xlabel("Epoch")
                                 axes[0, 2].set_ylabel("MSE")
 
@@ -3430,7 +3734,7 @@ def main():
                                     y=spf_curves["eval_lpipses"],
                                     ax=axes[1, 0],
                                 )
-                                axes[1, 0].set_title("Evaluation LPIPS")
+                                axes[1, 0].set_title("DRO LPIPS")
                                 axes[1, 0].set_xlabel("Epoch")
                                 axes[1, 0].set_ylabel("LPIPS")
 
@@ -3439,7 +3743,7 @@ def main():
                                     y=spf_curves["eval_raw_dc_maes"],
                                     ax=axes[1, 1],
                                 )
-                                axes[1, 1].set_title("Non-DRO Evaluation Raw k-space MAE")
+                                axes[1, 1].set_title("Non-DRO k-space MAE")
                                 axes[1, 1].set_xlabel("Epoch")
                                 axes[1, 1].set_ylabel("MAE")
 
@@ -3448,7 +3752,7 @@ def main():
                                     y=spf_curves["eval_curve_corrs"],
                                     ax=axes[1, 2],
                                 )
-                                axes[1, 2].set_title("DRO Tumor Enhancement Curve Correlation")
+                                axes[1, 2].set_title("DRO Curve Correlation")
                                 axes[1, 2].set_xlabel("Epoch")
                                 axes[1, 2].set_ylabel("Pearson Correlation Coefficient")
 
@@ -3472,8 +3776,8 @@ def main():
                             label="GRASP Avg"
                         )
                         plt.xlabel("Epoch")
-                        plt.ylabel("DRO Simulated k-space MSE")
-                        plt.title("Evaluation Data Consistency (MSE)")
+                        plt.ylabel("DRO k-space MSE (sim)")
+                        plt.title("k-space MSE")
                         plt.grid(True)
                         plt.savefig(os.path.join(eval_dir, "eval_dc_mses.png"))
                         plt.close()
@@ -3489,8 +3793,8 @@ def main():
                             label="GRASP Avg"
                         )
                         plt.xlabel("Epoch")
-                        plt.ylabel("DRO Simulated k-space MAE")
-                        plt.title("Evaluation Data Consistency (MAE)")
+                        plt.ylabel("DRO k-space MAE (sim)")
+                        plt.title("k-space MAE")
                         plt.grid(True)
                         plt.savefig(os.path.join(eval_dir, "eval_dc_maes.png"))
                         plt.close()
@@ -3505,8 +3809,8 @@ def main():
                             label="GRASP Avg"
                         )
                         plt.xlabel("Epoch")
-                        plt.ylabel("Non-DRO Raw k-space MSE")
-                        plt.title("Evaluation Data Consistency (MSE)")
+                        plt.ylabel("Non-DRO k-space MSE")
+                        plt.title("k-space MSE")
                         plt.grid(True)
                         plt.savefig(os.path.join(eval_dir, "eval_raw_dc_mses.png"))
                         plt.close()
@@ -3522,7 +3826,7 @@ def main():
                             f"Epoch {epoch}: Training EI Loss: {epoch_train_ei_loss:.6f}, Validation EI Loss: {epoch_val_ei_loss:.6f}"
                         )
 
-                    if model_type_is_lsfp:
+                    if use_adj_loss:
                         print(
                             f"Epoch {epoch}: Training Adj Loss: {epoch_train_adj_loss:.6f}, Validation Adj Loss: {epoch_val_adj_loss:.6f}"
                         )
