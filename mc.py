@@ -45,7 +45,7 @@ class MCLoss(Loss):
         """
         if self.model_type == "CRNN":
             return self.metric(physics.A(x_net, csmap), y)
-        elif self.model_type == "LSFPNet":
+        elif self.model_type in {"LSFPNet", "MambaRecon", "MambaTemporal"}:
             x_net = to_torch_complex(x_net)
 
             y_hat = physics(inv=False, data=x_net, smaps=csmap).to(self.device)
@@ -54,3 +54,7 @@ class MCLoss(Loss):
             y = torch.stack([y.real, y.imag], dim=-1)
 
             return self.metric(y_hat, y)
+        raise ValueError(
+            f"Unsupported model_type '{self.model_type}' for MCLoss. "
+            "Expected one of: CRNN, LSFPNet, MambaRecon, MambaTemporal."
+        )

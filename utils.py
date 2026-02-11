@@ -1281,7 +1281,6 @@ def sliding_window_inference(
 
         # (Optional) free chunk tensors early
         del kspace_chunk, ktraj_chunk, dcomp_chunk, physics_chunk, x_recon_chunk, w
-        torch.cuda.empty_cache()
 
     # Normalize by accumulated weights (safe divide)
     stitched_recon = stitched_recon / torch.clamp(weight_sum, min=1e-8)

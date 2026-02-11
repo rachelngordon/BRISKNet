@@ -21,7 +21,7 @@ from eval import (
     eval_grasp,
     eval_sample,
 )
-from lsfpnet_encoding import ArtifactRemovalLSFPNet, LSFPNet
+from model_factory import build_recon_model
 from radial_lsfp import MCNUFFT
 from utils import (
     GRASPRecon_from_ktraj,
@@ -72,42 +72,8 @@ def _resolve_eval_params(config: dict, spokes: int, frames: int, phase_idx: int)
 
 
 def _build_model(config: dict, device, block_dir: str):
-    """Create the LSFP model and load weights."""
-    initial_lambdas = {
-        "lambda_L": config["model"]["lambda_L"],
-        "lambda_S": config["model"]["lambda_S"],
-        "lambda_spatial_L": config["model"]["lambda_spatial_L"],
-        "lambda_spatial_S": config["model"]["lambda_spatial_S"],
-        "gamma": config["model"]["gamma"],
-        "lambda_step": config["model"]["lambda_step"],
-    }
-
-    lsfp_backbone = LSFPNet(
-        LayerNo=config["model"]["num_layers"],
-        lambdas=initial_lambdas,
-        channels=config["model"]["channels"],
-        style_dim=config["model"]["style_dim"],
-        svd_mode=config["model"]["svd_mode"],
-        use_lowk_dc=config["model"]["use_lowk_dc"],
-        lowk_frac=config["model"]["lowk_frac"],
-        lowk_alpha=config["model"]["lowk_alpha"],
-        film_bounded=config["model"]["film_bounded"],
-        film_gain=config["model"]["film_gain"],
-        film_identity_init=config["model"]["film_identity_init"],
-        svd_noise_std=config["model"]["svd_noise_std"],
-        film_L=config["model"]["film_L"],
-        kernel_size_L=config["model"].get("kernel_size_L", 3),
-        kernel_size_S=config["model"].get("kernel_size_S", 3),
-        activation_checkpointing=config["model"].get("activation_checkpointing", False),
-        checkpoint_use_reentrant=config["model"].get("checkpoint_use_reentrant", False),
-    )
-
-    if config["model"]["encode_acceleration"] and config["model"]["encode_time_index"]:
-        channels = 2
-    else:
-        channels = 1
-
-    model = ArtifactRemovalLSFPNet(lsfp_backbone, block_dir, channels=channels).to(device)
+    """Create model from config."""
+    model = build_recon_model(config, device=device, block_dir=block_dir)
     model.eval()
     return model
 

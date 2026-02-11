@@ -23,7 +23,7 @@ from transform import (
 )
 from ei import EILoss
 from mc import MCLoss
-from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
+from model_factory import build_recon_model, is_lsfp_model
 from radial_lsfp import MCNUFFT
 from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
 from eval import eval_grasp, eval_sample
@@ -390,7 +390,7 @@ def main():
 
         # Set the device for this process
         torch.cuda.set_device(local_rank)
-        device = local_rank
+        device = torch.device(f"cuda:{local_rank}")
 
         # Sanity check: verify collectives across all ranks.
         try:
@@ -409,7 +409,7 @@ def main():
 
         if global_rank == 0:
             print(f"Starting distributed training with {world_size} GPUs.")
-        print(f"  - [Rank {global_rank}] -> Using device cuda:{device}")
+        print(f"  - [Rank {global_rank}] -> Using device {device}")
 
     else:
         global_rank = 0
@@ -417,13 +417,19 @@ def main():
 
     # AMP/mixed precision config (optional)
     amp_cfg = config.get("training", {}).get("amp", {})
-    amp_enabled = bool(amp_cfg.get("enabled", False)) and torch.cuda.is_available() and str(device).startswith("cuda")
+    amp_enabled = (
+        bool(amp_cfg.get("enabled", False))
+        and torch.cuda.is_available()
+        and torch.device(device).type == "cuda"
+    )
     amp_dtype_str = str(amp_cfg.get("dtype", "bf16")).lower()
     amp_dtype = torch.bfloat16 if amp_dtype_str in ("bf16", "bfloat16") else torch.float16
     use_scaler = bool(amp_cfg.get("use_grad_scaler", amp_dtype == torch.float16))
     scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
     def amp_autocast():
         return torch.amp.autocast(device_type="cuda", dtype=amp_dtype) if amp_enabled else nullcontext()
+
+    get_nufft = _build_nufft_getter(device=device, traj_method=traj_method)
 
     # Silence torchmetrics LPIPS FutureWarning about torch.load(weights_only=...)
     warnings.filterwarnings(
@@ -609,13 +615,6 @@ def main():
     slice_sampling_cache_rank = global_rank if config['training']['multigpu'] else None
     slice_sampling_cache_rank_only = 0 if config['training']['multigpu'] else None
 
-    initial_lambdas = {'lambda_L': config['model']['lambda_L'], 
-                    'lambda_S': config['model']['lambda_S'], 
-                    'lambda_spatial_L': config['model']['lambda_spatial_L'],
-                    'lambda_spatial_S': config['model']['lambda_spatial_S'],
-                    'gamma': config['model']['gamma'],
-                    'lambda_step': config['model']['lambda_step']}
-
     mc_loss_weight = config["model"]["losses"]["mc_loss"]["weight"]
     adj_loss_weight = config["model"]["losses"]["adj_loss"]["weight"]
 
@@ -670,6 +669,7 @@ def main():
     plot_interval = config["training"]["plot_interval"]
 
     model_type = config["model"]["name"]
+    model_type_is_lsfp = is_lsfp_model(model_type)
 
     H, W = config["data"]["height"], config["data"]["width"]
     N_time, N_samples, N_coils = (
@@ -843,6 +843,7 @@ def main():
             sampler=train_sampler,
             num_workers=config["dataloader"]["num_workers"],
             pin_memory=True,
+            persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
             worker_init_fn=seed_worker,
             generator=g,
         )
@@ -853,6 +854,7 @@ def main():
             shuffle=config["dataloader"]["shuffle"],
             num_workers=config["dataloader"]["num_workers"],
             pin_memory=True,
+            persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
             worker_init_fn=seed_worker,
             generator=g,
         )
@@ -880,13 +882,9 @@ def main():
         N_time_eval, N_spokes_eval = config["data"]["eval_timeframes"], config["data"]["eval_spokes"]
 
     # define physics object for evaluation
-    eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(
-        N_samples, N_spokes_eval, N_time_eval, traj_method=traj_method
+    eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = get_nufft(
+        N_samples, N_spokes_eval, N_time_eval
     )
-    eval_ktraj = eval_ktraj.to(device)
-    eval_dcomp = eval_dcomp.to(device)
-    eval_nufft_ob = eval_nufft_ob.to(device)
-    eval_adjnufft_ob = eval_adjnufft_ob.to(device)
 
     eval_physics = MCNUFFT(eval_nufft_ob, eval_adjnufft_ob, eval_ktraj, eval_dcomp)
 
@@ -914,6 +912,7 @@ def main():
         shuffle=False,
         num_workers=config["dataloader"]["num_workers"],
         pin_memory=True,
+        persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
     )
 
     distributed_eval = bool(config.get("evaluation", {}).get("distributed_eval", True)) and config['training']['multigpu']
@@ -926,6 +925,7 @@ def main():
                 shuffle=False,
                 num_workers=config["dataloader"]["num_workers"],
                 pin_memory=True,
+                persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
             )
         shard_indices = _build_strided_shard_indices(len(dataset), global_rank, world_size)
         shard_dataset = Subset(dataset, shard_indices)
@@ -935,6 +935,7 @@ def main():
             shuffle=False,
             num_workers=config["dataloader"]["num_workers"],
             pin_memory=True,
+            persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
         )
 
     val_dro_eval_loader = _build_val_dro_eval_loader(val_dro_dataset)
@@ -1033,32 +1034,7 @@ def main():
 
 
     # define model
-    kernel_size_L = config["model"].get("kernel_size_L", 3)
-    kernel_size_S = config["model"].get("kernel_size_S", 3)
-
-    lsfp_backbone = LSFPNet(LayerNo=config["model"]["num_layers"], 
-                            lambdas=initial_lambdas, 
-                            channels=config['model']['channels'],
-                            style_dim=config['model']['style_dim'],
-                            svd_mode=config['model']['svd_mode'],
-                            use_lowk_dc=config['model']['use_lowk_dc'],
-                            lowk_frac=config['model']['lowk_frac'],
-                            lowk_alpha=config['model']['lowk_alpha'],
-                            film_bounded=config['model']['film_bounded'],
-                            film_gain=config['model']['film_gain'],
-                            film_identity_init=config['model']['film_identity_init'],
-                            svd_noise_std=config['model']['svd_noise_std'],
-                            film_L=config['model']['film_L'],
-                            kernel_size_L=kernel_size_L,
-                            kernel_size_S=kernel_size_S,
-                            activation_checkpointing=config["model"].get("activation_checkpointing", False),
-                            checkpoint_use_reentrant=config["model"].get("checkpoint_use_reentrant", False),
-                            )
-
-    if config['model']['encode_acceleration'] and config['model']['encode_time_index']:
-        model = ArtifactRemovalLSFPNet(lsfp_backbone, block_dir, channels=2).to(device)
-    else:
-        model = ArtifactRemovalLSFPNet(lsfp_backbone, block_dir, channels=1).to(device)
+    model = build_recon_model(config, device=device, block_dir=block_dir)
 
     if config['training']['multigpu']:
         find_unused = config["training"].get("ddp_find_unused_parameters", True)
@@ -1286,13 +1262,9 @@ def main():
                 measured_kspace_cplx = rearrange(measured_kspace_cplx, 't co sp sam -> co (sp sam) t')
 
                 # prep physics operators
-                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
-                    N_samples_i, N_spokes_i, N_time_i, traj_method=traj_method
+                ktraj, dcomp, nufft_ob, adjnufft_ob = get_nufft(
+                    N_samples_i, N_spokes_i, N_time_i
                 )
-                ktraj = ktraj.to(device)
-                dcomp = dcomp.to(device)
-                nufft_ob = nufft_ob.to(device)
-                adjnufft_ob = adjnufft_ob.to(device)
 
                 # Crop to training window length (Ng) for a faithful diagnostic.
                 if N_time_i > Ng:
@@ -1773,19 +1745,17 @@ def main():
                 # prepare inputs
                 measured_kspace = to_torch_complex(measured_kspace).squeeze()
                 measured_kspace = rearrange(measured_kspace, 't co sp sam -> co (sp sam) t')
+                n_spokes_i = _as_int_scalar(N_spokes)
+                n_time_i = _as_int_scalar(N_time)
 
                 # prep physics operators
-                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
-                    N_samples, N_spokes, N_time, traj_method=traj_method
+                ktraj, dcomp, nufft_ob, adjnufft_ob = get_nufft(
+                    N_samples, n_spokes_i, n_time_i
                 )
-                ktraj = ktraj.to(device)
-                dcomp = dcomp.to(device)
-                nufft_ob = nufft_ob.to(device)
-                adjnufft_ob = adjnufft_ob.to(device)
 
                 
-                if N_time > Ng:
-                    max_idx = N_time - Ng
+                if n_time_i > Ng:
+                    max_idx = n_time_i - Ng
                     random_index = sample_start_time_index(max_idx, use_edge_time_index_sampling)
 
                     measured_kspace = measured_kspace[..., random_index:random_index + Ng]
@@ -1804,9 +1774,10 @@ def main():
                     start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
 
 
-                csmap = csmap.to(device).to(measured_kspace.dtype)
+                measured_kspace = measured_kspace.to(device, non_blocking=True)
+                csmap = csmap.to(device, non_blocking=True).to(measured_kspace.dtype)
 
-                acceleration = torch.tensor([N_full / int(N_spokes)], dtype=torch.float, device=device)
+                acceleration = torch.tensor([N_full / int(n_spokes_i)], dtype=torch.float, device=device)
 
                 if config['model']['encode_acceleration']:
                     acceleration_encoding = acceleration
@@ -1818,13 +1789,13 @@ def main():
 
                 with amp_autocast():
                     x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                        measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
+                        measured_kspace, physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
                     )
 
                     # calculate losses
                     initial_train_adj_loss += adj_loss.item()
 
-                    mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
+                    mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
                     initial_train_mc_loss += mc_loss.item()
 
                     if use_ei_loss:
@@ -2257,13 +2228,9 @@ def main():
                                 N_time_eval = phase['eval_num_frames']
 
                                 # define physics object for evaluation
-                                eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = prep_nufft(
-                                    N_samples, N_spokes_eval, N_time_eval, traj_method=traj_method
+                                eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = get_nufft(
+                                    N_samples, N_spokes_eval, N_time_eval
                                 )
-                                eval_ktraj = eval_ktraj.to(device)
-                                eval_dcomp = eval_dcomp.to(device)
-                                eval_nufft_ob = eval_nufft_ob.to(device)
-                                eval_adjnufft_ob = eval_adjnufft_ob.to(device)
 
                                 eval_physics = MCNUFFT(eval_nufft_ob, eval_adjnufft_ob, eval_ktraj, eval_dcomp)
 
@@ -2277,6 +2244,7 @@ def main():
                                     shuffle=False,
                                     num_workers=config["dataloader"]["num_workers"],
                                     pin_memory=True,
+                                    persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
                                 )
                                 val_dro_eval_loader = _build_val_dro_eval_loader(val_dro_dataset)
 
@@ -2354,19 +2322,18 @@ def main():
                 # prepare inputs
                 measured_kspace = to_torch_complex(measured_kspace).squeeze()
                 measured_kspace = rearrange(measured_kspace, 't co sp sam -> co (sp sam) t')
+                n_samples_i = _as_int_scalar(N_samples)
+                n_spokes_i = _as_int_scalar(N_spokes)
+                n_time_i = _as_int_scalar(N_time)
 
                 # prep physics operators
-                ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
-                    N_samples, N_spokes, N_time, traj_method=traj_method
+                ktraj, dcomp, nufft_ob, adjnufft_ob = get_nufft(
+                    n_samples_i, n_spokes_i, n_time_i
                 )
-                ktraj = ktraj.to(device)
-                dcomp = dcomp.to(device)
-                nufft_ob = nufft_ob.to(device)
-                adjnufft_ob = adjnufft_ob.to(device)
 
-                if N_time > Ng:
+                if n_time_i > Ng:
 
-                    max_idx = N_time - Ng
+                    max_idx = n_time_i - Ng
                     random_index = sample_start_time_index(max_idx, use_edge_time_index_sampling)
 
                     measured_kspace = measured_kspace[..., random_index:random_index + Ng]
@@ -2385,12 +2352,14 @@ def main():
 
 
                 iteration_count += 1
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
 
-                csmap = csmap.to(device).to(measured_kspace.dtype)
+                measured_kspace = measured_kspace.to(device, non_blocking=True)
+
+                csmap = csmap.to(device, non_blocking=True).to(measured_kspace.dtype)
 
                 # calculate acceleration factor
-                acceleration = torch.tensor([N_full / int(N_spokes)], dtype=torch.float, device=device)
+                acceleration = torch.tensor([N_full / int(n_spokes_i)], dtype=torch.float, device=device)
 
                 if config['model']['encode_acceleration']:
                     acceleration_encoding = acceleration
@@ -2407,26 +2376,26 @@ def main():
                 try:
                     with amp_autocast():
                         x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                            measured_kspace.to(device), physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
+                            measured_kspace, physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
                         )
 
                         # compute losses
                         running_adj_loss += adj_loss.item()
 
-                        mc_loss = mc_loss_fn(measured_kspace.to(device), x_recon, physics, csmap)
+                        mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
                         running_mc_loss += mc_loss.item()
 
                         if use_rebin_loss and compute_rebin_this_epoch:
                             rebin_loss = rebin_loss_fn(
-                                measured_kspace.to(device),
+                                measured_kspace,
                                 x_recon,
                                 physics,
                                 model,
                                 csmap,
                                 acceleration_encoding,
                                 start_timepoint_index,
-                                spokes_per_frame=int(N_spokes),
-                                samples_per_spoke=int(N_samples),
+                                spokes_per_frame=n_spokes_i,
+                                samples_per_spoke=n_samples_i,
                                 norm=config['model']['norm'],
                                 epoch=epoch,
                             )
@@ -3116,7 +3085,7 @@ def main():
 
                 val_ei_losses.append(epoch_val_ei_loss)
 
-                if model_type == "LSFPNet":
+                if model_type_is_lsfp:
                     epoch_val_adj_loss = val_running_adj_loss / denom
                 else:
                     epoch_val_adj_loss = 0.0
@@ -3553,7 +3522,7 @@ def main():
                             f"Epoch {epoch}: Training EI Loss: {epoch_train_ei_loss:.6f}, Validation EI Loss: {epoch_val_ei_loss:.6f}"
                         )
 
-                    if model_type == "LSFPNet":
+                    if model_type_is_lsfp:
                         print(
                             f"Epoch {epoch}: Training Adj Loss: {epoch_train_adj_loss:.6f}, Validation Adj Loss: {epoch_val_adj_loss:.6f}"
                         )

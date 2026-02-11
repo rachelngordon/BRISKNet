@@ -11,7 +11,11 @@ def to_torch_complex(x: torch.Tensor):
     assert x.shape[1] == 2, (
         f"Input tensor must have 2 channels (real, imag), but got shape {x.shape}"
     )
-    return torch.view_as_complex(rearrange(x, "b c ... -> b ... c").contiguous())
+    xc = rearrange(x, "b c ... -> b ... c").contiguous()
+    # view_as_complex supports only float/half/double real tensors.
+    if xc.dtype not in (torch.float16, torch.float32, torch.float64):
+        xc = xc.float()
+    return torch.view_as_complex(xc)
 
 
 def from_torch_complex(x: torch.Tensor):

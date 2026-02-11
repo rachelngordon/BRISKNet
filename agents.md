@@ -40,6 +40,19 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - **Grid search**: `grid_search_batch.py` splits hyperparameter sweeps across batches; default grid searches `model.losses.adj_loss.weight` and `model.losses.ei_loss.weight`. Update `base_config_file` to an existing YAML before running. SLURM example in `grid_search.sh`.
 - **Outputs**: Each run writes `eval_results/eval_metrics.csv` for downstream parsing (`parse_results` in `grid_search_batch.py`).
 
+## Submitting Jobs (SLURM via submit.py)
+- Use `submit.py` for distributed launches with `torchrun` + `submitit`.
+- Run `submit.py` from an environment that has `submitit` installed (e.g., `brisknet`).
+- Required flags: `--config`, `--exp-name`, `--nodes`, `--gpus-per-node`, `--micromamba-path`, `--env-name`.
+- Typical 1 node / 4 GPU submission:
+  - `micromamba run -n brisknet python submit.py --config configs/config_sampling_2spf_rebin_v3_mamba_debug.yaml --exp-name mamba_2spf_rebin_v3_debug_1n4g --job-name mamba_2spf_dbg_1n4g --nodes 1 --gpus-per-node 4 --cpus-per-task 8 --partition general --timeout-min 240 --micromamba-path /net/projects/annawoodard/micromamba/etc/profile.d/micromamba.sh --env-name brisknet`
+- Dry-run (print resolved settings only):
+  - append `--dry-run` to the command above.
+- Monitor and control:
+  - `squeue -j <job_id>`
+  - `scancel <job_id>`
+  - logs are written under `<experiment.output_dir>/<exp-name>/submitit_logs/`.
+
 ## Notes & Tips
 - Keep `data.root_dir` and `experiment.cluster` aligned with your cluster paths; `cluster_paths.py` can rewrite paths per environment.
 - For curriculum learning, adjust `training.curriculum_learning.phases` to introduce higher accelerations gradually.
