@@ -533,14 +533,14 @@ def save_diagnostics(
         vmins = (vmin_ref, vmin_ref, -diff_lim)
         vmaxs = (vmax_ref, vmax_ref, diff_lim)
         titles = (
-            f"{ref_label} tumor intensity (t={t})",
-            f"{brisk_label} tumor intensity (t={t})",
-            f"{brisk_label} − {ref_label} (t={t})",
+            f"{ref_label} (t={t})",
+            f"{brisk_label} (t={t})",
+            f"Difference (t={t})",
         )
         cbar_labels = (
             f"{ref_label} intensity (a.u.)",
             f"{brisk_label} intensity (a.u.)",
-            f"{brisk_label} − {ref_label} (a.u.)",
+            "Difference (a.u.)",
         )
         for col_idx in range(3):
             ax = axes[row_idx][col_idx]
