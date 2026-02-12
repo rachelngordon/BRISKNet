@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 36
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 36
-  eval_spokes: 8
+  eval_timeframes: 8
+  eval_spokes: 36
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 8
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -165,5 +165,5 @@ evaluation:
 debugging:
   calc_step_0: True
   calc_step_0_val: True
-  enable_gradient_monitoring: true
+  enable_gradient_monitoring: false
   monitoring_interval: 5

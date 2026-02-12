@@ -2,11 +2,11 @@
 
 # Parameters
 #SBATCH --cpus-per-task=4
-#SBATCH --error=logs/grasp_slice_largest_region.err
-#SBATCH --output=logs/grasp_slice_largest_region.out
+#SBATCH --error=logs/grasp_recon_timing.err
+#SBATCH --output=logs/grasp_recon_timing.out
 #SBATCH --exclude=''
 #SBATCH --gpus-per-node=1
-#SBATCH --job-name=grasp_slice_largest_region
+#SBATCH --job-name=grasp_recon_timing
 #SBATCH --mem-per-gpu=80000
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -22,4 +22,4 @@ source /home/rachelgordon/micromamba/etc/profile.d/mamba.sh
 micromamba activate recon_mri
 
 # Run the training script with srun
-python grasp_recon_largest_slices.py   --csv_path data/largest_tumor_slices.csv   --data_dir /net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace   --spokes_per_frame 2 4 8 16 24 36   --total_spokes 288
+python calc_grasp_recon_times.py

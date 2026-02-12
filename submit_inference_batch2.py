@@ -41,11 +41,12 @@ class InferenceBatch(submitit.helpers.Checkpointable):
 
 
 def main():
-    job_name = "transforms_inference_batch2"
-    exp_names = "ei_diffeo_36spf,mc_36spf_overfit"
+    job_name = "transforms_inference_batch4"
+    exp_names = "ei_diffeo_fop_cosine_lr_no_arrival_shift_36spf"
     exp_base_dir = "/net/projects2/annawoodard/rachelgordon/experiments"
-    num_gpus = 4
+    num_gpus = 1
     extra_args = [
+        "--overwrite_logs"
         # "--disable_ssdu",
     ]
 
@@ -61,7 +62,7 @@ def main():
         cpus_per_task=8,
         slurm_gres=f"gpu:{num_gpus}",
         timeout_min=200,
-        slurm_additional_parameters={"requeue": True},
+        slurm_additional_parameters={"requeue": True, "exclude": "k002"},
         qos="burst",
         srun_args=["--cpu-bind=none"],
     )

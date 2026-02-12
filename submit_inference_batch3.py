@@ -41,10 +41,10 @@ class InferenceBatch(submitit.helpers.Checkpointable):
 
 
 def main():
-    job_name = "new_transforms_inference"
-    exp_names = "ei_diffeo_fop_cosine_lr_all_transforms_36spf,ei_diffeo_fop_cosine_lr_no_enh_scale_36spf,ei_diffeo_fop_cosine_lr_no_arrival_shift_36spf,ei_diffeo_fop_cosine_lr_no_rebin_36spf"
+    job_name = "acc_early_inference_batch"
+    exp_names = "ei_diffeo_fop_cosine_lr_no_enh_scale_36spf"
     exp_base_dir = "/net/projects2/annawoodard/rachelgordon/experiments"
-    num_gpus = 4
+    num_gpus = 1
     extra_args = [
         "--overwrite_logs"
         # "--disable_ssdu",
