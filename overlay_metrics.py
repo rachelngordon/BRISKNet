@@ -414,11 +414,40 @@ def _resolve_grasp_baselines(
     experiments: List[Dict],
     baseline_keys: List[str],
 ) -> Dict[str, Optional[float]]:
+    # Some checkpoints (e.g. before first eval) persist placeholder GRASP
+    # baselines as 0/nan. Ignore those bundles so we do not anchor overlays to 0.
+    def _has_non_placeholder_grasp_bundle(exp: Dict) -> bool:
+        baselines = exp.get("baselines", {}) or {}
+        indicator_keys = (
+            "avg_grasp_ssim",
+            "avg_grasp_psnr",
+            "avg_grasp_mse",
+            "avg_grasp_curve_corr",
+            "avg_grasp_lpips",
+            "avg_grasp_dc_mae",
+        )
+        finite_vals = []
+        for key in indicator_keys:
+            val = baselines.get(key)
+            if _is_finite(val):
+                finite_vals.append(float(val))
+        if not finite_vals:
+            return False
+        return any(v > 0.0 for v in finite_vals)
+
+    usable_experiments = [exp for exp in experiments if _has_non_placeholder_grasp_bundle(exp)]
+    if usable_experiments and len(usable_experiments) < len(experiments):
+        skipped = [exp["label"] for exp in experiments if exp not in usable_experiments]
+        print(
+            "Info: ignoring placeholder GRASP baselines (all 0/nan) from: "
+            + ", ".join(skipped)
+        )
+
     baselines: Dict[str, Optional[float]] = {}
     for key in baseline_keys:
         values = []
         labels = []
-        for exp in experiments:
+        for exp in usable_experiments:
             val = exp["baselines"].get(key)
             if _is_finite(val):
                 values.append(float(val))
