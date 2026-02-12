@@ -1,0 +1,754 @@
+% This is a modified version of Springer's LNCS template suitable for anonymized MICCAI 2025 main conference submissions. 
+% Original file: samplepaper.tex, a sample chapter demonstrating the LLNCS macro package for Springer Computer Science proceedings; Version 2.21 of 2022/01/12
+
+\documentclass[runningheads]{llncs}
+%
+\usepackage[T1]{fontenc}
+% T1 fonts will be used to generate the final print and online PDFs,
+% so please use T1 fonts in your manuscript whenever possible.
+% Other font encodings may result in incorrect characters.
+%
+\usepackage{graphicx,verbatim}
+\usepackage{amsmath}
+\usepackage{subcaption}
+
+% Used for displaying a sample figure. If possible, figure files should
+% be included in EPS format.
+%
+% If you use the hyperref package, please uncomment the following two lines
+% to display URLs in blue roman font according to Springer's eBook style:
+\usepackage{hyperref}
+\usepackage{color}
+\renewcommand\UrlFont{\color{blue}\rmfamily}
+\urlstyle{rm}
+%
+
+\begin{document}
+%
+\title{BRISKNet: Breast Rapid Imaging via Self-Supervised Kinetics}
+\titlerunning{Accelerating Breast DCE-MRI with Unsupervised Learning}
+% If the paper title is too long for the running head, you can set
+% an abbreviated paper title here
+%
+\begin{comment}  %% Removed for anonymized MICCAI submission
+\author{First Authorvcfghjinst{1}\orcidID{0000-1111-2222-3333} \and
+Second Author\inst{2,3}\orcidID{1111-2222-3333-4444} \and
+Third Author\inst{3}\orcidID{2222--3333-4444-5555}}
+%
+\authorrunning{F. Author et al.}
+% First names are abbreviated in the running head.
+% If there are more than two authors, 'et al.' is used.
+%
+\institute{Princeton University, Princeton NJ 08544, USA \and
+Springer Heidelberg, Tiergartenstr. 17, 69121 Heidelberg, Germany
+\email{lncs@springer.com}\\
+\url{http://www.springer.com/gp/computer-science/lncs} \and
+ABC Institute, Rupert-Karls-University Heidelberg, Heidelberg, Germany\\
+\email{\{abc,lncs\}@uni-heidelberg.de}}
+
+\end{comment}
+
+\author{Anonymized Authors}  %% Added for anonymized MICCAI submission
+\authorrunning{Anonymized Author et al.}
+\institute{Anonymized Affiliations \\
+    \email{email@anonymized.com}}
+  
+\maketitle              % typeset the header of the contribution
+%
+\begin{abstract}
+The abstract should briefly summarize the contents of the paper in 150--250 words.  If you are to include a link to your Repository, please make sure it is anonymized for the double-blind review phase.
+% NOTE: need to anonymize links before submission
+Code can be found at \url{https://github.com/rachelngordon/radial-breast-ddei/tree/main}
+
+\keywords{First keyword  \and Second keyword \and Another keyword.}
+% Authors must provide keywords and are not allowed to remove this Keyword section.
+
+\end{abstract}
+
+
+\section{Introduction}
+
+Breast cancer affects one in eight women in the United States, yet current clinical risk stratification remains inadequate to personalize screening~\cite{Puckett2025Disparity,Niell2021LifetimeRisk}. Better stratification is key to developing personalized screening strategies that detect cancers earlier, while they remain curable. Dynamic contrast enhanced (DCE) MRI measures how rapidly contrast enters and leaves breast tissue, reflecting vascular architecture and tumor biology~\cite{Sachani2024VascularityReview}; contrast-kinetic features derived from DCE-MRI underpin many radiomics analyses for diagnosis and risk prediction~\cite{Turnbull2009Dynamic,Kim2025OncotypeRadiomics,Cheng2025KineticHeterogeneity}. Capturing these kinetics requires high temporal resolution, but accelerating acquisitions degrades image quality. Recent pharmacokinetic studies suggest that enhancement patterns within the first two seconds after contrast injection encode vascular signatures that could reveal previously inaccessible aspects of tumor biology, and that bilateral asymmetry in the parenchymal kinetics of normal tissue is similarly associated with treatment response~\cite{REN20239}. Yet today’s ultrafast breast MRI protocols take from three to seven seconds per frame~\cite{Kataoka2024Ultrafast}, leaving the critical early two-second window of contrast dynamics effectively unresolved. Access to these rapid kinetics could expose richer physiological variation across individuals, driving more precise risk stratification and earlier cancer detection. 
+
+Resolving vital rapid contrast kinetics that carry biologically important information requires reducing acquisition times from the current 3--7 seconds per frame~\cite{Kataoka2024Ultrafast} to sub-2-seconds. While achieving such frame rates is feasible in principle using techniques such as compressed sensing, parallel imaging, and non-Cartesian sampling~\cite{Deshmane2012Parallel,Ye2019Compressed}, reconstruction quality degrades substantially as temporal resolution is pushed toward these faster frame rates. For example, Golden Angle Radial Sparse Parallel (GRASP) MRI~\cite{Feng2014Golden}, a widely used clinical method, enables flexible temporal binning but exhibits increasing streak artifacts as temporal resolution increases. Consequently, accurately visualizing early contrast enhancement patterns and achieving better risk stratification is constrained by a fundamental trade-off between temporal resolution and spatial image fidelity in DCE-MRI.
+
+
+Deep learning methods offer promise for improved reconstruction, but supervised approaches are fundamentally limited by the lack of fully-sampled ground truth data in DCE-MRI. It is impossible to obtain ground-truth fully-sampled DCE-MRI because fast imaging inherently requires undersampling. Therefore, an unsupervised approach is required. This work addresses current limitations in DCE-MRI reconstruction by training an unsupervised, physics-informed network to reconstruct multi-coil radial DCE-MRI that explicitly models rapid pharmacokinetic dynamics, extending existing architectures to the dynamic breast imaging setting. By enabling enhanced DCE-MRI reconstruction at higher temporal resolutions, this work lays the foundation for the discovery of new kinetic biomarkers for breast cancer risk prediction, enabling earlier detection, more personalized screening strategies, and improved patient experience through shorter scan times. 
+
+\section{Related Work}
+
+\subsection{Traditional Methods for Accelerating MRI Acquisition}
+
+Accelerating MRI has been a continuous area of research within the field of signal processing, with significant advancements being made toward reducing scan times and increasing temporal resolution of dynamic MRI. Parallel imaging is a common technique that uses multiple receiver coils to reduce the amount of k-space data required by recording different parts of the image in parallel \cite{Deshmane2012Parallel}. The coil images are then iteratively combined to reconstruct the final image. However, parallel imaging can lead to aliasing artifacts if the coil sensitivities are not homogeneous and non-overlapping, which is the case in many practical applications. Therefore, algorithms such as Sensitivity Encoding (SENSE) \cite{Pruessmann1999SENSE} and Generalized Autocalibrating Partially Parallel Acquisition (GRAPPA) \cite{Griswold2002GRAPPA} are used to reduce artifacts in the reconstructed image, although these reconstructions are prone to decreased signal-to-noise ratio (SNR) and are limited to moderate acceleration factors. 
+
+Compressed sensing is another technique used to accelerate MRI acquisition by exploiting the redundancy of natural images by enforcing sparsity in some transform domain \cite{Ye2019Compressed}. Compressed sensing requires that the k-space follows an incoherent or random-like sampling pattern, such as radial \cite{radialstackofstars} or spiral trajectories \cite{Tan2009SpiralTrajectory}, so that artifacts present as low-level noise throughout the image rather than structured ghost-like artifacts. These artifacts are reduced through sparsity regularization and denoising in the transform domain. 
+
+MRI acquisition and reconstruction techniques combining the strengths of parallel imaging and compressed sensing have been developed, including iterative Golden Angle Radial Sparse Parallel MRI (iGRASP) \cite{Feng2014Golden}. iGRASP is a flexible, free-breathing technique for dynamic MRI that involves acquiring the k-space in a radial stack-of-stars trajectory, in which each radial spoke is rotated by the golden angle. However, iGRASP reconstructions are prone to streak artifacts and are fundamentally limited to moderate accelerations, leaving the early window of contrast kinetics still widely unexplored.
+
+
+\subsection{Physics-informed Deep Learning Reconstruction}
+
+Many works in MRI reconstruction leverage physics-informed deep learning to incorporate measurement-domain information from k-space into neural networks \cite{Wang2024KnowledgeDrivenFastMRI}. Among these, unrolled networks have emerged as a dominant technique for solving linear inverse problems, including MRI reconstruction, as they explicitly integrate knowledge from traditional iterative reconstruction algorithms \cite{Chen2025UnrolledInverseProblems,10629179,Ramzi2022NCPDNet,Kofler2021EndToEndRadialCineMRI}. Related works have also explored frequency-domain modeling within deep learning reconstruction frameworks, such as the Fourier convolution block \cite{SUN2025103349}, non-local Fourier attention \cite{ZHOU2023104632}, complex-valued k-space constraints \cite{10412627}, or learned priors \cite{Liu2020AutoencodingPriorsMRI}. Other works utilize more implicit physics awareness by enforcing consistency with k-space measurements and improving reconstructions through global spatial context \cite{10075478,10629179}. Several works have extended these ideas to non-Cartesian acquisitions, including radial k-space sampling \cite{He2023,s22197277}, while recent hybrid approaches such as TC-KANRecon incorporate partial physics awareness \cite{Ge2025TCKANRecon}.
+
+\subsection{Supervised MRI Reconstruction}
+
+Supervised MRI reconstruction learns a mapping from undersampled measurements or zero-filled reconstructions to reference images, and therefore relies on access to high-quality ground truth data during training \cite{Hossain2024DeepLearningMRI,Singh2023FastMRIReview,Heckel2024DeepLearningMRI}. While supervised learning remains a dominant technique in deep-learning-based MRI reconstruction, the need for ground truth data poses challenges in applications where fully sampled reference images are difficult or impractical to obtain, such as in many dynamic imaging settings. Early supervised approaches primarily utilized CNNs and residual learning to reduce aliasing artifacts in image space \cite{Hyun2018DeepLearningMRI,CHATTERJEE2022105321}. Subsequent work utilized GANs and transformers to improve sharpness and detail preservation \cite{LIU202277,Huang2022EdgeEnhancedFastMRI,NOOR2024106218,HUANG2022281}, while other approaches learned more direct sensor-to-image mappings \cite{Zhu2018DomainTransformMRI}. Clinical feasibility has also been demonstrated by \cite{Rastogi2024DeepLearningMRI}, which involves a multi-center study that demonstrates preservation of oncological biomarkers in supervised MRI reconstruction. Similar works have sought to address generalization across anatomies and domains by proposing methods for anatomy-agnostic reconstruction \cite{10.1007/978-3-030-87231-1_21} or transfer learning across imaging modalities \cite{Han2018DomainAdaptationMRI}. Finally, supervised reconstruction has been extended to non-Cartesian sampling patterns, with the objectives of removing streak artifacts and preserving temporal consistency \cite{Hauptmann2018RealtimeCMR,Kofler2019SpatioTemporalMRI,Shen2020PCNNRealtimeMRI,Jafari2022GRASPnetDCE,CHATTERJEE2022105321}. Related applications of supervised reconstruction also explore super-resolution and dynamic enhancement, often using retrospective undersampling or simulated ground truth data for training  \cite{LYU2024103142,SARASAEN2021102196,Chatterjee2024DDoSUNet,10.1007/978-3-030-32251-9_77}. 
+
+\subsection{Unsupervised Dynamic MRI Reconstruction}
+
+Supervised methods are limited in their feasibility for dynamic MRI reconstruction, as dynamic MRI requires undersampling to achieve sufficient frame rates. It is therefore not possible to obtain fully-sampled ground-truth images for dynamic MRI reconstruction and unsupervised methods are required. Deep Image Prior (DIP) \cite{Ulyanov_2020} is based on the observation that the architecture of a convolutional neural network itself encodes strong prior information about natural images. In DIP, a randomly initialized and untrained CNN maps a fixed noise input to an image, and the network weights are optimized using a measurement consistency loss so that the generated image matches the acquired measurements under a known forward model. By restricting the solution space to images that can be represented by the CNN, DIP implicitly regularizes the inverse problem without requiring any training data. This framework has been extended and applied to MRI reconstruction, including deep image prior with structured sparsity (DISCUS) \cite{sultan2025unsupervisedmethodmrirecovery}, which jointly reconstructs an image from a shared static latent code and frame-specific dynamic latent codes. A group sparsity constraint is applied to the dynamic codes to automatically discover
+the dimensionality of the latent manifold that explains temporal variations, which may include motion, contrast changes, or other effects. Unlike previous applications of DIP to dynamic MRI reconstruction, DISCUS reconstructs all frames jointly and does not assume temporal smoothness across frames.
+
+Self-supervised methods are used to create signals for training reconstruction networks directly from undersampled data. For example, Noise2Noise demonstrates that a network can learn to restore a clean image by seeing multiple corrupted examples of the same scan, as long as the corruption is unbiased, such as independently randomized k-space undersampling \cite{lehtinen2018noise2noiselearningimagerestoration}. Unlike Noise2Noise, self-supervision via data undersampling (SSDU) \cite{Yaman2020SelfSupervised} explicitly enforces measurement consistency by splitting undersampled k-space data into two disjoint sets such that the first set is used as the network input and the second set is used to compute the training loss with the predicted measurements obtained from the forward-encoded reconstructed image. This technique enables training physics-guided MRI reconstruction networks without requiring any full-sampled ground truth data. For example, NLINV-Net used SSDU to train a model-based neural network to reconstruct cardiac MRI images from radial k-space data using nonlinear inversion \cite{nlinvnet}. 
+
+Contrastive learning, a self-supervised learning method that identifies similarities in data points without requiring labeled training data, has been applied to MRI reconstruction. CL-MRI \cite{EKANAYAKE2025107185} is a contrastive learning framework that converts undersampled MRI images into a latent space and seeks to maximize the mutual information between undersampled representations of the same scan. The concept of Neural Radiance Fields (NeRF) has also been applied to undersampled MRI reconstruction such that the neural network learns a continuous image representation from a single undersampled scan, improving applicability in settings with limited training data \cite{jang2024nerfsolvesundersampledmri}. Finally, dynamic diffeomorphic equivariant imaging (DDEI) is a self-supervised learning framework that combines the standard measurement consistency constraint with an equivariance constraint based on anatomy-specific spatiotemporal transformations \cite{Wang_2025}. Originally implemented for cardiac cine MRI, DDEI is based on anatomical motion models such as motion that is cyclic or reversible in time. However, these assumptions do not apply to breast DCE-MRI, which involves non-reversible, tissue-specific contrast kinetics rather than periodic anatomical motion.
+
+This work extends existing self-supervised methods to breast DCE-MRI reconstruction by proposing spatiotemporal transformations for enforcing equivariance based on breast-specific contrast kinetics. This work demonstrates how incorporating breast-specific kinetic structure into self-supervised reconstruction can reduce the spatial-temporal trade-off in DCE-MRI and reveal rapid contrast dynamics that may uncover new biomarkers for breast cancer risk stratification.
+
+
+\section{Methods}
+
+\subsection{Dataset}
+
+This work utilizes the fastMRI breast dataset \cite{solomon2024fastmribreastpubliclyavailable}, which contains raw k-space data for both pre-contrast and DCE-MRI acquisitions for 300 patients. The data were acquired using a T1-weighted free-breathing golden-angle radial volumetric interpolated breath-hold examination (VIBE) sequence on a 3T scanner with a 16-channel breast coil. Each scan had a duration of 2.5 minutes and employed a 3D stack-of-stars sampling trajectory with 83 partitions in the $k_z$ direction and partial Fourier sampling of 6/8, resulting in 192 reconstructed slices. A total of 288 radial spokes were acquired continuously per scan. In addition to the raw k-space data, the dataset provides GRASP reconstruction code, which enables flexible temporal binning of radial spokes into a variable number of dynamic frames. The dataset contains a total of 90 malignant lesions, 159 benign lesions, and 51 patients with no lesion. Malignant lesions include invasive ductal carcinomas (IDC), invasive lobular carcinomas (ILC), and ductal carcinomas in-situ (DCIS). Of the 300 scans, two files were corrupted and removed from the dataset. The remaining 298 samples were split into train (258), validation (15), and test sets (25), with 69, 5, and 15 malignant samples, respectively.
+
+% include details about how the inputs are normalized or preprocessed (saved complex, zero-filled k-space)
+
+\subsection{Model Architecture}
+
+Unrolled networks--deep learning models that ``unroll'' each step of a traditional iterative optimization algorithm into the layers of a neural network--are the current state-of-the-art for linear inverse problems such as MRI reconstruction, due to their ability to incorporate MRI physics information into the network \cite{Hammernik2017Variational}. Most unrolled networks based on MRI reconstruction algorithms are designed for Cartesian data rather than radial or spiral trajectories. LSFPNet, an unrolled network based on Low-rank and Sparsity decomposition with Framelet transform and Primal-dual fixed point optimization \cite{9678015}, was designed specifically for dynamic radial MRI data \cite{He2023Unrolled}. LSFPNet was proposed for real-time MRI-guided brain intervention, providing fast and high-quality reconstructions for surgical imaging, despite the long reconstruction times typically associated with the classical LSFP algorithm. 
+
+This work utilizes LSFPNet, an unrolled network based on Low-rank and Sparsity decomposition with Framelet transform and Primal-dual fixed point optimization \cite{9678015}, that was designed for real-time MRI-guided brain intervention \cite{He2023Unrolled}. The traditional LSFP algorithm decomposes an image into two components: (1) the low-rank static background, and (2) the sparse dynamic component that involves few, localized changes over time. The optimization algorithm is as follows:
+
+% \[
+% {L,S} = \text{argmin}_{L,S} \frac{1}{2} ||E(L+S) - d ||_{2}^{2} + \lambda_{L}||L||_{*} + \lambda_{S}||\nabla_{t}S||_1 + \lambda_{L}^\psi||\psi L||_1 + \lambda_{S}^\psi||\psi S||_1
+% \]
+
+\[
+(L,S)
+= \arg\min_{L,S}\;
+\frac{1}{2}\,\big\lVert E(L+S)-d \big\rVert_2^2
++ \lambda_L \lVert L\rVert_\ast
++ \lambda_S \big\lVert \nabla_t S \big\rVert_1
++ \lambda_L^\psi \lVert \psi L \rVert_1
++ \lambda_S^\psi \lVert \psi S \rVert_1
+\]
+
+where $\big\lVert E(L+S)-d \big\rVert_2^2$ is the data consistency term, $\lambda_L \lVert L\rVert_\ast$ is the low-rank constraint on $L$, $\lambda_S \big\lVert \nabla_t S \big\rVert_1$ is the sparsity constraint on $S$ that is enforced in the temporal difference domain, and $\lambda_L^\psi \lVert \psi L \rVert_1$ and $\lambda_S^\psi \lVert \psi S \rVert_1$ are the denoising constraints that enforce sparsity in the transform ($\psi$) domain to smooth the image. 
+
+In LSFPNet, the fixed transform is replaced by a unique pair of learned convolutional operators for each image component: a forward CNN, $\psi$, that maps the image to a learned feature space, and a backward CNN, $\phi$, that maps from feature to image space. $\psi_L$ and $\phi_L$ have kernel size $3 \times 3 \times 5$, and $\psi_S$ and $\phi_S$ have kernel size $3 \times 3 \times3$. The larger $L$ kernel was observed to reduce image blurriness at very high acceleration factors. The CNN operators are intended to form an adjoint pair, analogous to the framelet transforms used in the original LSFP formulation. To enforce this property, an adjoint consistency loss is used during training. The total adjoint loss is defined as 
+
+\[
+\mathcal{L}_{\mathrm{adj}}
+= \frac{1}{K}\sum_{k=1}^{K}
+\left(\operatorname{adjoint}_L^{(k)}\right)^2
+\;+\;
+\frac{1}{K}\sum_{k=1}^{K}
+\left(\operatorname{adjoint}_S^{(k)}\right)^2 
+\]
+where $K$ is the number of unrolled iterations. 
+
+For the $k^{\text{th}}$ iteration, the adjoint residuals for the low-rank ($L$) and
+sparse ($S$) components are computed as
+\[
+\operatorname{adjoint}_L^{(k)}
+= \frac{1}{|\Omega|}\sum_{i\in\Omega}
+\Big(
+\psi_L^{(k)}(y^{(k)}) \odot p^{(k)}
+-
+\phi_L^{(k)}(p^{(k)}) \odot y^{(k)}
+\Big)_i 
+\]
+
+\[
+\operatorname{adjoint}_S^{(k)}
+= \frac{1}{|\Omega|}\sum_{i\in\Omega}
+\Big(
+\psi_S^{(k)}(y^{(k)}) \odot p^{(k)}
+-
+\phi_S^{(k)}(p^{(k)}) \odot y^{(k)}
+\Big)_i
+\]
+
+where $y^{(k)}$ and $p^{(k)}$ denote the intermediate variables used as input to the learned forward and backward CNNs at the $k^{th}$ unrolled iteration, and $\Omega$ is the set of all tensor indices. 
+
+In addition to the forward and backward CNNs, LSFPNet learns the optimal values for each of the regularization parameters ($\lambda_{L}$, $\lambda_{S}$, $\lambda_{L}^\psi$, and $\lambda_{S}^\psi$) and the step size. The model was trained with 3 blocks, where each block involves one iteration of the optimization algorithm. The forward and backward CNNs were trained with 3 layers and 16 channels each. The regularization parameters were initialized to $\lambda_{L}=0.0025$, $\lambda_{S}=0.05$, $\lambda_{L}^\psi=0.05$, and $\lambda_{S}^\psi=0.05$, and the step size was initialized to $\gamma=0.5$. A hyperparameter sweep was performed over $\lambda_L \in [0.000625, 0.01]$ and $\lambda_S \in [0.0125, 0.2]$, with model selection based on validation performance according to spatial image quality (e.g., SSIM and PSNR). No consistent differences in reconstruction metrics were observed across this range, indicating robustness to parameter initialization. 
+
+The network takes as input a zero-filled reconstruction obtained by applying the adjoint NUFFT operator to the measured k-space data. To ensure consistent numerical scaling for data consistency and regularization during training, both the zero-filled image and the k-space measurements are jointly normalized using a shared scalar equal to the maximum magnitude of the zero-filled image.
+
+
+\subsubsection{Time Index Encoding} 
+
+The original LSFPNet architecture was modified to optionally encode the starting time point index, inspired by StyleGAN's mapping network for conditioning \cite{karras2019stylebasedgeneratorarchitecturegenerative}, implemented with Feature-wise Linear Modulation (FiLM) \cite{perez2017filmvisualreasoninggeneral}. The starting frame fraction, $\frac{i}{(T-1)}$, where $i$ is the index of the first time frame in the series and $T$ is the total number of frames, is mapped to an embedding vector with dimension 128 using a mapping network consisting of 4 linear layers. FiLM-style feature modulation is used to project the embedding into per-channel scale and bias parameters. The parameters are used to modulate the output of the second layer of the forward CNN as $\text{ReLU}(X * (1 + \alpha \text{tanh}(\text{scale})) + \alpha \text{tanh}(\text{bias}))$, with $\alpha$ controlling the modulation strength with a default value of $\alpha=0.10$.
+
+% The original LSFPNet architecture was modified to optionally encode the acceleration factor and starting time point index, inspired by StyleGAN's mapping network for conditioning \cite{karras2019stylebasedgeneratorarchitecturegenerative}, implemented with Feature-wise Linear Modulation (FiLM) \cite{perez2017filmvisualreasoninggeneral}. The acceleration factor (AF) is calculated as $AF = \frac{M * \frac{\pi}{2}}{SPF}$, where $M$ is the size of the image and $SPF$ is the number of spokes per frame. The inverse acceleration, $\frac{1}{AF}$ and starting frame fraction, $\frac{i}{(T-1)}$, where $i$ is the index of the first time frame in the series and $T$ is the total number of frames, are mapped to an embedding vector with dimension 128 using a mapping network consisting of 4 linear layers. FiLM-style feature modulation is used to project the embedding into per-channel scale and bias parameters. The parameters are used to modulate the output of the second layer of the forward CNN as $\text{ReLU}(X * (1 + \alpha \text{tanh}(\text{scale})) + \alpha \text{tanh}(\text{bias}))$, with $\alpha$ controlling the modulation strength with a default value of $\alpha=0.10$.
+
+
+
+
+
+
+\subsection{Training Framework}
+% include normalization details if not already
+
+The Dynamic Diffeomorphic Equivariant Imaging (DDEI) framework \cite{Wang_2025}, which was developed for dynamic cine MRI reconstruction, was used to train the model. The framework is based on equivariant imaging, a principle that leverages prior spatial or temporal information to provide a strong self-supervised signal to the network \cite{chen2021equivariantimaginglearningrange}. The framework involves a measurement consistency (MC) loss that enforces consistency with the original k-space measurements, and an equivariant imaging (EI) loss that utilizes spatiotemporal transformations based on anatomical priors to reduce imaging artifacts. When enabled, the rebin loss was trained with weight $10,000$.
+
+% include details of training from checkpoint
+
+\subsubsection{Spatiotemporal Transformations for Breast DCE-MRI}
+
+
+
+The foundations of the EI loss are the anatomy-specific spatiotemporal transformations that enforce equivariance and reduce imaging artifacts. At each training iteration, a group of predefined, physically plausible transformations, $T_g$, is randomly selected. The forward model, $A$, is applied to the transformed image, $T_g(x)$, to obtain the corresponding transformed signal, $A(T_g(x))$. The reconstruction network $f_\theta$ is then used to reconstruct this
+signal, yielding
+\[
+\hat{T_g(x)} = f_\theta\!\left(A(T_g(x))\right)
+\]
+
+Equivariance is enforced by penalizing differences in the reconstructed image and the transformed image, formulated as
+
+\[
+\mathcal{L}_{\mathrm{EI}} = \|T_g(x) - \hat{T_g(x)}\|_1 
+\]
+
+Spatial transformations including rotation and Continuous Piecewise Affine Based (CPAB) diffeomorphism were considered. CPAB diffeomorphism applies a smooth, invertible spatial deformation to each frame in the image, modeling nonrigid anatomical variability while maintaining spatial consistency. Rotation angles $r \in [20, 60]$ were also considered, but when combined with the diffeomorphic transformation, consistently lower validation SSIM and PSNR were observed. As a result, CPAB diffeomorphism was selected as the spatial transformation used in the framework. 
+
+Several temporal transformations specific to the dynamics of breast DCE-MRI were implemented. A \textbf{time-of-arrival shift} was used to add physiologically plausible temporal misalignment to the image sequence by shifting the time axis relative to the estimated bolus arrival time. The enhancement curve used to estimate bolus arrival is computed from the brightest 5\% of voxels per frame, determined by a quantile threshold. The mean signal intensity of these voxels is computed from the magnitude images to construct the curve. 
+
+A pre-contrast baseline window is defined as the frames corresponding to approximately the first 20 seconds of the scan, clamped to at least one frame. For high temporal resolutions (e.g., more than 36 frames), the bolus arrival index, $t_a$, is estimated as the first frame with mean signal crossing the threshold $\tau = s_b + k\sigma_b$, where $s_b$ and $\sigma_b$ are the mean signal and standard deviation of the pre-contrast baseline, and $k$ (default $k=2.0$) is a sensitivity parameter that determines how much the signal must rise above the baseline to be considered contrast arrival. For lower temporal resolutions that are less sensitive to the threshold (e.g., less than 18 frames), $t_a$ is calculated using a fraction-of-peak threshold, $\tau = s_b + f(s_\text{max} - s_b)$, where $s_\text{max}$ is the maximum signal after the baseline and $f$ is a fixed fraction (default $f=0.15$). If a sample has weak enhancement such that no time index crosses the threshold, $t_a$ is defined as the frame with the highest increase in enhancement.
+
+Random frame shifts $\delta_j \sim \mathrm{Uniform}(-1,1)$ are sampled and the target arrival index is computed as $t_a' = \mathrm{clip}(t_a + \delta_j, 0, T-1)$. The enhancement window is shifted according to the target arrival index $t_a'$ and edge padding is used to repeat the first or last frames of the window. This transformation simulates a specific nuisance present in breast DCE-MRI, where the enhancement window begins slightly earlier or later than when actual bolus arrival occurs. The transformation seeks to improve network stability under small temporal shifts, while preserving clinically meaningful contrast dynamics. 
+
+\textbf{Baseline enhancement scaling} is used to enforce equivariance to differences in enhancement amplitude while preserving clinically meaningful dynamics. This transformation randomly scales the contrast enhancement amplitude above the baseline by a factor $\alpha \sim \mathrm{Uniform}(0.85,1.15)$, while keeping the baseline level and shape of the curve unchanged. The baseline signal, $s_b$, and time-of-arrival, $t_a$, are defined the same as in the arrival shift transform. The complex-valued signal after the baseline is scaled by the factor $a$, such that the scaled enhancement curve is defined as 
+
+\[
+x'(t) = \begin{cases}
+    x(t), & \text{if } t < t_a \\
+    s_b + \alpha(x(t)-s_b), & \text{if } t \geq t_a
+\end{cases}
+\]
+
+This transformation is based on typical factors in breast DCE-MRI that can lead to differences in enhancement amplitude, such as contrast dose, injection rate, patient hemodynamics, or scanner and coil differences. It serves to improve model robustness to variations in intensity and provide a self-supervised signal to the network by forcing the model output to change in a predictable way based on the transformation that is applied. 
+
+A DDEI-like \textbf{rebinning loss} was implemented to enforce consistency across temporal resolutions. Specifically, a high resolution reconstruction, $X_\text{high}$ is rebinned into groups of $f$ consecutive frames (default $f=2$) in both image and measurement space. In image space, the frames in each group are averaged to obtain $X_\text{avg} = A_f(X_\text{high})$. The rebinned measurements are reconstructed to obtain a lower temporal resolution image, $X_\text{low}$, and the loss is computed as
+
+\[
+\mathcal{L}_\text{rebin} = \mathrm{MSE}(X_\text{low}, X_\text{avg})
+\]
+
+This constraint forces the forward model to be consistent across temporal resolutions, encouraging reconstructions that preserve temporally aggregated signal behavior. 
+
+% Three different types of transformations are used: two spatial transformations and one temporal transformation. A random group of transformations is selected on each iteration to apply to the image. The forward model is then applied to the transformed image to obtain the transformed signal and the transformed signal is reconstructed using the network. The EI loss is calculated as the error between the reconstructed image and the transformed image. The spatial transformations used are rotation, with a range of -20 to 20 degrees, and Continuous Piecewise Affine Based (CPAB) Diffeomorphism, which applies a smooth, invertible spatial deformation to each frame in the image. The temporal transformation, implemented specifically for monophasic contrast dynamics in breast DCE-MRI, is a monophasic time warp, which splits the image sequence into a pre-contrast phase, consisting of the first frame only, and an enhancement phase, consisting of the subsequent frames. A random warp ratio, ranging from 0.6 to 0.95, is selected and applied to the entire enhancement phase using a 1D linear interpolation over time.
+
+\subsection{Training Settings}
+ 
+Each model was trained and evaluated for a single acceleration factor. All experiments were conducted a batch size of 1. To reduce training time, one random slice was selected from each scan at every epoch. Optimization was performed using the Adam optimizer with a learning rate of $10^{-4}$, weight decay $0.0$, $\beta_1 = 0.9$, $\beta_2 = 0.999$, and $\epsilon = 10^{-9}$. The learning rate followed a linear warmup schedule for the first 5 epochs to reach the target value, followed by cosine decay to a floor of $0.2 \times \mathrm{LR}$ for the remaining training epochs. 
+
+The adjoint loss and MC loss were both trained with a weight of $1.0$. The EI loss was introduced after 10 epochs and warmed up via a cosine schedule for 5 epochs, with a target weight of $10^4$. 
+
+The k-space and zero-filled image inputs were normalized using maximum-magnitude normalization with a single shared scalar. The normalization factor, $z$, was computed as the maximum absolute value of the zero-filled image. Both the zero-filled image and the corresponding k-space data were divided by $z + 10^{-8}$, where $10^{-8}$ was added for numerical stability.
+
+To ensure numerical stability during training, gradients were clipped by global norm (max 1.0) at each iteration. In addition, the nuclear-norm proximal operator used within the network was implemented using a stabilized singular value decomposition (SVD). For all experiments reported in this work, we computed a complex-valued SVD, detached the singular vectors from the computational graph, and propagated gradients only through the singular values. This avoids instability associated with backpropagation through complex-valued SVDs.
+
+During training, when $T > \mathrm{FPG}$, where $T$ is the total number of frames and $FPG$ is the number of frames per group, we select a contiguous group of $\mathrm{FPG}$ frames (default $\mathrm{FPG} = 36$) by randomly sampling a starting time index, $t_\text{start}$, from a three-component mixture distribution. The first window ($t_{\mathrm{start}} = 0$) and last window ($t_{\mathrm{start}} = T - \mathrm{FPG}$) were each selected with probability $\frac{1}{3}$, while a uniformly sampled window with $t_{\mathrm{start}} \sim \mathrm{DiscreteUniform}(0, \ldots, T - \mathrm{FPG})$ was selected with probability $\frac{1}{3}$. This strategy increases the sampling frequency of edge frames, which would otherwise be underrepresented under fully uniform sampling. 
+
+When temporal grouping was enabled during training, sliding-window inference with Hann overlap was used to reconstruct the full time series. The $T$ frames were divided into overlapping temporal windows of length $C = \mathrm{FPG} = 36$ with an overlap of $C/2 = 18$ frames. For each window, the k-space data, trajectory, and density compensation function were used to construct a per-window NUFFT operator. The model generated complex-valued reconstructions of length $C$, which were multiplied by a temporal Hann window that assigns higher weight to central frames and lower weight to boundary frames. Overlapping window reconstructions were combined via weighted summation, and the final output was obtained by normalizing by the accumulated window weights at each time point. This approach ensures smooth temporal transitions between windows and mitigates boundary artifacts in the reconstructed time series.
+
+For higher acceleration factors, models were initialized from a pretrained checkpoint rather than trained from scratch. The checkpoint was trained using data with 36 spokes per frame and utilized the MC and EI losses with only the diffeomorphic transformation enabled, for approximately 500 epochs. For these experiments, the learning rate followed a cosine warmup during the first 5 epochs, and the EI loss followed a cosine warmup over the first 40 epochs. All other training settings remained unchanged.
+
+Experiments were primarily conducted on NVIDIA A100, H100, and H200 GPUs due to the memory requirements of the proposed model and loss functions. For lower acceleration settings (36, 24, and 16 spokes per frame), experiments were occasionally run on NVIDIA A40 and L40 GPUs when the rebin loss was disabled. Training time varied depending on acceleration and configuration, with higher acceleration models requiring more memory and longer training times. 
+
+% add training time and number of parameters
+
+
+\subsection{Digital Reference Object}
+
+% NOTE: need to anonymize links before submission
+
+
+% add info about noise added
+
+Due to the lack of real ground truth data for dynamic MRI reconstruction, we implemented a validation paradigm based on the Digital Reference Object Toolkit for breast DCE-MRI \cite{Bae2024Digital} to simulate reference images for evaluating our method under different acceleration factors. The toolkit is derived from 53 patient cases and includes 2D DCE-MRI slices, subject-specific arterial input functions (AIFs), segmentation masks, coil sensitivity maps, and T1-weighted pre-contrast magnitude images that serve as spatial intensity templates. The original implementation was adapted to resample the AIF to a configurable number of time frames. Liver and heart regions were dilated and smoothed to reduce segmentation-induced spatial discontinuities. Region-specific pharmacokinetic parameters were randomly sampled from clinically derived ranges, and spatial heterogeneity was introduced through Gaussian smoothing, with heavier smoothing applied within the inner dilated region. Contrast dynamics were simulated using compartmental kinetic models (Extended Patlak model for glandular tissue, skin, and muscle; an extended Tofts-like model for vascular regions; and a two-compartment exchange model for the remaining tissues) and converted to signal using a spoiled gradient-echo (SPGR) signal model. Multi-coil k-space data were generated for the resulting DRO using the estimated coil sensitivity maps. ESPiRiT sensitivity maps were generated from the DRO k-space data to match the sensitvity maps used during training.
+
+It is important to note that the data in the DRO toolkit overlap with the fastMRI breast dataset, and the mapping between DRO and fastMRI samples can be found at \url{https://github.com/rachelngordon/radial-breast-ddei/blob/main/data/DROSubID_vs_fastMRIbreastID.csv}. To prevent data leakage, we used this mapping to exclude overlapping DRO cases from the training set and reserve them exclusively for validation and testing.
+
+
+\section{Results}
+
+
+\subsection{Evaluation Setup}
+
+Reconstruction performance was evaluated in terms of spatial image quality and temporal fidelity relative to the simulated ground truth images, and further assessed based on measurement consistency with the raw k-space data. The 15 validation samples and 25 held-out test samples were used to evaluate performance. Each validation batch contains (i) simulated DRO k-space for a fixed acquisition setting (spokes-per-frame and number of frames), (ii) ESPiRiT coil sensitivity maps, (iii) a complex-valued synthetic ground-truth dynamic image sequence, (iv) a GRASP baseline reconstruction, and (v) tissue masks (e.g., malignant, benign, glandular, muscle). Evaluation was also conducted on the raw, time-binned fastMRI k-space, despite not having manual tissue segmentations for each slice. Reconstructions from the raw k-space were qualitatively evaluated for visual differences and quantitatively evaluated based on k-space measurement consistency.
+
+% NOTE: include more details of non-DRO evaluation here
+
+
+\subsubsection{Spatial Image Quality}
+
+Spatial fidelity is quantified using standard image metrics computed on magnitude images derived from the complex reconstructions. Specifically, structural similarity index (SSIM), peak signal-to-noise ratio (PSNR), mean squared error (MSE), and Learned Perceptual Image Patch Similarity (LPIPS) with an AlexNet backbone, are computed for both the BRISKNet and GRASP reconstructions according to the reference images. The data range for SSIM and PSNR was defined using the minimum and maximum values of the corresponding DRO magnitude image to ensure a consistent physical intensity scale across reconstructions. Prior to LPIPS computation, each magnitude slice was min–max normalized to $[0,1]$ using the same DRO-derived intensity range and then linearly rescaled to $[-1,1]$. The single-channel images were replicated across three channels to match the AlexNet input requirements.
+
+\subsubsection{Measurement Consistency}
+
+The reconstructions are additionally evaluated for forward-model consistency with the raw, measured k-space data, providing an additional evaluation that does not depend on synthetic ground-truth images. \textbf{Direct data consistency} is measured by forward-simulating k-space using the NUFFT-based forward operator and coil sensitivity maps, and computing MSE and MAE between the predicted and measured k-space. An \textbf{SSDU-style evaluation} is used to split the spokes into four folds and generate reconstructions by leaving out each of the folds. The held-out spokes are predicted by applying the forward model to the reconstructed images, and the predicted spokes are evaluated against the held-out spokes using a normalized MSE
+
+\[
+NMSE = \frac{||W(\hat{y}_{\text{held}} - y_{\text{held}})||_{2}^{2}}{||Wy_{\text{held}}||_{2}^{2}}
+\]
+
+where $W$ is the square root of the density compensation function. The final SSDU score is averaged over all held-out folds, providing an evaluation of reconstruction quality directly in measurement space without requiring image-space ground truth. 
+
+
+\subsubsection{Temporal Fidelity}
+
+Accurate preservation of enhancement behavior over time in dynamic breast MRI reconstruction is essential for downstream kinetic analysis. To explicitly evaluate temporal fidelity of the reconstructed images, ROI-based temporal metrics focused on malignant and benign regions are computed. The ROI is defined using the provided tissue segmentation masks for the DRO data. Magnitude images are used with a uniform acquisition time vector spanning 150 seconds with $T$ evenly spaced frames. To focus metrics on dynamic enhancement rather than arbitrary intensity scaling, the enhancement curves are normalized using baseline-subtraction, with a baseline that is defined as the mean signal over the first $n$ frames corresponding to approximately the first 20 seconds of the scan, with a minimum of at least one frame. For each voxel curve, $s(t)$, the baseline-subtracted curve is $s(t) - \bar{s}_{\text{baseline}}$, where $\bar{s}_{\text{baseline}}$ is the mean signal over the first $n$ frames. 
+
+Within the tumor mask, voxel-wise enhancement curves are extracted and filtered to voxels with positive enhancement. To emphasize clinically meaningful dynamics where enhancement is strongest, evaluation is reported over three subsets: (i) all valid tumor voxels, (ii) top 10\% of voxels by peak enhancement, (iii) top 20\% of voxels by peak enhancement. This stratification prevents large, low-enhancement regions from dominating the metrics and highlights performance where kinetic fidelity is most important. For each subset, BRISKNet and GRASP reconstructions are compared to ground truth using both global curve similarity and key kinetic feature comparisons:
+
+\begin{enumerate}
+    \item \textbf{Curve correlation:} Mean voxel-wise Pearson correlation between baseline-subtracted reconstruction and DRO curves across the full time series. 
+    \item \textbf{Curve MAE:} Mean absolute error between baseline-subtracted curves across time, aggregated over voxels. 
+    \item \textbf{Early-phase correlation:} Mean voxel-wise Pearson correlation between baseline-subtracted reconstruction and DRO curves, restricted to an automatically detected early enhancement window. The enhancement window spans approximately the first 35 seconds after arrival, with a minimum of at least one frame.
+    \item \textbf{Early-phase MAE:} Mean absolute error between baseline-subtracted curves across the early enhancement window, aggregated over voxels.
+    \item \textbf{Time-to-arrival error:} Mean absolute difference in seconds between the reconstructed and DRO arrival times for voxels where both are detectable. Arrival time is determined per voxel as the first frame index where the enhancement curve exceeds $\mu_{\text{baseline}} + 2\sigma_{\text{baseline}}$ for two consecutive frames.
+    \item \textbf{Wash-in slope error:} Mean absolute error between reconstructed and DRO wash-in slopes. For voxels with valid arrival and peak times, wash-in slope is calculated as $\frac{s(t_{\text{peak}}) - s(t_{\text{arrival}})}{t_{\text{peak}} - t_{\text{arrival}}}$.
+    \item \textbf{Initial AUC error:} Computed as the area under the baseline-subtracted curve from arrival to 10 seconds after arrival (with a minimum of at least one frame) using trapezoidal integration.
+    \item \textbf{Peak enhancement error:} Mean absolute error between peak values of baseline-subtracted reconstructed and DRO curves.
+    \item \textbf{Time-to-peak error:} Mean absolute difference between reconstructed and DRO peak times in seconds. 
+\end{enumerate}
+
+This temporal fidelity evaluation scheme is designed to detect distortions in dynamic enhancement behavior, including wash-in, bolus arrival, and peak enhancement, that may be introduced by temporal smoothing or frame-to-frame inconsistency. These failure modes can substantially bias downstream pharmacokinetic analyses and are not readily captured by spatial fidelity metrics or raw measurement consistency, making temporal fidelity evaluation essential for assessing the clinical validity of the reconstructed time series. By reporting metrics on high-enhancement tumor subsets, this evaluation framework emphasizes regions most likely to influence clinical interpretation.
+
+\subsection{Specialized Models at Fixed Acceleration}
+
+
+\subsection{Ablation Experiments}
+
+\subsubsection{Equivariant Imaging Loss}
+
+% NOTE: ensure tables and figures are formatted properly for the required template
+
+\begin{table}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{|l|c|c|c|c|c|c|c|c|c|}
+\hline
+Method & EI Loss & SSIM & PSNR & MSE & LPIPS & Raw DC MAE & Raw SSDU NMSE\\
+\hline
+BRISKNet & False & $0.975 \pm 0.009$ & $46.517 \pm 2.890$ & $0.039 \pm 0.016$ & $0.006 \pm 0.003$ & $0.000023 \pm 0.000010$ & $0.352 \pm 0.153$ \\
+\hline
+BRISKNet & True & \textbf{$0.984 \pm 0.006$} & \textbf{$47.712 \pm 2.559$} & \textbf{$0.030 \pm 0.013$} & \textbf{$0.004 \pm 0.002$} &  $0.000025 \pm 0.000011$ & $0.339 \pm 0.147$ \\
+\hline
+GRASP &  NA & $0.979 \pm 0.008$ & $48.580 \pm 2.853$ & $0.025 \pm 0.010$ & $0.002 \pm 0.001$ & $0.000040 \pm 0.000007$ &  $1.005 \pm 0.004$ \\
+\hline
+\end{tabular}
+}
+\caption{Equivariant Imaging Loss Ablation}
+\label{tab:mc_ei}
+\end{table}
+
+
+\begin{figure}[htbp]
+\centering
+\begin{subfigure}{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/spatial_quality_fastMRI_breast_157_mc.png}
+    \caption{MC only reconstruction}
+    \label{fig:mc}
+\end{subfigure}
+
+\vspace{0.5em}
+
+\begin{subfigure}{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/spatial_quality_fastMRI_breast_157_ei.png}
+    \caption{MC \& EI reconstruction}
+    \label{fig:ei}
+\end{subfigure}
+
+\begin{subfigure}{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/spatial_quality_fastMRI_breast_157_grasp.png}
+    \caption{GRASP reconstruction}
+    \label{grasp}
+\end{subfigure}
+
+\caption{Comparison of reconstruction quality from 36 spokes per frame, with and without equivariant imaging loss. The EI loss clearly reduces streak artifacts in the image and improves reconstruction quality over the MC loss alone.}
+\label{fig:mc_vs_ei}
+\end{figure}
+
+
+\subsubsection{Spatiotemporal Transformations}
+
+
+\begin{table}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|c|c|c|}
+\hline
+Method & EI Loss & ArrShift & EnhScale & Rebin & $\rho_\text{full}$ & $MAE_\text{full}$  & $\rho_\text{early}$ & $MAE_\text{early}$ & $t_\text{arr}$ Error & $MAE_\text{wash-in}$ & $iAUC_{10}$ Error & $MAE_\text{peak}$ & $t_\text{peak}$ Error \\
+\hline
+BRISKNet & False & NA & NA & False & $0.9965 \pm 0.0034$ & $0.7129 \pm 0.4492$ & $0.7245 \pm 0.4116$ & $0.9400 \pm 0.6085$ & $3.5330 \pm 5.5925$ & $0.0097 \pm 0.0061$ & $18.2357 \pm 7.7653$ & $1.1540 \pm 0.7489$ & $10.4762 \pm 16.0472$ \\
+\hline
+BRISKNet & True & False & False & False & $0.9945 \pm 0.0058$ & $0.7611 \pm 0.4299$ & $0.7367 \pm 0.3878$ & $0.9985 \pm 0.6722$ & $4.3651 \pm 5.9919$ & $0.0185 \pm 0.0074$ & $19.4981 \pm 8.4889$ & $1.1532 \pm 0.8043$ & $7.5102 \pm 12.1316$ \\
+\hline
+BRISKNet & True & True & True & True & $0.9953 \pm 0.0059$ & $0.9058 \pm 0.6076$ & $0.7539 \pm 0.3819$ & $1.2689 \pm 1.0547$ & $3.3163 \pm 3.8520$ & $0.0139 \pm 0.0039$ & $28.2714 \pm 18.2795$ & $1.4553 \pm 1.3190$ & $7.3810 \pm 11.4929$ \\
+\hline
+BRISKNet & True & False & True & True & $0.9945 \pm 0.0058$ & $0.7611 \pm 0.4299$ & $0.7367 \pm 0.3878$ & $0.9984 \pm 0.6723$ & $4.3651 \pm 5.9919$ & $0.0185 \pm 0.0074$ & $19.4980 \pm 8.4877$ & $1.1531 \pm 0.8037$ & $7.5102 \pm 12.1316$ \\
+\hline
+BRISKNet & True & True & True & False & $0.9951 \pm 0.0055$ & $0.7438 \pm 0.4477$ & $0.7443 \pm 0.3830$ & $0.9613 \pm 0.6282$ & $3.3333 \pm 4.1513$ & $0.0170 \pm 0.0052$ & $22.1046 \pm 2.7327$ & $1.2058 \pm 0.8390$ & $7.3810 \pm 11.4929$ \\
+\hline
+BRISKNet & True & True & False & True & $0.9952 \pm 0.0059$ & $0.8980 \pm 0.6141$ & $0.6724 \pm 0.3590$ & $1.2300 \pm 1.0376$ & $3.5000 \pm 4.0431$ & $0.0109 \pm 0.0030$ & $28.9056 \pm 17.9040$ & $1.4415 \pm 1.3033$ & $8.7143 \pm 11.9352$ \\
+\hline
+GRASP & NA & NA & NA & NA & $0.9974 \pm 0.0027$ & $0.5821 \pm 0.3280$ & $0.7379 \pm 0.3930$ & $0.7901 \pm 0.5256$ & $5.8673 \pm 7.7432$ & $0.0070 \pm 0.0045$ & $17.6874 \pm 6.1671$ & $0.8468 \pm 0.6444$ & $8.3333 \pm 11.6033$ \\
+\hline
+\end{tabular}
+}
+\caption{Malignant ROI Temporal Fidelity (Top 10\% Enhancing Pixels)}
+\label{}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|c|c|c|c|}
+\hline
+Method & use_ei_loss & temporal_transform & enable & AF & Seconds/Frame & curve_corr & curve_mae & early_corr & early_mae & ttae_sec & wash_in_slope_err & iauc10_err & peak_err & ttpeak_err_sec \\
+\hline
+BRISKNet & False & warp &  & 14.0 & 21.4 & $0.9964 \pm 0.0022$ & $0.3276 \pm 0.1146$ & $0.9704 \pm 0.0464$ & $0.4052 \pm 0.1523$ & $0.0000 \pm 0.0000$ & $0.0080 \pm 0.0027$ & $7.5977 \pm 2.6396$ & $0.4718 \pm 0.3407$ & $0.3061 \pm 0.9680$ \\
+\hline
+BRISKNet & True & none &  & 14.0 & 21.4 & $0.9967 \pm 0.0020$ & $0.3179 \pm 0.1603$ & $0.9605 \pm 0.0814$ & $0.4050 \pm 0.2149$ & $0.0000 \pm 0.0000$ & $0.0093 \pm 0.0040$ & $6.7161 \pm 4.4118$ & $0.5405 \pm 0.3262$ & $0.8418 \pm 1.8554$ \\
+\hline
+BRISKNet & True & arrival_shift_enh_scale & True & 14.0 & 21.4 & $0.9966 \pm 0.0027$ & $0.4390 \pm 0.1871$ & $0.9759 \pm 0.0522$ & $0.6443 \pm 0.2836$ & $0.0000 \pm 0.0000$ & $0.0092 \pm 0.0056$ & $11.0026 \pm 5.7562$ & $0.9222 \pm 0.4799$ & $0.3061 \pm 0.9680$ \\
+\hline
+BRISKNet & True & enh_scale & True & 14.0 & 21.4 & $0.9967 \pm 0.0020$ & $0.3178 \pm 0.1603$ & $0.9606 \pm 0.0813$ & $0.4050 \pm 0.2149$ & $0.0000 \pm 0.0000$ & $0.0093 \pm 0.0040$ & $6.7177 \pm 4.4123$ & $0.5404 \pm 0.3263$ & $0.8418 \pm 1.8554$ \\
+\hline
+BRISKNet & True & arrival_shift_enh_scale & False & 14.0 & 21.4 & $0.9968 \pm 0.0024$ & $0.3254 \pm 0.1509$ & $0.9774 \pm 0.0509$ & $0.4111 \pm 0.1915$ & $0.0000 \pm 0.0000$ & $0.0075 \pm 0.0038$ & $6.4557 \pm 3.2693$ & $0.5419 \pm 0.3093$ & $0.0000 \pm 0.0000$ \\
+\hline
+BRISKNet & True & arrival_shift & True & 14.0 & 21.4 & $0.9970 \pm 0.0025$ & $0.4107 \pm 0.2046$ & $0.9771 \pm 0.0555$ & $0.6016 \pm 0.3098$ & $0.0000 \pm 0.0000$ & $0.0078 \pm 0.0043$ & $11.0239 \pm 6.2116$ & $0.8130 \pm 0.4632$ & $0.0000 \pm 0.0000$ \\
+\hline
+GRASP &  &  &  & 14.0 & 21.4 & $0.9965 \pm 0.0025$ & $0.2906 \pm 0.0853$ & $0.9767 \pm 0.0187$ & $0.3464 \pm 0.1108$ & $0.0000 \pm 0.0000$ & $0.0075 \pm 0.0033$ & $5.4028 \pm 1.5721$ & $0.4247 \pm 0.1930$ & $0.0000 \pm 0.0000$ \\
+\hline
+\end{tabular}
+}
+\caption{Benign ROI Temporal Fidelity (Top 10\% Enhancing Pixels)}
+\label{}
+\end{table}
+
+
+\begin{table}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|}
+\hline
+Method & EI Loss & ArrShift & EnhScale & Rebin & AF & Seconds/Frame & SSIM & PSNR & MSE & LPIPS \\
+\hline
+BRISKNet & False & NA & NA & False & 14.0 & 21.4 & $0.9746 \pm 0.0088$ & $46.5175 \pm 2.8895$ & $0.0393 \pm 0.0155$ & $0.0060 \pm 0.0025$ \\
+\hline
+BRISKNet & True & False & False & False & 14.0 & 21.4 & $0.9836 \pm 0.0064$ & $47.7119 \pm 2.5592$ & $0.0302 \pm 0.0127$ & $0.0044 \pm 0.0021$ \\
+\hline
+BRISKNet & True & True & True & True & 14.0 & 21.4 & $0.9828 \pm 0.0065$ & $47.9237 \pm 2.5956$ & $0.0288 \pm 0.0124$ & $0.0040 \pm 0.0015$ \\
+\hline
+BRISKNet & True & False & True & True & 14.0 & 21.4 & $0.9836 \pm 0.0064$ & $47.7119 \pm 2.5592$ & $0.0302 \pm 0.0127$ & $0.0044 \pm 0.0021$ \\
+\hline
+BRISKNet & True & True & True & False & 14.0 & 21.4 & \textbf{$0.9831 \pm 0.0066$} & \textbf{$48.1801 \pm 2.6107$} & \textbf{$0.0270 \pm 0.0113$} & \textbf{$0.0036 \pm 0.0016$} \\
+\hline
+BRISKNet & True & True & False & True & 14.0 & 21.4 & $0.9831 \pm 0.0066$ & $48.1729 \pm 2.5971$ & $0.0273 \pm 0.0118$ & $0.0037 \pm 0.0015$ \\
+\hline
+GRASP &  NA &  NA &  NA & NA & 14.0 & 21.4 & $0.9795 \pm 0.0077$ & $48.5799 \pm 2.8525$ & $0.0245 \pm 0.0097$ & $0.0021 \pm 0.0011$ \\
+\hline
+\end{tabular}
+}
+\caption{Spatial Image Quality: Spatiotemporal Transformation Ablations}
+\label{}
+\end{table}
+
+% \begin{table}[htbp]
+% \centering
+% \resizebox{\textwidth}{!}{%
+% \begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|c|c|c|c|}
+% \hline
+% Method & use_ei_loss & temporal_transform & enable & AF & Seconds/Frame & curve_corr & curve_mae & early_corr & early_mae & ttae_sec & wash_in_slope_err & iauc10_err & peak_err & ttpeak_err_sec \\
+% \hline
+% BRISKNet & False & warp &  & 14.0 & 21.4 & $0.9888 \pm 0.0145$ & $0.5089 \pm 0.2148$ & $0.6416 \pm 0.3249$ & $0.6730 \pm 0.3431$ & $3.6109 \pm 6.8859$ & $0.0094 \pm 0.0050$ & $12.1764 \pm 6.7714$ & $0.7376 \pm 0.4579$ & $12.2672 \pm 7.8862$ \\
+% \hline
+% BRISKNet & True & none &  & 14.0 & 21.4 & $0.9920 \pm 0.0080$ & $0.5165 \pm 0.2309$ & $0.6822 \pm 0.2409$ & $0.7064 \pm 0.3668$ & $4.6859 \pm 7.7825$ & $0.0106 \pm 0.0054$ & $12.5246 \pm 8.3622$ & $0.7579 \pm 0.4830$ & $11.9155 \pm 8.9212$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & True & 14.0 & 21.4 & $0.9949 \pm 0.0039$ & $0.5165 \pm 0.2619$ & $0.6960 \pm 0.2785$ & $0.6949 \pm 0.4544$ & $3.2040 \pm 4.6341$ & $0.0081 \pm 0.0040$ & $13.4090 \pm 10.3379$ & $0.7593 \pm 0.5466$ & $10.9167 \pm 9.6559$ \\
+% \hline
+% BRISKNet & True & enh_scale & True & 14.0 & 21.4 & $0.9920 \pm 0.0080$ & $0.5165 \pm 0.2309$ & $0.6913 \pm 0.2263$ & $0.7064 \pm 0.3668$ & $4.6859 \pm 7.7825$ & $0.0106 \pm 0.0054$ & $12.5258 \pm 8.3603$ & $0.7581 \pm 0.4827$ & $11.8181 \pm 8.7526$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & False & 14.0 & 21.4 & $0.9925 \pm 0.0078$ & $0.5170 \pm 0.2405$ & $0.7173 \pm 0.2362$ & $0.7032 \pm 0.3828$ & $3.6230 \pm 5.3109$ & $0.0100 \pm 0.0065$ & $12.0378 \pm 8.7791$ & $0.7676 \pm 0.5033$ & $10.0770 \pm 7.0547$ \\
+% \hline
+% BRISKNet & True & arrival_shift & True & 14.0 & 21.4 & $0.9949 \pm 0.0042$ & $0.5124 \pm 0.2542$ & $0.6749 \pm 0.3370$ & $0.6873 \pm 0.4347$ & $2.6998 \pm 3.4000$ & $0.0073 \pm 0.0038$ & $13.3429 \pm 9.9839$ & $0.7527 \pm 0.5284$ & $10.9120 \pm 10.1859$ \\
+% \hline
+% GRASP &  &  &  & 14.0 & 21.4 & $0.9945 \pm 0.0021$ & $0.4701 \pm 0.1739$ & $0.7360 \pm 0.2146$ & $0.5766 \pm 0.3183$ & $4.7288 \pm 7.8672$ & $0.0074 \pm 0.0023$ & $11.6248 \pm 4.9930$ & $0.6572 \pm 0.3835$ & $9.6616 \pm 5.8036$ \\
+% \hline
+% \end{tabular}
+% }
+% \caption{Malignant ROI Temporal Fidelity (All Enhancing Pixels)}
+% \label{}
+% \end{table}
+
+% \begin{table}[htbp]
+% \centering
+% \resizebox{\textwidth}{!}{%
+% \begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|c|c|c|c|}
+% \hline
+% Method & use_ei_loss & temporal_transform & enable & AF & Seconds/Frame & curve_corr & curve_mae & early_corr & early_mae & ttae_sec & wash_in_slope_err & iauc10_err & peak_err & ttpeak_err_sec \\
+% \hline
+% BRISKNet & False & warp &  & 14.0 & 21.4 & $0.9863 \pm 0.0143$ & $0.2493 \pm 0.0846$ & $0.9288 \pm 0.0574$ & $0.3118 \pm 0.1074$ & $0.6602 \pm 0.8757$ & $0.0057 \pm 0.0018$ & $5.3902 \pm 1.9579$ & $0.3591 \pm 0.1541$ & $2.4613 \pm 2.5492$ \\
+% \hline
+% BRISKNet & True & none &  & 14.0 & 21.4 & $0.9891 \pm 0.0087$ & $0.2341 \pm 0.0939$ & $0.9245 \pm 0.0768$ & $0.3062 \pm 0.1244$ & $0.1200 \pm 0.2742$ & $0.0066 \pm 0.0025$ & $4.6138 \pm 2.0149$ & $0.4025 \pm 0.1899$ & $2.6791 \pm 2.9175$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & True & 14.0 & 21.4 & $0.9935 \pm 0.0044$ & $0.2609 \pm 0.0972$ & $0.9577 \pm 0.0506$ & $0.3666 \pm 0.1344$ & $0.2024 \pm 0.5216$ & $0.0063 \pm 0.0026$ & $5.9487 \pm 2.3372$ & $0.5301 \pm 0.2233$ & $1.3344 \pm 1.4121$ \\
+% \hline
+% BRISKNet & True & enh_scale & True & 14.0 & 21.4 & $0.9891 \pm 0.0087$ & $0.2341 \pm 0.0939$ & $0.9245 \pm 0.0767$ & $0.3062 \pm 0.1245$ & $0.1200 \pm 0.2742$ & $0.0066 \pm 0.0025$ & $4.6137 \pm 2.0151$ & $0.4025 \pm 0.1899$ & $2.6791 \pm 2.9175$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & False & 14.0 & 21.4 & $0.9920 \pm 0.0055$ & $0.2297 \pm 0.0907$ & $0.9591 \pm 0.0429$ & $0.3060 \pm 0.1185$ & $0.3297 \pm 1.0425$ & $0.0058 \pm 0.0025$ & $4.7549 \pm 1.6795$ & $0.4007 \pm 0.1884$ & $1.4575 \pm 1.6466$ \\
+% \hline
+% BRISKNet & True & arrival_shift & True & 14.0 & 21.4 & $0.9947 \pm 0.0035$ & $0.2448 \pm 0.1002$ & $0.9671 \pm 0.0427$ & $0.3432 \pm 0.1378$ & $0.0824 \pm 0.2606$ & $0.0054 \pm 0.0023$ & $5.8073 \pm 2.4199$ & $0.4698 \pm 0.2064$ & $0.9217 \pm 1.5754$ \\
+% \hline
+% GRASP &  &  &  & 14.0 & 21.4 & $0.9900 \pm 0.0075$ & $0.2654 \pm 0.0828$ & $0.9615 \pm 0.0135$ & $0.3813 \pm 0.1319$ & $0.9352 \pm 1.2911$ & $0.0066 \pm 0.0015$ & $6.5413 \pm 2.3664$ & $0.4426 \pm 0.1825$ & $0.7425 \pm 0.5817$ \\
+% \hline
+% \end{tabular}
+% }
+% \caption{Benign ROI Temporal Fidelity (All Enhancing Pixels)}
+% \label{}
+% \end{table}
+
+
+% \begin{table}[htbp]
+% \centering
+% \resizebox{\textwidth}{!}{%
+% \begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|c|c|c|c|}
+% \hline
+% Method & use_ei_loss & temporal_transform & enable & AF & Seconds/Frame & curve_corr & curve_mae & early_corr & early_mae & ttae_sec & wash_in_slope_err & iauc10_err & peak_err & ttpeak_err_sec \\
+% \hline
+% BRISKNet & False & warp &  & 14.0 & 21.4 & $0.9961 \pm 0.0042$ & $0.7547 \pm 0.4771$ & $0.6195 \pm 0.4063$ & $1.0354 \pm 0.6803$ & $3.2738 \pm 5.0857$ & $0.0105 \pm 0.0078$ & $20.3746 \pm 10.4247$ & $1.1574 \pm 0.7764$ & $13.5686 \pm 14.7789$ \\
+% \hline
+% BRISKNet & True & none &  & 14.0 & 21.4 & $0.9942 \pm 0.0060$ & $0.7956 \pm 0.4604$ & $0.6710 \pm 0.3945$ & $1.0811 \pm 0.7235$ & $4.2010 \pm 6.9065$ & $0.0163 \pm 0.0074$ & $20.6744 \pm 9.5031$ & $1.2248 \pm 0.9054$ & $10.3021 \pm 11.6925$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & True & 14.0 & 21.4 & $0.9951 \pm 0.0059$ & $0.8691 \pm 0.5892$ & $0.6319 \pm 0.4024$ & $1.2239 \pm 1.0105$ & $3.6884 \pm 4.4149$ & $0.0125 \pm 0.0041$ & $26.2055 \pm 18.6418$ & $1.3793 \pm 1.2514$ & $11.5368 \pm 12.7457$ \\
+% \hline
+% BRISKNet & True & enh_scale & True & 14.0 & 21.4 & $0.9942 \pm 0.0060$ & $0.7956 \pm 0.4604$ & $0.6710 \pm 0.3945$ & $1.0812 \pm 0.7234$ & $4.2010 \pm 6.9065$ & $0.0163 \pm 0.0074$ & $20.6742 \pm 9.5017$ & $1.2252 \pm 0.9045$ & $10.3021 \pm 11.6925$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & False & 14.0 & 21.4 & $0.9950 \pm 0.0054$ & $0.7863 \pm 0.4938$ & $0.6273 \pm 0.4010$ & $1.0868 \pm 0.7365$ & $3.3482 \pm 4.6323$ & $0.0127 \pm 0.0083$ & $19.8971 \pm 12.7053$ & $1.2593 \pm 0.9215$ & $11.2987 \pm 12.2666$ \\
+% \hline
+% BRISKNet & True & arrival_shift & True & 14.0 & 21.4 & $0.9949 \pm 0.0062$ & $0.8613 \pm 0.5732$ & $0.5873 \pm 0.4289$ & $1.1984 \pm 0.9605$ & $2.3141 \pm 2.8080$ & $0.0093 \pm 0.0028$ & $27.4131 \pm 16.7775$ & $1.3668 \pm 1.2075$ & $11.8615 \pm 13.6779$ \\
+% \hline
+% GRASP &  &  &  & 14.0 & 21.4 & $0.9970 \pm 0.0030$ & $0.6148 \pm 0.3527$ & $0.6659 \pm 0.4250$ & $0.8025 \pm 0.5372$ & $6.7291 \pm 8.0866$ & $0.0078 \pm 0.0033$ & $16.2494 \pm 6.2401$ & $0.9050 \pm 0.6021$ & $9.9351 \pm 14.5518$ \\
+% \hline
+% \end{tabular}
+% }
+% \caption{Malignant ROI Temporal Fidelity (Top 20\% Enhancing Pixels)}
+% \label{}
+% \end{table}
+
+% \begin{table}[htbp]
+% \centering
+% \resizebox{\textwidth}{!}{%
+% \begin{tabular}{|l|c|c|c|c|c|c|c|c|c|c|c|c|c|c|}
+% \hline
+% Method & use_ei_loss & temporal_transform & enable & AF & Seconds/Frame & curve_corr & curve_mae & early_corr & early_mae & ttae_sec & wash_in_slope_err & iauc10_err & peak_err & ttpeak_err_sec \\
+% \hline
+% BRISKNet & False & warp &  & 14.0 & 21.4 & $0.9968 \pm 0.0017$ & $0.3068 \pm 0.1340$ & $0.9780 \pm 0.0247$ & $0.3891 \pm 0.1793$ & $0.0000 \pm 0.0000$ & $0.0068 \pm 0.0025$ & $7.0928 \pm 2.9976$ & $0.4580 \pm 0.2792$ & $0.2622 \pm 0.5752$ \\
+% \hline
+% BRISKNet & True & none &  & 14.0 & 21.4 & $0.9968 \pm 0.0016$ & $0.2864 \pm 0.1390$ & $0.9699 \pm 0.0429$ & $0.3757 \pm 0.2056$ & $0.0000 \pm 0.0000$ & $0.0090 \pm 0.0039$ & $5.9029 \pm 3.5055$ & $0.5155 \pm 0.3079$ & $1.2933 \pm 1.6954$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & True & 14.0 & 21.4 & $0.9967 \pm 0.0021$ & $0.4024 \pm 0.1515$ & $0.9824 \pm 0.0280$ & $0.5940 \pm 0.2387$ & $0.0000 \pm 0.0000$ & $0.0096 \pm 0.0049$ & $9.5732 \pm 4.2259$ & $0.8817 \pm 0.4025$ & $0.3297 \pm 1.0425$ \\
+% \hline
+% BRISKNet & True & enh_scale & True & 14.0 & 21.4 & $0.9968 \pm 0.0016$ & $0.2864 \pm 0.1390$ & $0.9699 \pm 0.0428$ & $0.3757 \pm 0.2057$ & $0.0000 \pm 0.0000$ & $0.0090 \pm 0.0039$ & $5.9031 \pm 3.5040$ & $0.5155 \pm 0.3080$ & $1.2933 \pm 1.6954$ \\
+% \hline
+% BRISKNet & True & arrival_shift_enh_scale & False & 14.0 & 21.4 & $0.9970 \pm 0.0017$ & $0.2959 \pm 0.1320$ & $0.9843 \pm 0.0256$ & $0.3813 \pm 0.1832$ & $0.0000 \pm 0.0000$ & $0.0077 \pm 0.0043$ & $5.7618 \pm 2.5999$ & $0.5235 \pm 0.3037$ & $0.1948 \pm 0.6160$ \\
+% \hline
+% BRISKNet & True & arrival_shift & True & 14.0 & 21.4 & $0.9971 \pm 0.0020$ & $0.3802 \pm 0.1613$ & $0.9842 \pm 0.0286$ & $0.5589 \pm 0.2497$ & $0.0000 \pm 0.0000$ & $0.0080 \pm 0.0038$ & $9.6236 \pm 4.5229$ & $0.7801 \pm 0.3842$ & $0.3061 \pm 0.9680$ \\
+% \hline
+% GRASP &  &  &  & 14.0 & 21.4 & $0.9966 \pm 0.0020$ & $0.2755 \pm 0.0903$ & $0.9748 \pm 0.0146$ & $0.3601 \pm 0.1345$ & $0.0000 \pm 0.0000$ & $0.0071 \pm 0.0022$ & $5.4087 \pm 2.3579$ & $0.4705 \pm 0.1718$ & $0.0000 \pm 0.0000$ \\
+% \hline
+% \end{tabular}
+% }
+% \caption{Benign ROI Temporal Fidelity (Top 20\% Enhancing Pixels)}
+% \label{}
+% \end{table}
+
+
+\subsubsection{Time Encoding}
+
+
+
+\section{Discussion}
+
+- DRO evalaution can encourage temporal smoothing
+
+\section{Conclusion}
+
+%
+%
+%
+% \section{Important Messages to MICCAI Authors}
+
+% This is a modified version of Springer's LNCS template suitable for anonymized MICCAI 2026 main conference submissions. The author section has already been anonymized for you.  You cannot remove the author section to gain extra writing space.  You must not remove the abstract and keyword sections in your submission.
+
+% To avoid an accidental anonymity breach, you are not required to include the \textbf{Acknowledgments} and the \textbf{Disclosure of Interest} sections for the initial submission phase.  If your paper is accepted, you must reinsert these sections in your final paper.  If you opted to include these sections in the initial submission phase, they will count toward the 8-page limit.
+
+% To avoid desk rejection of your paper, you are encouraged to read "Avoiding Desk Rejection" by the MICCAI submission platform manager.  A few important rules are summarized below for your reference:  
+% \begin{enumerate}
+%     \item Do not modify or remove the provided anonymized author section except for inserting your paper ID.
+%     \item Do not remove the keyword section to gain extra writing space. Authors must provide at least one keyword.
+%     \item Do not remove the abstract sections to gain extra writing space. 
+%     \item Inline figures (wrapping text around a figure) are not allowed.
+%     \item Authors are not allowed to change the default margins, font size, font type, and document style.  If you are using any additional packages, it is the author's responsibility to ensure they do not inherently alter the document's layout.
+%     \item It is prohibited to use commands such as \verb|\vspace| and \verb|\hspace| to reduce the pre-set white space in the document.  Shrinking the white space between your figures/tables and their captions, and between sections and subsections, is strictly prohibited.
+%     \item Please make sure your figures and tables do not span into the margins.
+%     \item If you have tables, the smallest font size allowed is 8pt.  Your tables should not be inserted as figures.
+%     \item Please ensure your paper is properly anonymized.  Refer to your previously published paper in the third person.  Data collection location of private dataset should be masked.
+%         \item  If you are including a link to your code repository or datasets or submitting supplementary materials, you must ensure your repository and supplementary materials are anonymized.
+%     \item Your paper must not exceed the page limit.  You can have 8 pages of the main content (text (including paper title, author section, abstract, keyword section), figures and tables, conclusion, acknowledgment and disclaimer) plus up to 2 pages of references.  The reference section does not need to start on a new page.  
+%     \item *Beginning in 2025* 
+%     Supplementary materials are limited to multimedia content (e.g., videos) as warranted by the technical application (e.g., robotics, surgery, ...). These files should not display any proofs, analysis, additional results, or embedded slides, and should not show any identification markers either. Violation of this guideline will lead to desk rejection. PDF files may not be submitted as supplementary materials in 2026 unless authors are citing a paper that has not yet been published. In such a case, authors are required to submit an anonymized version of the cited paper. ACs will perform checks to ensure the integrity.
+% \end{enumerate}
+
+
+% \section{Section}
+% \subsection{A Subsection Sample}
+% Please note that the first paragraph of a section or subsection is
+% not indented. The first paragraph that follows a table, figure,
+% equation etc. does not need an indent, either.
+
+% Subsequent paragraphs, however, are indented.
+
+% \subsubsection{Sample Heading (Third Level)} Only two levels of
+% headings should be numbered. Lower level headings remain unnumbered;
+% they are formatted as run-in headings.
+
+% \paragraph{Sample Heading (Fourth Level)}
+% The contribution should contain no more than four levels of
+% headings. Table~\ref{tab1} gives a summary of all heading levels.
+
+% \begin{table}
+% \caption{Table captions should be placed above the
+% tables.}\label{tab1}
+% \begin{tabular}{|l|l|l|}
+% \hline
+% Heading level &  Example & Font size and style\\
+% \hline
+% Title (centered) &  {\Large\bfseries Lecture Notes} & 14 point, bold\\
+% 1st-level heading &  {\large\bfseries 1 Introduction} & 12 point, bold\\
+% 2nd-level heading & {\bfseries 2.1 Printing Area} & 10 point, bold\\
+% 3rd-level heading & {\bfseries Run-in Heading in Bold.} Text follows & 10 point, bold\\
+% 4th-level heading & {\itshape Lowest Level Heading.} Text follows & 10 point, italic\\
+% \hline
+% \end{tabular}
+% \end{table}
+
+
+% \begin{table}
+% \caption{Test table.}\label{tab2}
+% %\scalebox{0.8}
+% {
+% \begin{tabular}{|l|l|l|}
+% \hline
+% Heading level &  Example & Font size and style\\
+% \hline
+% \small small &  {\Large\bfseries Lecture Notes} & 14 point, bold\\
+% \tiny tiny &  {\large\bfseries 1 Introduction} & 12 point, bold\\
+% \normalfont normal & {\bfseries 2.1 Printing Area} & 10 point, bold\\
+% \fontsize{8}{9} 8pt & {\bfseries Run-in Heading in Bold.} Text follows & 10 point, bold\\
+% \scriptsize script & {\itshape Lowest Level Heading.} Text follows & 10 point, italic\\
+% \hline
+% \end{tabular}}
+% \end{table}
+
+% \noindent Displayed equations are centered and set on a separate
+% line.
+% \begin{equation}
+% x + y = z
+% \end{equation}
+% Please try to avoid rasterized images for line-art diagrams and
+% schemas. Whenever possible, use vector graphics instead (see
+% Fig.~\ref{fig1}).
+
+% \begin{figure}
+% \includegraphics[width=\textwidth]{fig1.eps}
+% \caption{A figure caption is always placed below the illustration.
+% Please note that short captions are centered, while long ones are
+% justified by the macro package automatically.} \label{fig1}
+% \end{figure}
+
+% \begin{theorem}
+% This is a sample theorem. The run-in heading is set in bold, while
+% the following text appears in italics. Definitions, lemmas,
+% propositions, and corollaries are styled the same way.
+% \end{theorem}
+% %
+% % the environments 'definition', 'lemma', 'proposition', 'corollary',
+% % 'remark', and 'example' are defined in the LLNCS documentclass as well.
+% %
+% \begin{proof}
+% Proofs, examples, and remarks have the initial word in italics,
+% while the following text appears in normal font.
+% \end{proof}
+% For citations of references, we prefer the use of square brackets
+% and consecutive numbers. Citations using labels or the author/year
+% convention are also acceptable. The following bibliography provides
+% a sample reference list with entries for journal
+% articles~\cite{ref_article1}, an LNCS chapter~\cite{ref_lncs1}, a
+% book~\cite{ref_book1}, proceedings without editors~\cite{ref_proc1},
+% and a homepage~\cite{ref_url1}. Multiple citations are grouped
+% \cite{ref_article1,ref_lncs1,ref_book1},
+% \cite{ref_article1,ref_book1,ref_proc1,ref_url1}.
+
+%  %% removed for anonymized MICCAI submission.
+    
+%     % The following acknowledgement and disclaimer sections can be removed for the double-blind review process.  If and when your paper is accepted, reinsert the acknowledgement and the disclaimer clause in your final camera-ready version.
+%     % IF you opted to include the acknowledgement and disclaimer sections, they will count towards the 8-page limit.
+
+% \begin{credits}
+% \subsubsection{\ackname} A bold run-in heading in small font size at the end of the paper is
+% used for general acknowledgments, for example: This study was funded
+% by X (grant number Y).
+
+% \subsubsection{\discintname}
+% It is now necessary to declare any competing interests or to specifically
+% state that the authors have no competing interests. Please place the
+% statement with a bold run-in heading in small font size beneath the
+% (optional) acknowledgments\footnote{If EquinOCS, our proceedings submission
+% system, is used, then the disclaimer can be provided directly in the system.},
+% for example: The authors have no competing interests to declare that are
+% relevant to the content of this article. Or: Author A has received research
+% grants from Company W. Author B has received a speaker honorarium from
+% Company X and owns stock in Company Y. Author C is a member of committee Z.
+% \end{credits}
+
+
+%
+% ---- Bibliography ----
+%
+% BibTeX users should specify bibliography style 'splncs04'.
+% References will then be sorted and formatted in the correct style.
+%
+\bibliographystyle{splncs04}
+\bibliography{references}
+% \bibliography{mybibliography}
+
+% \begin{thebibliography}{8}
+% \bibitem{ref_article1}
+% Author, F.: Article title. Journal \textbf{2}(5), 99--110 (2016)
+
+% \bibitem{ref_lncs1}
+% Author, F., Author, S.: Title of a proceedings paper. In: Editor,
+% F., Editor, S. (eds.) CONFERENCE 2016, LNCS, vol. 9999, pp. 1--13.
+% Springer, Heidelberg (2016). \doi{10.10007/1234567890}
+
+% \bibitem{ref_book1}
+% Author, F., Author, S., Author, T.: Book title. 2nd edn. Publisher,
+% Location (1999)
+
+% \bibitem{ref_proc1}
+% Author, A.-B.: Contribution title. In: 9th International Proceedings
+% on Proceedings, pp. 1--2. Publisher, Location (2010)
+
+% \bibitem{ref_url1}
+% LNCS Homepage, \url{http://www.springer.com/lncs}, last accessed 2023/10/25
+% \end{thebibliography}
+\end{document}

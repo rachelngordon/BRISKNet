@@ -1,0 +1,394 @@
+% This is a modified version of Springer's LNCS template suitable for anonymized MICCAI 2025 main conference submissions. 
+% Original file: samplepaper.tex, a sample chapter demonstrating the LLNCS macro package for Springer Computer Science proceedings; Version 2.21 of 2022/01/12
+
+\documentclass[runningheads]{llncs}
+%
+\usepackage[T1]{fontenc}
+% T1 fonts will be used to generate the final print and online PDFs,
+% so please use T1 fonts in your manuscript whenever possible.
+% Other font encodings may result in incorrect characters.
+%
+\usepackage{graphicx,verbatim}
+\usepackage{amsmath}
+\usepackage{subcaption}
+
+% Used for displaying a sample figure. If possible, figure files should
+% be included in EPS format.
+%
+% If you use the hyperref package, please uncomment the following two lines
+% to display URLs in blue roman font according to Springer's eBook style:
+\usepackage{hyperref}
+\usepackage{color}
+\renewcommand\UrlFont{\color{blue}\rmfamily}
+\urlstyle{rm}
+%
+
+\begin{document}
+%
+\title{Accelerating Breast DCE-MRI with Unsupervised Learning to Reveal Rapid Kinetic Biomarkers}
+\titlerunning{Accelerating Breast DCE-MRI with Unsupervised Learning}
+% If the paper title is too long for the running head, you can set
+% an abbreviated paper title here
+%
+\begin{comment}  %% Removed for anonymized MICCAI submission
+\author{First Authorvcfghjinst{1}\orcidID{0000-1111-2222-3333} \and
+Second Author\inst{2,3}\orcidID{1111-2222-3333-4444} \and
+Third Author\inst{3}\orcidID{2222--3333-4444-5555}}
+%
+\authorrunning{F. Author et al.}
+% First names are abbreviated in the running head.
+% If there are more than two authors, 'et al.' is used.
+%
+\institute{Princeton University, Princeton NJ 08544, USA \and
+Springer Heidelberg, Tiergartenstr. 17, 69121 Heidelberg, Germany
+\email{lncs@springer.com}\\
+\url{http://www.springer.com/gp/computer-science/lncs} \and
+ABC Institute, Rupert-Karls-University Heidelberg, Heidelberg, Germany\\
+\email{\{abc,lncs\}@uni-heidelberg.de}}
+
+\end{comment}
+
+\author{Anonymized Authors}  %% Added for anonymized MICCAI submission
+\authorrunning{Anonymized Author et al.}
+\institute{Anonymized Affiliations \\
+    \email{email@anonymized.com}}
+  
+\maketitle              % typeset the header of the contribution
+%
+\begin{abstract}
+The abstract should briefly summarize the contents of the paper in 150--250 words.  If you are to include a link to your Repository, please make sure it is anonymized for the double-blind review phase.
+% NOTE: need to anonymize links before submission
+Code can be found at \url{https://github.com/rachelngordon/radial-breast-ddei/tree/main}
+
+\keywords{First keyword  \and Second keyword \and Another keyword.}
+% Authors must provide keywords and are not allowed to remove this Keyword section.
+
+\end{abstract}
+
+
+\section{Introduction}
+
+Breast cancer affects one in eight women in the United States, yet current clinical risk stratification remains inadequate to personalize screening~\cite{Puckett2025Disparity,Niell2021LifetimeRisk}. Better stratification is key to developing personalized screening strategies that detect cancers earlier, while they remain curable. Dynamic contrast enhanced (DCE) MRI measures how rapidly contrast enters and leaves breast tissue, reflecting vascular architecture and tumor biology~\cite{Sachani2024VascularityReview}; contrast-kinetic features derived from DCE-MRI underpin many radiomics analyses for diagnosis and risk prediction~\cite{Turnbull2009Dynamic,Kim2025OncotypeRadiomics,Cheng2025KineticHeterogeneity}. Capturing these kinetics requires high temporal resolution, but accelerating acquisitions degrades image quality. Recent pharmacokinetic studies suggest that enhancement patterns within the first two seconds after contrast injection encode vascular signatures that could reveal previously inaccessible aspects of tumor biology, and that bilateral asymmetry in the parenchymal kinetics of normal tissue is similarly associated with treatment response~\cite{REN20239}. Yet today’s ultrafast breast MRI protocols take from three to seven seconds per frame~\cite{Kataoka2024Ultrafast}, leaving the critical early two-second window of contrast dynamics effectively unresolved. Access to these rapid kinetics could expose richer physiological variation across individuals, driving more precise risk stratification and earlier cancer detection. 
+
+Resolving vital rapid contrast kinetics that carry biologically important information requires reducing acquisition times from the current 3--7 seconds per frame~\cite{Kataoka2024Ultrafast} to sub-2-seconds. While achieving such frame rates is feasible in principle using techniques such as compressed sensing, parallel imaging, and non-Cartesian sampling~\cite{Deshmane2012Parallel,Ye2019Compressed}, reconstruction quality degrades substantially as temporal resolution is pushed toward these faster frame rates. For example, Golden Angle Radial Sparse Parallel (GRASP) MRI~\cite{Feng2014Golden}, a widely used clinical method, enables flexible temporal binning but exhibits increasing streak artifacts as temporal resolution increases. Consequently, accurately visualizing early contrast enhancement patterns and achieving better risk stratification is constrained by a fundamental trade-off between temporal resolution and spatial image fidelity in DCE-MRI.
+
+
+Deep learning methods offer promise for improved reconstruction, but supervised approaches are fundamentally limited by the lack of fully-sampled ground truth data in DCE-MRI. It is impossible to obtain ground-truth fully-sampled DCE-MRI because fast imaging inherently requires undersampling. Therefore, an unsupervised approach is required. This work addresses current limitations in DCE-MRI reconstruction by training an unsupervised, physics-informed network to reconstruct multi-coil radial DCE-MRI that explicitly models rapid pharmacokinetic dynamics, extending existing architectures to the dynamic breast imaging setting. By enabling enhanced DCE-MRI reconstruction at higher temporal resolutions, this work lays the foundation for the discovery of new kinetic biomarkers for breast cancer risk prediction, enabling earlier detection, more personalized screening strategies, and improved patient experience through shorter scan times. 
+% The main contributions of this work are as follows:
+% \begin{enumerate}
+%     \item
+%     \item
+%     \item
+% \end{enumerate}
+
+\section{Related Work}
+
+\subsection{Traditional Methods for Accelerating MRI Acquisition}
+
+Accelerating MRI has been a continuous area of research within the field of signal processing, with significant advancements being made toward reducing scan times and increasing temporal resolution of dynamic MRI. Parallel imaging is a common technique that uses multiple receiver coils to reduce the amount of k-space data required by recording different parts of the image in parallel \cite{Deshmane2012Parallel}. The coil images are then iteratively combined to reconstruct the final image. However, parallel imaging can lead to aliasing artifacts if the coil sensitivities are not homogeneous and non-overlapping, which is the case in many practical applications. Therefore, algorithms such as Sensitivity Encoding (SENSE) \cite{Pruessmann1999SENSE} and Generalized Autocalibrating Partially Parallel Acquisition (GRAPPA) \cite{Griswold2002GRAPPA} are used to reduce artifacts in the reconstructed image, although these reconstructions are prone to decreased signal-to-noise ratio (SNR) and are limited to moderate acceleration factors. 
+
+Compressed sensing is another technique used to accelerate MRI acquisition by exploiting the redundancy of natural images by enforcing sparsity in some transform domain \cite{Ye2019Compressed}. Compressed sensing requires that the k-space follows an incoherent or random-like sampling pattern, such as radial \cite{radialstackofstars} or spiral trajectories \cite{Tan2009SpiralTrajectory}, so that artifacts present as low-level noise throughout the image rather than structured ghost-like artifacts. These artifacts are reduced through sparsity regularization and denoising in the transform domain. 
+
+MRI acquisition and reconstruction techniques combining the strengths of parallel imaging and compressed sensing have been developed, including iterative Golden Angle Radial Sparse Parallel MRI (iGRASP) \cite{Feng2014Golden}. iGRASP is a flexible, free-breathing technique for dynamic MRI that involves acquiring the k-space in a radial stack-of-stars trajectory, in which each radial spoke is rotated by the golden angle. However, iGRASP reconstructions are prone to streak artifacts and are fundamentally limited to moderate accelerations, leaving the early window of contrast kinetics still widely unexplored.
+
+
+
+
+\subsection{Physics-informed Deep Learning Reconstruction}
+
+Many works in MRI reconstruction leverage physics-informed deep learning to incorporate measurement-domain information from k-space into neural networks \cite{Wang2024KnowledgeDrivenFastMRI}. Among these, unrolled networks have emerged as a dominant paradigm for solving linear inverse problems, including MRI reconstruction, as they explicitly integrate knowledge from traditional iterative reconstruction algorithms \cite{Chen2025UnrolledInverseProblems,10629179,Ramzi2022NCPDNet,Kofler2021EndToEndRadialCineMRI}. Related works have also explored frequency-domain modeling within deep learning reconstruction frameworks, such as the Fourier convolution block \cite{SUN2025103349}, non-local Fourier attention \cite{ZHOU2023104632}, complex-valued k-space constraints \cite{10412627}, or learned priors \cite{Liu2020AutoencodingPriorsMRI}. Other works utilize more implicit physics awareness by enforcing consistency with k-space measurements and improving reconstructions through global spatial context \cite{10075478,10629179}. Several works have extended these ideas to non-Cartesian acquisitions, including radial k-space sampling \cite{s22197277}, while recent hybrid approaches such as TC-KANRecon incorporate partial physics awareness \cite{Ge2025TCKANRecon}.
+
+\subsection{Supervised MRI Reconstruction}
+
+Supervised MRI reconstruction learns a mapping from undersampled measurements or zero-filled reconstructions to reference images, and therefore relies on access to high-quality ground truth data during training \cite{Hossain2024DeepLearningMRI,Singh2023FastMRIReview,Heckel2024DeepLearningMRI}. While supervised learning remains a dominant technique in deep-learning-based MRI reconstruction, the need for ground truth data poses challenges in applications where fully sampled reference images are difficult or impractical to obtain, such as in many dynamic imaging settings. Early supervised approaches primarily utilized CNNs and residual learning to reduce aliasing artifacts in image space \cite{Hyun2018DeepLearningMRI,CHATTERJEE2022105321}. Subsequent work utilized GANs and transformers to improve sharpness and detail preservation \cite{LIU202277,Huang2022EdgeEnhancedFastMRI,NOOR2024106218,HUANG2022281}, while other approaches learned more direct sensor-to-image mappings \cite{Zhu2018DomainTransformMRI}. Clinical feasibility has also been demonstrated by \cite{Rastogi2024DeepLearningMRI}, which involves a multi-center study that demonstrates preservation of oncological biomarkers in supervised MRI reconstruction. Similar works have sought to address generalization across anatomies and domains by proposing methods for anatomy-agnostic reconstruction \cite{10.1007/978-3-030-87231-1_21} or transfer learning across imaging modalities \cite{Han2018DomainAdaptationMRI}. Finally, supervised reconstruction has been extended to non-Cartesian sampling patterns, with the objectives of removing streak artifacts and preserving temporal consistency \cite{Hauptmann2018RealtimeCMR,Kofler2019SpatioTemporalMRI,Shen2020PCNNRealtimeMRI,Jafari2022GRASPnetDCE,CHATTERJEE2022105321}. Related applications of supervised reconstruction also explore super-resolution and dynamic enhancement, often using retrospective undersampling or simulated ground truth data for training  \cite{LYU2024103142,SARASAEN2021102196,Chatterjee2024DDoSUNet,10.1007/978-3-030-32251-9_77}. 
+
+\subsection{Unsupervised Dynamic MRI Reconstruction}
+
+- set up why unsupervised learning is important
+
+- include SSDU
+
+- maybe combine evaluation section into this one
+
+- situate the current method, how it addresses limitations and builds on existing work
+
+
+\section{Methods}
+
+\subsection{Dataset}
+
+This work utilizes the fastMRI breast dataset \cite{solomon2024fastmribreastpubliclyavailable}, which contains raw k-space data for both pre-contrast and DCE-MRI acquisitions for 300 patients. The data were acquired using a T1-weighted free-breathing golden-angle radial volumetric interpolated breath-hold examination (VIBE) sequence on a 3T scanner with a 16-channel breast coil. Each scan had a duration of 2.5 minutes and employed a 3D stack-of-stars sampling trajectory with 83 partitions in the $k_z$ direction and partial Fourier sampling of 6/8, resulting in 192 reconstructed slices. A total of 288 radial spokes were acquired continuously per scan. In addition to the raw k-space data, the dataset provides GRASP reconstruction code, which enables flexible temporal binning of radial spokes into a variable number of dynamic frames. The dataset contains a total of 90 malignant lesions, 159 benign lesions, and 51 patients with no lesion. Malignant lesions include invasive ductal carcinomas (IDC), invasive lobular carcinomas (ILC), and ductal carcinomas in-situ (DCIS). Of the 300 scans, two files were corrupted and removed from the dataset. The remaining 298 samples were split into train (258), validation (15), and test sets (25), with 69, 5, and 15 malignant samples, respectively.
+
+% include details about how the inputs are normalized or preprocessed (saved complex, zero-filled k-space)
+
+\subsection{Model Architecture}
+
+Unrolled networks--deep learning models that ``unroll'' each step of a traditional iterative optimization algorithm into the layers of a neural network--are the current state-of-the-art for linear inverse problems such as MRI reconstruction, due to their ability to incorporate MRI physics information into the network \cite{Hammernik2017Variational}. Most unrolled networks based on MRI reconstruction algorithms are designed for Cartesian data rather than radial or spiral trajectories. LSFPNet, an unrolled network based on Low-rank and Sparsity decomposition with Framelet transform and Primal-dual fixed point optimization \cite{9678015}, was designed specifically for dynamic radial MRI data \cite{He2023Unrolled}. LSFPNet was proposed for real-time MRI-guided brain intervention, providing fast and high-quality reconstructions for surgical imaging, despite the long reconstruction times typically associated with the classical LSFP algorithm. 
+
+This work utilizes LSFPNet, an unrolled network based on Low-rank and Sparsity decomposition with Framelet transform and Primal-dual fixed point optimization \cite{9678015}, that was designed for real-time MRI-guided brain intervention \cite{He2023Unrolled}. The traditional LSFP algorithm decomposes an image into two components: (1) the low-rank static background, and (2) the sparse dynamic component that involves few, localized changes over time. The optimization algorithm is as follows:
+
+${L,S} = \text{argmin}_{L,S} \frac{1}{2} ||E(L+S) - d ||_{2}^{2} + \lambda_{L}||L||_{*} + \lambda_{S}||\nabla_{t}S||_1 + \lambda_{L}^\psi||\psi L||_1 + \lambda_{S}^\psi||\psi S||_1$
+
+where $||E(L+S) - d ||_{2}^{2}$ is the data consistency term, $\lambda_{L}||L||_{*}$ is the low-rank constraint on $L$, $\lambda_{S}||\nabla_{t}S||_1$ is the sparsity constraint on $S$ that is enforced in the temporal difference domain, and $\lambda_{L}^\psi||\psi L||_1$ and $\lambda_{S}^\psi||\psi S||_1$ are the denoising constraints that enforce sparsity in the transform ($\psi$) domain (usually a Framelet transform) to smooth the image. LSFPNet unrolls this algorithm into a neural network by replacing the fixed Framelet transform with convolutional neural networks that map $L$ and $S$ into a learned feature space where sparsity is enforced. Each image component has a corresponding pair of adjoint CNNs that map to and from the feature space, and are constrained by the adjoint loss:
+
+In addition to the forward and backward CNNs, LSFPNet learns the optimal values for each of the regularization parameters ($\lambda_{L}$, $\lambda_{S}$, $\lambda_{L}^\psi$, and $\lambda_{S}^\psi$) and the step size. We trained our model with 3 block, where each block involves one iteration of the optimization algorithm, and CNNs with 3 layers and 16 channels each. The regularization parameters were initialized to $\lambda_{L}=0.0025$, $\lambda_{S}=0.05$, $\lambda_{L}^\psi=0.05$, and $\lambda_{S}^\psi=0.05$, and the step size was initialized to $\gamma=0.5$.
+
+\subsubsection{Temporal Grouping}
+
+
+\subsubsection{Acceleration and Time Index Encoding} 
+
+The original LSFPNet architecture was modified to optionally encode the acceleration factor and starting time point index, inspired by StyleGAN's mapping network for conditioning \cite{karras2019stylebasedgeneratorarchitecturegenerative}, implemented with Feature-wise Linear Modulation (FiLM) \cite{perez2017filmvisualreasoninggeneral}. The inverse acceleration, $\frac{1}{AF}$ and starting frame fraction, $\frac{i}{(T-1)}$, where $i$ is the index of the first time frame in the series, and $T$ is the total number of frames, are mapped to an embedding vector with dimension 128 using a mapping network consisting of 4 linear layers. FiLM-style feature modulation is used to project the embedding into per-channel scale and bias parameters. The parameters are used to modulate the output of the second layer of the forward CNN as $\text{ReLU}(X * (1 + \alpha \text{tanh}(\text{scale})) + \alpha \text{tanh}(\text{bias}))$, with $\alpha$ controlling the modulation strength with a default value of $\alpha=0.10$.
+
+
+\subsection{Training Framework}
+
+The Dynamic Diffeomorphic Equivariant Imaging (DDEI) framework \cite{Wang_2025}, which was developed for dynamic cine MRI reconstruction, was used to train the model. The framework is based on equivariant imaging, a principle that leverages prior spatial or temporal information to provide a strong self-supervised signal to the network \cite{chen2021equivariantimaginglearningrange}. The framework involves a measurement consistency (MC) loss that enforces consistency with the original k-space measurements, and an equivariant imaging (EI) loss that utilizes spatiotemporal transformations based on anatomical priors to reduce imaging artifacts.
+
+\subsubsection{Spatiotemporal Transformations for Breast DCE-MRI}
+
+The foundations of the EI loss are the anatomy-specific spatiotemporal transformations that are used to enforce equivariance and reduce imaging artifacts. 
+
+- discuss details of the transformations here
+
+\section{Results}
+
+\subsection{Evaluation Setup}
+
+\subsubsection{Digital Reference Object}
+
+% NOTE: need to anonymize links before submission
+
+Due to the lack of real ground truth data for dynamic MRI reconstruction problems at very high temporal resolutions, we utilize the Digital Reference Object Toolkit for breast DCE-MRI \cite{Bae2024Digital} to simulate ground truth images for evaluating our method at different accelerations. Their toolkit includes 53 2D DCE-MRI slices with segmentation masks and corresponding T1-weighted pre-scans that are used to create the digital reference object (DRO). It is important to note that the 53 samples in the DRO toolkit overlap with the samples in the fastMRI breast dataset, and the mapping between DRO and fastMRI samples can be found at \url{https://github.com/rachelngordon/radial-breast-ddei/blob/main/data/DROSubID_vs_fastMRIbreastID.csv}. To prevent data leakage, we utilized the mapping between DRO and fastMRI IDs to select validation and test samples from the toolkit and removed them from our training set. 
+
+\subsection{Ultra-High Acceleration Results}
+
+- results for reconstructing with 2, 4, and 8 spokes/frame
+
+\subsection{Ablation Experiments}
+
+\subsubsection{Equivariant Imaging Loss}
+
+% NOTE: ensure tables and figures are formatted properly for the required template
+
+\begin{table}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{|l|c|c|c|c|c|c|}
+\hline
+Reconstruction & SSIM & PSNR & MSE & LPIPS & MC (MAE) & EC Correlation \\
+\hline
+DL (MC) & 0.79 $\pm$ 0.07 & 28.80 $\pm$ 3.68 & 2.61 $\pm$ 1.67 & 0.21 $\pm$ 0.04 & 0.20 $\pm$ 0.07 & 0.92 $\pm$ 0.07 \\
+\hline
+\textbf{DL (MC + EI)} & \textbf{0.85 $\pm$ 0.03} & \textbf{29.17 $\pm$ 3.62} & \textbf{2.39 $\pm$ 1.47} & \textbf{0.21 $\pm$ 0.04} & \textbf{0.21 $\pm$ 0.07} & \textbf{0.98 $\pm$ 0.02} \\
+\hline
+GRASP & 0.73 $\pm$ 0.09 & 26.09 $\pm$ 3.93 & 5.07 $\pm$ 3.54 & 0.20 $\pm$ 0.02 & 0.11 $\pm$ 0.04 & 0.99 $\pm$ 0.01 \\
+\hline
+\end{tabular}
+}
+\caption{Equivariant Imaging Loss Ablation Comparison}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\begin{subfigure}{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/spatial_quality_fastMRI_breast_142_mc.png}
+    \caption{MC only reconstruction}
+    \label{fig:mc}
+\end{subfigure}
+
+\vspace{0.5em}
+
+\begin{subfigure}{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/spatial_quality_fastMRI_breast_142_ei.png}
+    \caption{MC + EI reconstruction}
+    \label{fig:ei}
+\end{subfigure}
+
+\caption{Comparison of reconstruction quality with and without equivariant imaging loss. The EI loss clearly reduces streak artifacts in the image and improves reconstruction quality over the MC loss alone.}
+\label{fig:mc_vs_ei}
+\end{figure}
+
+
+
+
+\subsubsection{Time Encoding}
+
+(may need to use augmentation and/or temporal grouping in these experiments to show encoding makes a difference)
+
+\section{Discussion}
+
+\section{Conclusion}
+
+%
+%
+%
+% \section{Important Messages to MICCAI Authors}
+
+% This is a modified version of Springer's LNCS template suitable for anonymized MICCAI 2026 main conference submissions. The author section has already been anonymized for you.  You cannot remove the author section to gain extra writing space.  You must not remove the abstract and keyword sections in your submission.
+
+% To avoid an accidental anonymity breach, you are not required to include the \textbf{Acknowledgments} and the \textbf{Disclosure of Interest} sections for the initial submission phase.  If your paper is accepted, you must reinsert these sections in your final paper.  If you opted to include these sections in the initial submission phase, they will count toward the 8-page limit.
+
+% To avoid desk rejection of your paper, you are encouraged to read "Avoiding Desk Rejection" by the MICCAI submission platform manager.  A few important rules are summarized below for your reference:  
+% \begin{enumerate}
+%     \item Do not modify or remove the provided anonymized author section except for inserting your paper ID.
+%     \item Do not remove the keyword section to gain extra writing space. Authors must provide at least one keyword.
+%     \item Do not remove the abstract sections to gain extra writing space. 
+%     \item Inline figures (wrapping text around a figure) are not allowed.
+%     \item Authors are not allowed to change the default margins, font size, font type, and document style.  If you are using any additional packages, it is the author's responsibility to ensure they do not inherently alter the document's layout.
+%     \item It is prohibited to use commands such as \verb|\vspace| and \verb|\hspace| to reduce the pre-set white space in the document.  Shrinking the white space between your figures/tables and their captions, and between sections and subsections, is strictly prohibited.
+%     \item Please make sure your figures and tables do not span into the margins.
+%     \item If you have tables, the smallest font size allowed is 8pt.  Your tables should not be inserted as figures.
+%     \item Please ensure your paper is properly anonymized.  Refer to your previously published paper in the third person.  Data collection location of private dataset should be masked.
+%         \item  If you are including a link to your code repository or datasets or submitting supplementary materials, you must ensure your repository and supplementary materials are anonymized.
+%     \item Your paper must not exceed the page limit.  You can have 8 pages of the main content (text (including paper title, author section, abstract, keyword section), figures and tables, conclusion, acknowledgment and disclaimer) plus up to 2 pages of references.  The reference section does not need to start on a new page.  
+%     \item *Beginning in 2025* 
+%     Supplementary materials are limited to multimedia content (e.g., videos) as warranted by the technical application (e.g., robotics, surgery, ...). These files should not display any proofs, analysis, additional results, or embedded slides, and should not show any identification markers either. Violation of this guideline will lead to desk rejection. PDF files may not be submitted as supplementary materials in 2026 unless authors are citing a paper that has not yet been published. In such a case, authors are required to submit an anonymized version of the cited paper. ACs will perform checks to ensure the integrity.
+% \end{enumerate}
+
+
+% \section{Section}
+% \subsection{A Subsection Sample}
+% Please note that the first paragraph of a section or subsection is
+% not indented. The first paragraph that follows a table, figure,
+% equation etc. does not need an indent, either.
+
+% Subsequent paragraphs, however, are indented.
+
+% \subsubsection{Sample Heading (Third Level)} Only two levels of
+% headings should be numbered. Lower level headings remain unnumbered;
+% they are formatted as run-in headings.
+
+% \paragraph{Sample Heading (Fourth Level)}
+% The contribution should contain no more than four levels of
+% headings. Table~\ref{tab1} gives a summary of all heading levels.
+
+% \begin{table}
+% \caption{Table captions should be placed above the
+% tables.}\label{tab1}
+% \begin{tabular}{|l|l|l|}
+% \hline
+% Heading level &  Example & Font size and style\\
+% \hline
+% Title (centered) &  {\Large\bfseries Lecture Notes} & 14 point, bold\\
+% 1st-level heading &  {\large\bfseries 1 Introduction} & 12 point, bold\\
+% 2nd-level heading & {\bfseries 2.1 Printing Area} & 10 point, bold\\
+% 3rd-level heading & {\bfseries Run-in Heading in Bold.} Text follows & 10 point, bold\\
+% 4th-level heading & {\itshape Lowest Level Heading.} Text follows & 10 point, italic\\
+% \hline
+% \end{tabular}
+% \end{table}
+
+
+% \begin{table}
+% \caption{Test table.}\label{tab2}
+% %\scalebox{0.8}
+% {
+% \begin{tabular}{|l|l|l|}
+% \hline
+% Heading level &  Example & Font size and style\\
+% \hline
+% \small small &  {\Large\bfseries Lecture Notes} & 14 point, bold\\
+% \tiny tiny &  {\large\bfseries 1 Introduction} & 12 point, bold\\
+% \normalfont normal & {\bfseries 2.1 Printing Area} & 10 point, bold\\
+% \fontsize{8}{9} 8pt & {\bfseries Run-in Heading in Bold.} Text follows & 10 point, bold\\
+% \scriptsize script & {\itshape Lowest Level Heading.} Text follows & 10 point, italic\\
+% \hline
+% \end{tabular}}
+% \end{table}
+
+% \noindent Displayed equations are centered and set on a separate
+% line.
+% \begin{equation}
+% x + y = z
+% \end{equation}
+% Please try to avoid rasterized images for line-art diagrams and
+% schemas. Whenever possible, use vector graphics instead (see
+% Fig.~\ref{fig1}).
+
+% \begin{figure}
+% \includegraphics[width=\textwidth]{fig1.eps}
+% \caption{A figure caption is always placed below the illustration.
+% Please note that short captions are centered, while long ones are
+% justified by the macro package automatically.} \label{fig1}
+% \end{figure}
+
+% \begin{theorem}
+% This is a sample theorem. The run-in heading is set in bold, while
+% the following text appears in italics. Definitions, lemmas,
+% propositions, and corollaries are styled the same way.
+% \end{theorem}
+% %
+% % the environments 'definition', 'lemma', 'proposition', 'corollary',
+% % 'remark', and 'example' are defined in the LLNCS documentclass as well.
+% %
+% \begin{proof}
+% Proofs, examples, and remarks have the initial word in italics,
+% while the following text appears in normal font.
+% \end{proof}
+% For citations of references, we prefer the use of square brackets
+% and consecutive numbers. Citations using labels or the author/year
+% convention are also acceptable. The following bibliography provides
+% a sample reference list with entries for journal
+% articles~\cite{ref_article1}, an LNCS chapter~\cite{ref_lncs1}, a
+% book~\cite{ref_book1}, proceedings without editors~\cite{ref_proc1},
+% and a homepage~\cite{ref_url1}. Multiple citations are grouped
+% \cite{ref_article1,ref_lncs1,ref_book1},
+% \cite{ref_article1,ref_book1,ref_proc1,ref_url1}.
+
+%  %% removed for anonymized MICCAI submission.
+    
+%     % The following acknowledgement and disclaimer sections can be removed for the double-blind review process.  If and when your paper is accepted, reinsert the acknowledgement and the disclaimer clause in your final camera-ready version.
+%     % IF you opted to include the acknowledgement and disclaimer sections, they will count towards the 8-page limit.
+
+% \begin{credits}
+% \subsubsection{\ackname} A bold run-in heading in small font size at the end of the paper is
+% used for general acknowledgments, for example: This study was funded
+% by X (grant number Y).
+
+% \subsubsection{\discintname}
+% It is now necessary to declare any competing interests or to specifically
+% state that the authors have no competing interests. Please place the
+% statement with a bold run-in heading in small font size beneath the
+% (optional) acknowledgments\footnote{If EquinOCS, our proceedings submission
+% system, is used, then the disclaimer can be provided directly in the system.},
+% for example: The authors have no competing interests to declare that are
+% relevant to the content of this article. Or: Author A has received research
+% grants from Company W. Author B has received a speaker honorarium from
+% Company X and owns stock in Company Y. Author C is a member of committee Z.
+% \end{credits}
+
+
+%
+% ---- Bibliography ----
+%
+% BibTeX users should specify bibliography style 'splncs04'.
+% References will then be sorted and formatted in the correct style.
+%
+\bibliographystyle{splncs04}
+\bibliography{references}
+% \bibliography{mybibliography}
+
+% \begin{thebibliography}{8}
+% \bibitem{ref_article1}
+% Author, F.: Article title. Journal \textbf{2}(5), 99--110 (2016)
+
+% \bibitem{ref_lncs1}
+% Author, F., Author, S.: Title of a proceedings paper. In: Editor,
+% F., Editor, S. (eds.) CONFERENCE 2016, LNCS, vol. 9999, pp. 1--13.
+% Springer, Heidelberg (2016). \doi{10.10007/1234567890}
+
+% \bibitem{ref_book1}
+% Author, F., Author, S., Author, T.: Book title. 2nd edn. Publisher,
+% Location (1999)
+
+% \bibitem{ref_proc1}
+% Author, A.-B.: Contribution title. In: 9th International Proceedings
+% on Proceedings, pp. 1--2. Publisher, Location (2010)
+
+% \bibitem{ref_url1}
+% LNCS Homepage, \url{http://www.springer.com/lncs}, last accessed 2023/10/25
+% \end{thebibliography}
+\end{document}

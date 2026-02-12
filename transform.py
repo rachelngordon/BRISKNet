@@ -750,7 +750,7 @@ def estimate_bolus_arrival_index(
     n_base = _baseline_len(T)
     baseline = curve[:, :n_base]
     mu = baseline.mean(dim=1)
-    sigma = baseline.std(dim=1)
+    sigma = baseline.std(dim=1, unbiased=False)
     method = (arrival_method or "threshold").lower()
     if method in ("fraction", "fraction_of_peak", "fop"):
         peak = curve.max(dim=1).values
@@ -764,7 +764,13 @@ def estimate_bolus_arrival_index(
     search_start = min(n_base, max(T - 1, 0))
     above = curve[0] > thr_curve[0]
     if search_start > 0:
-        above[:search_start] = False
+        above = torch.cat(
+            [
+                torch.zeros(search_start, dtype=torch.bool, device=above.device),
+                above[search_start:],
+            ],
+            dim=0,
+        )
     if torch.any(above):
         return int(torch.argmax(above.int()).item())
 
@@ -992,10 +998,13 @@ class BaselineEnhancementScale(Transform):
 
         out = []
         for a in scales:
-            a_t = torch.tensor(a, dtype=x.dtype, device=x.device)
-            x_new = x.clone()
+            a_t = x.new_tensor(a)
             if enh_start < T:
-                enh = x_new[:, :, enh_start:, :, :]
-                x_new[:, :, enh_start:, :, :] = baseline + a_t * (enh - baseline)
+                pre = x[:, :, :enh_start, :, :]
+                enh = x[:, :, enh_start:, :, :]
+                scaled_enh = baseline + a_t * (enh - baseline)
+                x_new = torch.cat([pre, scaled_enh], dim=2)
+            else:
+                x_new = x.clone()
             out.append(x_new)
         return torch.cat(out, dim=0)

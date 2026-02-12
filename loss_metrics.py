@@ -122,3 +122,27 @@ class LPIPSVideoMetric(nn.Module):
         # --- 6. Compute LPIPS ---
         return self.lpips(pred_flat_rgb, target_flat_rgb)
 
+
+class HuberVideoMetric(nn.Module):
+    """Huber loss over complex video tensors shaped (B, 2, H, W, T)."""
+
+    def __init__(self, delta: float = 1.0):
+        super().__init__()
+        self.huber = nn.HuberLoss(delta=float(delta), reduction="mean")
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # Run in fp32 for numerical stability when training uses bf16/fp16.
+        return self.huber(pred.float(), target.float())
+
+
+class CharbonnierVideoMetric(nn.Module):
+    """Charbonnier loss over complex video tensors shaped (B, 2, H, W, T)."""
+
+    def __init__(self, epsilon: float = 1e-3):
+        super().__init__()
+        self.epsilon = float(epsilon)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        diff = pred.float() - target.float()
+        loss = torch.sqrt(diff * diff + self.epsilon * self.epsilon)
+        return loss.mean()

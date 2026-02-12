@@ -7,6 +7,9 @@ This project trains a reconstruction agent for highly undersampled breast DCE-MR
 - Do not add broad catch-and-continue logic to hide configuration/environment problems.
 - When a required dependency/path/config is wrong, raise a clear error and fix the root cause.
 - Prefer architecture-driven behavior over redundant configuration knobs; if a feature is architecture-specific, hard-disable it for other architectures instead of requiring users to set a redundant value (for example, adjoint loss is LSFP-only and disabled for Mamba).
+- Backward compatibility is not a priority; prefer simpler, clearer code over preserving old config/workflow behavior.
+- Prefer vectorized tensor operations over Python loops where practical.
+- Use reparameterization/architecture changes before adding extra regularization losses unless a regularizer has a clear, tested purpose.
 
 ## Core Ideas
 - **Unsupervised objective**: Combine a measurement consistency (MC) loss in k-space with an equivariant imaging (EI) loss in image space to enforce physics fidelity and artifact removal without paired labels (`mc.py`, `ei.py`).
@@ -41,10 +44,44 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - **Grid search**: `grid_search_batch.py` splits hyperparameter sweeps across batches; default grid searches `model.losses.adj_loss.weight` and `model.losses.ei_loss.weight`. Update `base_config_file` to an existing YAML before running. SLURM example in `grid_search.sh`.
 - **Outputs**: Each run writes `eval_results/eval_metrics.csv` for downstream parsing (`parse_results` in `grid_search_batch.py`).
 
+## Experiment Design & Analysis
+- Every sweep should have a brief causal hypothesis: what changed, why it should help, and what failure mode it targets.
+- Prefer learning-oriented follow-ups over blind sweeps; propose the smallest next experiment that answers the open question.
+- When metrics shift meaningfully or collapse appears, include a short "why" analysis tied to data mix, loss schedules, optimization settings, and sampling behavior.
+- For any recommendation, include tradeoffs (what is gained, what is sacrificed, and viable alternatives).
+
+## Lab Notebook & Logging
+- Maintain a canonical experiment notebook at `experiment_log.md`.
+- When new results or failures appear, immediately append:
+  - run name/path, job id, config path, key hypothesis,
+  - best/last metrics with epoch,
+  - outcome vs hypothesis,
+  - concrete next action.
+- When submitting or canceling runs, log that action in `experiment_log.md` in the same turn.
+- If a run crashes and is resubmitted, record root cause and fix; low-value failed run dirs may be deleted after logging the lesson.
+- If a run completes with usable validation, add a takeaway block (what happened, what was learned, what to do next).
+
+## Monitoring & Triage
+- For status updates: check `squeue`, then reconcile with `sacct` for recently exited jobs.
+- Treat stale logs as a triage signal, not an automatic resubmit trigger; confirm state/error first.
+- When a run leaves the queue, capture: job id/state, error signature (if any), likely cause, fix, and resubmit details.
+- If asked to "babysit" jobs, default to an active loop: monitor, diagnose failures, apply minimal fix, resubmit, and update `experiment_log.md`.
+- Do not promise continuous monitoring after returning a message in a normal turn; continuous monitoring requires staying in-turn.
+
+## Config Discipline
+- New knobs must be intentional and expected to be ablated soon; avoid adding knobs for stable architectural behavior.
+- Prefer hardcoding stable behavior over proliferating optional flags.
+- Do not retroactively edit configs for completed runs; create new configs for new behavior.
+- Keep reproducibility explicit: seeds and effective schedule settings should be logged for each run.
+
 ## Submitting Jobs (SLURM via submit.py)
 - Use `submit.py` for distributed launches with `torchrun` + `submitit`.
 - Run `submit.py` from an environment that has `submitit` installed (e.g., `brisknet`).
 - Required flags: `--config`, `--exp-name`, `--nodes`, `--gpus-per-node`, `--micromamba-path`, `--env-name`.
+- Slot policy:
+  - Standard slots: assume 8 non-burst SLURM job slots are available; keep them utilized with the highest-value active experiments unless explicitly directed otherwise.
+  - Burst slots: assume 2 additional `qos=burst` slots are available; treat burst as preemptible and use it for debugging/probes/sanity checks rather than long critical runs.
+  - When proposing experiment plans, default to filling all standard slots first, then optionally use burst for short-turnaround diagnostics.
 - Typical 1 node / 4 GPU submission:
   - `micromamba run -n brisknet python submit.py --config configs/config_sampling_2spf_rebin_v3_mamba_debug.yaml --exp-name mamba_2spf_rebin_v3_debug_1n4g --job-name mamba_2spf_dbg_1n4g --nodes 1 --gpus-per-node 4 --cpus-per-task 8 --partition general --timeout-min 240 --micromamba-path /net/projects/annawoodard/micromamba/etc/profile.d/micromamba.sh --env-name brisknet`
 - Dry-run (print resolved settings only):
