@@ -27,33 +27,41 @@ def _build_lsfp_model(config: dict[str, Any], device: torch.device, block_dir: s
     from lsfpnet_encoding import ArtifactRemovalLSFPNet, LSFPNet
 
     model_cfg = config["model"]
+    lsfp_cfg = model_cfg.get("lsfpnet")
+    if lsfp_cfg is None:
+        lsfp_cfg = model_cfg
+    elif not isinstance(lsfp_cfg, dict):
+        raise TypeError(
+            f"model.lsfpnet must be a mapping when provided, got {type(lsfp_cfg).__name__}."
+        )
+
     initial_lambdas = {
-        "lambda_L": model_cfg["lambda_L"],
-        "lambda_S": model_cfg["lambda_S"],
-        "lambda_spatial_L": model_cfg["lambda_spatial_L"],
-        "lambda_spatial_S": model_cfg["lambda_spatial_S"],
-        "gamma": model_cfg["gamma"],
-        "lambda_step": model_cfg["lambda_step"],
+        "lambda_L": lsfp_cfg["lambda_L"],
+        "lambda_S": lsfp_cfg["lambda_S"],
+        "lambda_spatial_L": lsfp_cfg["lambda_spatial_L"],
+        "lambda_spatial_S": lsfp_cfg["lambda_spatial_S"],
+        "gamma": lsfp_cfg["gamma"],
+        "lambda_step": lsfp_cfg["lambda_step"],
     }
 
     lsfp_backbone = LSFPNet(
-        LayerNo=model_cfg["num_layers"],
+        LayerNo=lsfp_cfg["num_layers"],
         lambdas=initial_lambdas,
-        channels=model_cfg["channels"],
-        style_dim=model_cfg["style_dim"],
-        svd_mode=model_cfg["svd_mode"],
-        use_lowk_dc=model_cfg["use_lowk_dc"],
-        lowk_frac=model_cfg["lowk_frac"],
-        lowk_alpha=model_cfg["lowk_alpha"],
-        film_bounded=model_cfg["film_bounded"],
-        film_gain=model_cfg["film_gain"],
-        film_identity_init=model_cfg["film_identity_init"],
-        svd_noise_std=model_cfg["svd_noise_std"],
-        film_L=model_cfg["film_L"],
-        kernel_size_L=model_cfg.get("kernel_size_L", 3),
-        kernel_size_S=model_cfg.get("kernel_size_S", 3),
-        activation_checkpointing=model_cfg.get("activation_checkpointing", False),
-        checkpoint_use_reentrant=model_cfg.get("checkpoint_use_reentrant", False),
+        channels=lsfp_cfg["channels"],
+        style_dim=lsfp_cfg["style_dim"],
+        svd_mode=lsfp_cfg["svd_mode"],
+        use_lowk_dc=lsfp_cfg["use_lowk_dc"],
+        lowk_frac=lsfp_cfg["lowk_frac"],
+        lowk_alpha=lsfp_cfg["lowk_alpha"],
+        film_bounded=lsfp_cfg["film_bounded"],
+        film_gain=lsfp_cfg["film_gain"],
+        film_identity_init=lsfp_cfg["film_identity_init"],
+        svd_noise_std=lsfp_cfg["svd_noise_std"],
+        film_L=lsfp_cfg["film_L"],
+        kernel_size_L=lsfp_cfg.get("kernel_size_L", 3),
+        kernel_size_S=lsfp_cfg.get("kernel_size_S", 3),
+        activation_checkpointing=lsfp_cfg.get("activation_checkpointing", False),
+        checkpoint_use_reentrant=lsfp_cfg.get("checkpoint_use_reentrant", False),
     )
 
     if model_cfg["encode_acceleration"] and model_cfg["encode_time_index"]:
