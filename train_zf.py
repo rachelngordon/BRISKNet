@@ -675,6 +675,16 @@ def main():
 
     model_type = config["model"]["name"]
     model_type_is_lsfp = is_lsfp_model(model_type)
+    model_type_norm = str(model_type).strip().lower()
+    mamba_variant = str(config.get("model", {}).get("mamba", {}).get("variant", "")).strip().lower()
+    model_type_is_temporal_mamba = model_type_norm in {
+        "mambatemporal",
+        "mamba_temporal",
+        "temporalmamba",
+    } or (
+        model_type_norm in {"mambarecon", "mamba_recon", "mamba"}
+        and mamba_variant in {"temporal", "temporal_1d", "radial_temporal"}
+    )
     use_adj_loss = model_type_is_lsfp
     if use_adj_loss:
         if "weight" not in adj_loss_cfg:
@@ -704,6 +714,13 @@ def main():
 
     eval_chunk_size = config["evaluation"]["chunk_size"]
     eval_chunk_overlap = config["evaluation"]["chunk_overlap"]
+
+    def _use_eval_sliding_window(num_frames: int) -> bool:
+        if int(num_frames) <= int(eval_chunk_size):
+            return False
+        if model_type_is_temporal_mamba:
+            return False
+        return True
 
     raw_grasp_slice_idx = config.get("evaluation", {}).get("raw_grasp_slice_idx", 95)
     eval_cfg = config.get("evaluation", {})
@@ -1904,6 +1921,8 @@ def main():
             # Evaluate on validation data
             if step0_do_val:
                 step0_val_batches = 0
+                step0_val_infer_times = []
+                step0_use_sliding_window = _use_eval_sliding_window(N_time_eval)
                 for dro_kspace, csmap, ground_truth, dro_grasp_img, mask, grasp_path, raw_kspace, raw_grasp_img, raw_csmaps in tqdm(val_dro_loader, desc="Step 0 Validation Evaluation"):
     
                     csmap = csmap.squeeze(0).to(device)   # Remove batch dim
@@ -1932,17 +1951,25 @@ def main():
     
                     # inference + losses
                     with amp_autocast():
-                        if N_time_eval > eval_chunk_size:
+                        if device.type == "cuda":
+                            torch.cuda.synchronize(device)
+                        infer_start = time.perf_counter()
+                        if step0_use_sliding_window:
                             x_recon, adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, dro_kspace, csmap, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
-                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
                         else:
                             x_recon, adj_loss, *_ = model(
                             dro_kspace.to(device), eval_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
                             )
+                            adj_loss = adj_loss.item()
+                        if device.type == "cuda":
+                            torch.cuda.synchronize(device)
+                        step0_val_infer_times.append(float(time.perf_counter() - infer_start))
+                        if step0_use_sliding_window:
+                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
+                        else:
                             raw_x_recon, *_ = model(
                             raw_kspace.to(device), eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
                             )
-                            adj_loss = adj_loss.item()
     
                         # fix orientation of raw k-space recon
                         # raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
@@ -2103,7 +2130,7 @@ def main():
                         initial_eval_raw_dc_mses.append(dc_mse_raw)
                         initial_eval_raw_dc_maes.append(dc_mae_raw)
                         if compute_ssdu_eval:
-                            ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
+                            ssdu_chunk_size = eval_chunk_size if step0_use_sliding_window else None
                             ssdu_result = compute_ssdu_kspace_nmse(
                                 model,
                                 raw_kspace,
@@ -2227,6 +2254,16 @@ def main():
         print(f"Step 0 Train Losses: MC: {step0_train_mc_loss}, EI: {step0_train_ei_loss}, Adj: {step0_train_adj_loss}")
         if step0_do_val:
             print(f"Step 0 Val Losses: MC: {step0_val_mc_loss}, EI: {step0_val_ei_loss}, Adj: {step0_val_adj_loss}")
+            if (global_rank == 0 or not config['training']['multigpu']) and step0_val_infer_times:
+                step0_mean_infer = float(np.mean(step0_val_infer_times))
+                step0_std_infer = float(np.std(step0_val_infer_times, ddof=1)) if len(step0_val_infer_times) > 1 else 0.0
+                infer_mode = "sliding-window" if step0_use_sliding_window else "direct-full"
+                print(
+                    f"[Eval] Step 0: inference time/sample ({infer_mode}) = "
+                    f"{step0_mean_infer:.3f}s ± {step0_std_infer:.3f}s (n={len(step0_val_infer_times)})"
+                )
+                writer.add_scalar('Timing/Val_Inference_Seconds_Mean', step0_mean_infer, 0)
+                writer.add_scalar('Timing/Val_Inference_Seconds_Std', step0_std_infer, 0)
         else:
             print("Step 0 Val Losses: skipped (calc_step_0_val: false)")
 
@@ -2736,6 +2773,7 @@ def main():
                 val_running_ei_loss = 0.0
                 val_running_adj_loss = 0.0
                 distributed_eval_this_epoch = distributed_eval and config['training']['multigpu']
+                epoch_use_sliding_window = _use_eval_sliding_window(N_time_eval)
                 run_eval_metrics_this_rank = (
                     (not config['training']['multigpu'])
                     or distributed_eval_this_epoch
@@ -2773,6 +2811,8 @@ def main():
                     grasp_peak_errs.clear()
                     print(f"[Eval] Epoch {epoch}: collecting GRASP baseline metrics from validation set.")
                 local_eval_records = []
+                val_infer_times_local = []
+                epoch_eval_infer_times = []
                 val_loader_tqdm = tqdm(
                     val_dro_eval_loader if distributed_eval_this_epoch else val_dro_loader,
                     desc=f"Epoch {epoch}/{epochs}  Validation",
@@ -2821,17 +2861,25 @@ def main():
                             
                         try:
                             with amp_autocast():
-                                if N_time_eval > eval_chunk_size:
+                                if device.type == "cuda":
+                                    torch.cuda.synchronize(device)
+                                infer_start = time.perf_counter()
+                                if epoch_use_sliding_window:
                                     val_x_recon, val_adj_loss = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_dro_kspace_batch, val_csmap, acceleration_encoding, start_timepoint_index, model, epoch=f"val{epoch}", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
-                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
                                 else:
                                     val_x_recon, val_adj_loss, *_ = model(
                                     val_dro_kspace_batch.to(device), eval_physics, val_csmap, acceleration_encoding, start_timepoint_index, epoch=f"val{epoch}", norm=config['model']['norm']
                                     )
+                                    val_adj_loss = val_adj_loss.item()
+                                if device.type == "cuda":
+                                    torch.cuda.synchronize(device)
+                                val_infer_times_local.append(float(time.perf_counter() - infer_start))
+                                if epoch_use_sliding_window:
+                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
+                                else:
                                     val_raw_x_recon, *_ = model(
                                     val_raw_kspace.to(device), eval_physics, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
                                     )
-                                    val_adj_loss = val_adj_loss.item()
 
                                 # fix orientation of raw k-space recon
                                 # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
@@ -2991,7 +3039,7 @@ def main():
                                     )
                                 raw_ssdu_nmse = None
                                 if compute_ssdu_eval:
-                                    ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
+                                    ssdu_chunk_size = eval_chunk_size if epoch_use_sliding_window else None
                                     ssdu_result = compute_ssdu_kspace_nmse(
                                         model,
                                         val_raw_kspace,
@@ -3157,11 +3205,17 @@ def main():
                     val_batches = int(loss_reduce[3].item())
                     gathered_eval_records = [None for _ in range(world_size)]
                     dist.all_gather_object(gathered_eval_records, local_eval_records)
+                    gathered_infer_times = [None for _ in range(world_size)]
+                    dist.all_gather_object(
+                        gathered_infer_times,
+                        [float(t) for t in val_infer_times_local],
+                    )
 
                     if global_rank == 0:
                         all_eval_records = _flatten_gathered_records(gathered_eval_records)
                         if not all_eval_records:
                             raise RuntimeError(f"Epoch {epoch}: distributed eval collected zero records.")
+                        epoch_eval_infer_times = _flatten_gathered_records(gathered_infer_times)
 
                         epoch_eval_ssims = [r["ssim"] for r in all_eval_records]
                         epoch_eval_psnrs = [r["psnr"] for r in all_eval_records]
@@ -3210,6 +3264,8 @@ def main():
                             grasp_peak_errs = [
                                 r["grasp_peak_err"] for r in all_eval_records if r.get("grasp_peak_err") is not None
                             ]
+                elif global_rank == 0 or not config['training']['multigpu']:
+                    epoch_eval_infer_times = [float(t) for t in val_infer_times_local]
 
                 # Calculate and store average validation evaluation metrics
                 if global_rank == 0 or not config['training']['multigpu']:
@@ -3262,6 +3318,17 @@ def main():
                     epoch_eval_raw_ssdu_nmse = (
                         np.mean(epoch_eval_raw_ssdu_nmses) if epoch_eval_raw_ssdu_nmses else np.nan
                     )
+                    if epoch_eval_infer_times:
+                        epoch_infer_mean = float(np.mean(epoch_eval_infer_times))
+                        epoch_infer_std = float(np.std(epoch_eval_infer_times, ddof=1)) if len(epoch_eval_infer_times) > 1 else 0.0
+                        infer_mode = "sliding-window" if epoch_use_sliding_window else "direct-full"
+                        print(
+                            f"[Eval] Epoch {epoch}: inference time/sample ({infer_mode}) = "
+                            f"{epoch_infer_mean:.3f}s ± {epoch_infer_std:.3f}s "
+                            f"(n={len(epoch_eval_infer_times)})"
+                        )
+                        writer.add_scalar('Timing/Val_Inference_Seconds_Mean', epoch_infer_mean, epoch)
+                        writer.add_scalar('Timing/Val_Inference_Seconds_Std', epoch_infer_std, epoch)
 
                     eval_ssims.append(epoch_eval_ssim)
                     eval_psnrs.append(epoch_eval_psnr)

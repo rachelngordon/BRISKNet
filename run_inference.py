@@ -713,6 +713,17 @@ def main():
 
     data_dir = config["data"]["root_dir"]
     model_type = config["model"]["name"]
+    model_type_norm = str(model_type).strip().lower()
+    mamba_variant = str(config.get("model", {}).get("mamba", {}).get("variant", "")).strip().lower()
+    model_type_is_temporal_mamba = model_type_norm in {
+        "mambatemporal",
+        "mamba_temporal",
+        "temporalmamba",
+    } or (
+        model_type_norm in {"mambarecon", "mamba_recon", "mamba"}
+        and mamba_variant in {"temporal", "temporal_1d", "radial_temporal"}
+    )
+    eval_uses_sliding_window = bool(N_time_eval > eval_chunk_size and not model_type_is_temporal_mamba)
     traj_method = args.traj_method or config.get("data", {}).get("traj_method", "get_traj")
     dro_dataset_root = config_eval.get("simulated_dataset_path", "/net/scratch2/rachelgordon/dro_dataset_frontpad")
 
@@ -727,6 +738,11 @@ def main():
     print(f"Eval total spokes: {int(N_spokes_eval) * int(N_time_eval)}")
     print(f"Rescale (best-fit scalar): {rescale}")
     print(f"Normalize DRO csmaps: {bool(args.normalize_dro_csmaps)}")
+    if model_type_is_temporal_mamba and int(N_time_eval) > int(eval_chunk_size):
+        print(
+            "[Inference] TemporalMamba detected: using direct full-sequence inference "
+            f"(chunk_size={int(eval_chunk_size)} ignored for model forward)."
+        )
 
     val_dataset = SimulatedDataset(
         # root_dir=config["evaluation"]["simulated_dataset_path"],
@@ -881,7 +897,7 @@ def main():
             acceleration_encoding = acceleration_val if config["model"]["encode_acceleration"] else None
             start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device) if config["model"]["encode_time_index"] else None
 
-            if N_time_eval > eval_chunk_size:
+            if eval_uses_sliding_window:
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
                 infer_start = time.perf_counter()
@@ -1040,7 +1056,7 @@ def main():
             ssdu_result = {}
             ssdu_grasp_result = {}
             if compute_ssdu:
-                ssdu_chunk_size = eval_chunk_size if N_time_eval > eval_chunk_size else None
+                ssdu_chunk_size = eval_chunk_size if eval_uses_sliding_window else None
                 ssdu_result = compute_ssdu_kspace_nmse(
                     model,
                     raw_kspace,
@@ -1301,8 +1317,9 @@ def main():
     if inference_times:
         mean_infer = sum(inference_times) / len(inference_times)
         std_infer = statistics.stdev(inference_times) if len(inference_times) > 1 else 0.0
+        infer_mode = "sliding-window" if eval_uses_sliding_window else "direct-full"
         print(
-            "Inference timing (recon only): "
+            f"Inference timing (recon only, {infer_mode}): "
             f"{mean_infer:.3f}s ± {std_infer:.3f}s per sample"
         )
         results_dir = os.path.join(os.path.dirname(__file__), "results")
@@ -1718,7 +1735,7 @@ def main():
             float(args.total_scan_seconds) / float(N_time_eval - 1)
             if N_time_eval > 1 else float(args.total_scan_seconds)
         )
-        sliding_window_used = bool(N_time_eval > eval_chunk_size)
+        sliding_window_used = bool(eval_uses_sliding_window)
 
         def _extract_mean_std(mean_std):
             if not mean_std:
