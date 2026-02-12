@@ -102,12 +102,15 @@ class EILoss(Loss):
             # One avoids unnecessary computations and makes the code more efficient
             # while the other ensures that x2 is marked as a leaf in the computational graph.
             with torch.no_grad():
-                x_net_rearranged = rearrange(x_net, 'b c h w t -> b c t h w')
+                # Isolate EI transforms from the MC branch storage to avoid accidental
+                # in-place mutations on x_net views inside composed transforms.
+                x_net_rearranged = rearrange(x_net, 'b c h w t -> b c t h w').contiguous().clone()
                 x2_rearranged = self.T(x_net_rearranged)
                 x2 = rearrange(x2_rearranged, 'b c t h w -> b c h w t')
                 x2 = x2.detach()
         else:
-            x_net_rearranged = rearrange(x_net, 'b c h w t -> b c t h w')
+            # Keep gradient flow to x_net, but ensure transforms operate on isolated storage.
+            x_net_rearranged = rearrange(x_net, 'b c h w t -> b c t h w').contiguous().clone()
             x2_rearranged = self.T(x_net_rearranged)
             x2 = rearrange(x2_rearranged, 'b c t h w -> b c h w t')
 

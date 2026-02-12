@@ -22,7 +22,9 @@ def _torch_load_checkpoint(path: str, map_location="cpu"):
     except TypeError:
         return torch.load(path, map_location=map_location)
     except Exception:
-        return torch.load(path, map_location=map_location)
+        # Torch >=2.6 defaults to weights_only=True. Fall back to full checkpoint
+        # load for trusted local experiment files.
+        return torch.load(path, map_location=map_location, weights_only=False)
 
 
 def save_csmap_png(csmap, output_dir, tag, max_coils=16, cmap="viridis"):
@@ -865,6 +867,23 @@ def load_checkpoint(model, optimizer, filename):
         "weighted_train_rebin_losses": ckpt.get("weighted_train_rebin_losses", []),
         "lr_history": ckpt.get("lr_history", []),
         "lr_epochs": ckpt.get("lr_epochs", []),
+        "ei_weight_history": ckpt.get("ei_weight_history", []),
+        "ei_weight_epochs": ckpt.get("ei_weight_epochs", []),
+        "ei_gradnorm_ratio_history": ckpt.get("ei_gradnorm_ratio_history", []),
+        "ei_gradnorm_ratio_epochs": ckpt.get("ei_gradnorm_ratio_epochs", []),
+        "ei_gradnorm_ratio_ema": ckpt.get("ei_gradnorm_ratio_ema"),
+        "ei_gradnorm_samples": ckpt.get("ei_gradnorm_samples", 0),
+        "ei_gradnorm_locked": ckpt.get("ei_gradnorm_locked", False),
+        "ei_target_weight_base": ckpt.get(
+            "ei_target_weight_base",
+            ckpt.get("ei_weight", 0.0),
+        ),
+        "ei_target_weight_effective": ckpt.get(
+            "ei_target_weight_effective",
+            ckpt.get("ei_weight", 0.0),
+        ),
+        "rebin_weight_history": ckpt.get("rebin_weight_history", []),
+        "rebin_weight_epochs": ckpt.get("rebin_weight_epochs", []),
     }
     val_curves = {
         "val_mc_losses": ckpt.get("val_mc_losses", []),

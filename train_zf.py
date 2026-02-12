@@ -34,7 +34,12 @@ import time
 import threading
 import atexit
 import seaborn as sns
-from loss_metrics import LPIPSVideoMetric, SSIMVideoMetric
+from loss_metrics import (
+    LPIPSVideoMetric,
+    SSIMVideoMetric,
+    HuberVideoMetric,
+    CharbonnierVideoMetric,
+)
 from rebin_loss import RebinConsistencyLoss
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -624,9 +629,60 @@ def main():
         )
 
     use_ei_loss = losses_cfg["use_ei_loss"]
-    target_w_ei = losses_cfg["ei_loss"]["weight"]
-    warmup = losses_cfg["ei_loss"]["warmup"]
-    duration = losses_cfg["ei_loss"]["duration"]
+    ei_cfg = losses_cfg["ei_loss"]
+    target_w_ei = float(ei_cfg["weight"])
+    warmup = int(ei_cfg["warmup"])
+    duration = int(ei_cfg["duration"])
+    if warmup < 0:
+        raise ValueError("model.losses.ei_loss.warmup must be >= 0.")
+    if duration < 0:
+        raise ValueError("model.losses.ei_loss.duration must be >= 0.")
+    transition_duration = max(duration, 1)
+    ei_transition_start_epoch = warmup + 1
+    ei_transition_end_epoch = warmup + transition_duration
+
+    gradnorm_cfg = ei_cfg.get("gradnorm_transition", {})
+    if isinstance(gradnorm_cfg, dict):
+        ei_gradnorm_transition_enable = bool(gradnorm_cfg.get("enable", False))
+        ei_gradnorm_ema_beta = float(gradnorm_cfg.get("ema_beta", 0.9))
+        ei_gradnorm_eps = float(gradnorm_cfg.get("eps", 1e-8))
+        ei_gradnorm_ratio_min = float(gradnorm_cfg.get("ratio_min", 0.1))
+        ei_gradnorm_ratio_max = float(gradnorm_cfg.get("ratio_max", 10.0))
+        ei_gradnorm_measure_every = int(gradnorm_cfg.get("measure_every_n_steps", 8))
+        ei_gradnorm_target_scale_min = float(gradnorm_cfg.get("target_scale_min", 0.25))
+        ei_gradnorm_target_scale_max = float(gradnorm_cfg.get("target_scale_max", 4.0))
+    else:
+        ei_gradnorm_transition_enable = bool(gradnorm_cfg)
+        ei_gradnorm_ema_beta = 0.9
+        ei_gradnorm_eps = 1e-8
+        ei_gradnorm_ratio_min = 0.1
+        ei_gradnorm_ratio_max = 10.0
+        ei_gradnorm_measure_every = 8
+        ei_gradnorm_target_scale_min = 0.25
+        ei_gradnorm_target_scale_max = 4.0
+
+    if not (0.0 <= ei_gradnorm_ema_beta < 1.0):
+        raise ValueError("model.losses.ei_loss.gradnorm_transition.ema_beta must be in [0, 1).")
+    if ei_gradnorm_eps <= 0:
+        raise ValueError("model.losses.ei_loss.gradnorm_transition.eps must be > 0.")
+    if ei_gradnorm_ratio_min <= 0 or ei_gradnorm_ratio_max <= 0:
+        raise ValueError("model.losses.ei_loss.gradnorm_transition ratio bounds must be > 0.")
+    if ei_gradnorm_ratio_max < ei_gradnorm_ratio_min:
+        raise ValueError(
+            "model.losses.ei_loss.gradnorm_transition.ratio_max must be >= ratio_min."
+        )
+    if ei_gradnorm_measure_every < 1:
+        raise ValueError(
+            "model.losses.ei_loss.gradnorm_transition.measure_every_n_steps must be >= 1."
+        )
+    if ei_gradnorm_target_scale_min <= 0 or ei_gradnorm_target_scale_max <= 0:
+        raise ValueError(
+            "model.losses.ei_loss.gradnorm_transition target scale bounds must be > 0."
+        )
+    if ei_gradnorm_target_scale_max < ei_gradnorm_target_scale_min:
+        raise ValueError(
+            "model.losses.ei_loss.gradnorm_transition.target_scale_max must be >= target_scale_min."
+        )
     checkpoint_before_loss_transitions = bool(
         config.get("training", {}).get("checkpoint_before_loss_transitions", True)
     )
@@ -918,6 +974,16 @@ def main():
     else:
         N_time_eval, N_spokes_eval = config["data"]["eval_timeframes"], config["data"]["eval_spokes"]
 
+    if (
+        model_type_is_temporal_mamba
+        and int(N_time_eval) > int(eval_chunk_size)
+        and (global_rank == 0 or not config["training"]["multigpu"])
+    ):
+        print(
+            "[Eval] TemporalMamba detected: using direct full-sequence inference "
+            f"(chunk_size={int(eval_chunk_size)} is ignored for model forward)."
+        )
+
     # define physics object for evaluation
     eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob = get_nufft(
         N_samples, N_spokes_eval, N_time_eval
@@ -1079,6 +1145,21 @@ def main():
         if config["training"].get("ddp_set_static_graph", False):
             model._set_static_graph()
 
+    # Temporal Mamba EI calls a second model forward per iteration. Under DDP,
+    # route EI through the underlying module to avoid reducer state conflicts.
+    model_for_ei = model
+    if config['training']['multigpu'] and model_type_is_temporal_mamba:
+        model_for_ei = model.module
+        if global_rank == 0:
+            print("[EI] Using model.module for temporal Mamba EI forward under DDP.")
+    ei_gradnorm_params = []
+    if use_ei_loss and ei_gradnorm_transition_enable:
+        ei_gradnorm_params = [p for p in model_for_ei.parameters() if p.requires_grad]
+        if (global_rank == 0 or not config['training']['multigpu']) and not ei_gradnorm_params:
+            print("[EI] GradNorm transition calibration disabled: no trainable parameters found.")
+        if not ei_gradnorm_params:
+            ei_gradnorm_transition_enable = False
+
     if global_rank == 0 or not config['training']['multigpu']:
         if run_state is not None and ("total_params" not in run_state or "trainable_params" not in run_state):
             total_params, trainable_params = _get_param_counts(model)
@@ -1185,17 +1266,33 @@ def main():
         raise(ValueError, "Unsupported MC Loss Metric.")
 
 
-    if config['model']['losses']['ei_loss']['metric'] == "LPIPS":
-        ei_loss_metric = LPIPSVideoMetric(net_type='alex') 
-    elif config['model']['losses']['ei_loss']['metric'] == "SSIM":
+    ei_metric_name = str(ei_cfg.get("metric", "MSE")).strip().upper()
+    if ei_metric_name == "LPIPS":
+        ei_loss_metric = LPIPSVideoMetric(net_type='alex')
+    elif ei_metric_name == "SSIM":
         ei_loss_metric = SSIMVideoMetric()
-    else:
+    elif ei_metric_name == "HUBER":
+        ei_loss_metric = HuberVideoMetric(delta=float(ei_cfg.get("huber_delta", 1.0)))
+    elif ei_metric_name == "CHARBONNIER":
+        ei_loss_metric = CharbonnierVideoMetric(epsilon=float(ei_cfg.get("charbonnier_eps", 1e-3)))
+    elif ei_metric_name == "MAE":
+        ei_loss_metric = torch.nn.L1Loss()
+    elif ei_metric_name == "MSE":
         ei_loss_metric = torch.nn.MSELoss()
+    else:
+        raise ValueError(
+            f"Unsupported EI Loss Metric '{ei_metric_name}'. Expected one of: "
+            "MSE, MAE, SSIM, LPIPS, HUBER, CHARBONNIER."
+        )
 
-    ei_no_grad = config['model']['losses']['ei_loss'].get("no_grad", False)
-    ei_checkpoint_model = config['model']['losses']['ei_loss'].get("checkpoint_model", False)
-    ei_checkpoint_mode = config['model']['losses']['ei_loss'].get("checkpoint_mode", "none")
-    ei_checkpoint_use_reentrant = config['model']['losses']['ei_loss'].get("checkpoint_use_reentrant", False)
+    ei_no_grad = bool(ei_cfg.get("no_grad", False))
+    # Temporal-Mamba EI can hit autograd versioning failures with full target-path
+    # gradients; default to stop-grad target unless explicitly disabled.
+    if model_type_is_temporal_mamba and bool(ei_cfg.get("force_no_grad_for_mamba", True)):
+        ei_no_grad = True
+    ei_checkpoint_model = ei_cfg.get("checkpoint_model", False)
+    ei_checkpoint_mode = ei_cfg.get("checkpoint_mode", "none")
+    ei_checkpoint_use_reentrant = ei_cfg.get("checkpoint_use_reentrant", False)
 
     if use_rebin_loss:
         if rebin_metric_name.upper() == "MAE":
@@ -1231,6 +1328,17 @@ def main():
             )
     else:
         rebin_loss_fn = None
+
+    if not use_ei_loss:
+        ei_gradnorm_transition_enable = False
+    if ei_gradnorm_transition_enable and (global_rank == 0 or not config['training']['multigpu']):
+        print(
+            "[EI] GradNorm transition calibration enabled: "
+            f"window=[{ei_transition_start_epoch}, {ei_transition_end_epoch}], "
+            f"ema_beta={ei_gradnorm_ema_beta}, ratio_clip=[{ei_gradnorm_ratio_min}, {ei_gradnorm_ratio_max}], "
+            f"target_scale_clip=[{ei_gradnorm_target_scale_min}, {ei_gradnorm_target_scale_max}], "
+            f"measure_every_n_steps={ei_gradnorm_measure_every}"
+        )
 
     # Optional: one-shot diagnostic plot for rebin consistency (runs before training).
     rebin_diag_cfg = config.get("debugging", {}).get("rebin_diagnostic", {})
@@ -1536,8 +1644,17 @@ def main():
         lr_epochs = train_curves.get("lr_epochs", [])
         ei_weight_history = train_curves.get("ei_weight_history", [])
         ei_weight_epochs = train_curves.get("ei_weight_epochs", [])
+        ei_gradnorm_ratio_history = train_curves.get("ei_gradnorm_ratio_history", [])
+        ei_gradnorm_ratio_epochs = train_curves.get("ei_gradnorm_ratio_epochs", [])
         rebin_weight_history = train_curves.get("rebin_weight_history", [])
         rebin_weight_epochs = train_curves.get("rebin_weight_epochs", [])
+        ei_gradnorm_ratio_ema = train_curves.get("ei_gradnorm_ratio_ema", None)
+        if ei_gradnorm_ratio_ema is not None:
+            ei_gradnorm_ratio_ema = float(ei_gradnorm_ratio_ema)
+        ei_gradnorm_samples = int(train_curves.get("ei_gradnorm_samples", 0))
+        ei_gradnorm_locked = bool(train_curves.get("ei_gradnorm_locked", False))
+        ei_target_weight_base = float(train_curves.get("ei_target_weight_base", target_w_ei))
+        ei_target_weight_effective = float(train_curves.get("ei_target_weight_effective", target_w_ei))
         eval_ssims = eval_curves["eval_ssims"]
         eval_psnrs = eval_curves["eval_psnrs"]
         eval_mses = eval_curves["eval_mses"]
@@ -1576,8 +1693,15 @@ def main():
         lr_epochs = []
         ei_weight_history = []
         ei_weight_epochs = []
+        ei_gradnorm_ratio_history = []
+        ei_gradnorm_ratio_epochs = []
         rebin_weight_history = []
         rebin_weight_epochs = []
+        ei_gradnorm_ratio_ema = None
+        ei_gradnorm_samples = 0
+        ei_gradnorm_locked = False
+        ei_target_weight_base = float(target_w_ei)
+        ei_target_weight_effective = float(target_w_ei)
         eval_ssims = []
         eval_lpipses = []
         eval_psnrs = []
@@ -1647,6 +1771,13 @@ def main():
             lr_epochs=lr_epochs,
             ei_weight_history=ei_weight_history,
             ei_weight_epochs=ei_weight_epochs,
+            ei_gradnorm_ratio_history=ei_gradnorm_ratio_history,
+            ei_gradnorm_ratio_epochs=ei_gradnorm_ratio_epochs,
+            ei_gradnorm_ratio_ema=ei_gradnorm_ratio_ema,
+            ei_gradnorm_samples=ei_gradnorm_samples,
+            ei_gradnorm_locked=ei_gradnorm_locked,
+            ei_target_weight_base=ei_target_weight_base,
+            ei_target_weight_effective=ei_target_weight_effective,
             rebin_weight_history=rebin_weight_history,
             rebin_weight_epochs=rebin_weight_epochs,
         )
@@ -1683,6 +1814,17 @@ def main():
             best_epoch=best_epoch,
         )
         return train_curves, val_curves, eval_curves
+
+    def _grad_l2_norm(grad_tensors):
+        total_sq = None
+        for grad in grad_tensors:
+            if grad is None:
+                continue
+            grad_sq = (grad.detach().float() ** 2).sum()
+            total_sq = grad_sq if total_sq is None else (total_sq + grad_sq)
+        if total_sq is None:
+            return None
+        return torch.sqrt(total_sq)
 
     loss_transition_checkpoints = {}
 
@@ -1789,6 +1931,9 @@ def main():
     max_step0_train_batches = config.get("debugging", {}).get("max_step0_train_batches", None)
     max_step0_val_batches = config.get("debugging", {}).get("max_step0_val_batches", None)
     max_val_batches = config.get("debugging", {}).get("max_val_batches", None)
+    detect_anomaly = bool(config.get("debugging", {}).get("detect_anomaly", False))
+    if detect_anomaly:
+        torch.autograd.set_detect_anomaly(True)
     if (not resume_from_checkpoint) and config['debugging']['calc_step_0'] == True:
         model.eval()
         initial_train_mc_loss = 0.0
@@ -1879,7 +2024,7 @@ def main():
 
                     if use_ei_loss:
                         ei_loss, t_img = ei_loss_fn(
-                            x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                            x_recon, physics, model_for_ei, csmap, acceleration_encoding, start_timepoint_index
                         )
 
                         initial_train_ei_loss += ei_loss.item()
@@ -1989,7 +2134,7 @@ def main():
                                 val_ei_ctx = nullcontext()
                             with val_ei_ctx:
                                 ei_loss, t_img = ei_loss_fn(
-                                    x_recon, eval_physics, model, csmap, acceleration_encoding, start_timepoint_index
+                                    x_recon, eval_physics, model_for_ei, csmap, acceleration_encoding, start_timepoint_index
                                 )
 
                             initial_val_ei_loss += ei_loss.item()
@@ -2299,7 +2444,7 @@ def main():
                         train_curves,
                         val_curves,
                         eval_curves,
-                        target_w_ei,
+                        ei_target_weight_effective,
                         step0_train_ei_loss,
                         step0_train_mc_loss,
                         avg_grasp_ssim,
@@ -2460,6 +2605,34 @@ def main():
             if config['training']['multigpu']:
                 train_loader.sampler.set_epoch(epoch)
 
+            if (
+                use_ei_loss
+                and ei_gradnorm_transition_enable
+                and (not ei_gradnorm_locked)
+                and epoch > ei_transition_end_epoch
+            ):
+                if ei_gradnorm_ratio_ema is not None:
+                    scale = float(np.clip(
+                        ei_gradnorm_ratio_ema,
+                        ei_gradnorm_target_scale_min,
+                        ei_gradnorm_target_scale_max,
+                    ))
+                    ei_target_weight_effective = float(ei_target_weight_base * scale)
+                    if global_rank == 0 or not config['training']['multigpu']:
+                        print(
+                            "[EI] Locked post-transition EI target weight from GradNorm EMA: "
+                            f"base={ei_target_weight_base:.6g}, ratio_ema={ei_gradnorm_ratio_ema:.6g}, "
+                            f"scale={scale:.6g}, effective_target={ei_target_weight_effective:.6g}."
+                        )
+                else:
+                    ei_target_weight_effective = float(ei_target_weight_base)
+                    if global_rank == 0 or not config['training']['multigpu']:
+                        print(
+                            "[EI] GradNorm transition ended without valid samples; "
+                            f"using base EI target={ei_target_weight_effective:.6g}."
+                        )
+                ei_gradnorm_locked = True
+
             # EI schedule is epoch-wise; compute once per epoch to avoid per-iteration overhead.
             ei_loss_weight = 0.0
             compute_ei_this_epoch = False
@@ -2468,11 +2641,21 @@ def main():
                     current_epoch=epoch,
                     warmup_epochs=warmup,
                     schedule_duration=duration,
-                    target_weight=target_w_ei,
+                    target_weight=ei_target_weight_effective,
                 )
                 compute_ei_this_epoch = ei_loss_weight > 0.0
+            ei_transition_active_epoch = bool(
+                use_ei_loss
+                and ei_gradnorm_transition_enable
+                and (not ei_gradnorm_locked)
+                and (ei_transition_start_epoch <= epoch <= ei_transition_end_epoch)
+            )
             ei_weight_history.append(ei_loss_weight)
             ei_weight_epochs.append(epoch)
+            if (global_rank == 0 or not config['training']['multigpu']) and use_ei_loss:
+                writer.add_scalar("Loss/EI_Target_Weight_Effective", ei_target_weight_effective, epoch)
+                if ei_gradnorm_ratio_ema is not None:
+                    writer.add_scalar("Loss/EI_GradNorm_Ratio_EMA_Epoch", ei_gradnorm_ratio_ema, epoch)
 
             # Rebin schedule is epoch-wise; skip rebin compute whenever its weight is zero.
             rebin_loss_weight = 0.0
@@ -2596,10 +2779,69 @@ def main():
                         ei_loss = None
                         if use_ei_loss and compute_ei_this_epoch:
                             ei_loss, t_img = ei_loss_fn(
-                                x_recon, physics, model, csmap, acceleration_encoding, start_timepoint_index
+                                x_recon, physics, model_for_ei, csmap, acceleration_encoding, start_timepoint_index
                             )
 
                             running_ei_loss += ei_loss.item()
+                            if (
+                                ei_transition_active_epoch
+                                and (iteration_count % ei_gradnorm_measure_every == 0)
+                                and ei_gradnorm_params
+                            ):
+                                mc_param_grads = torch.autograd.grad(
+                                    mc_loss,
+                                    ei_gradnorm_params,
+                                    retain_graph=True,
+                                    allow_unused=True,
+                                )
+                                ei_param_grads = torch.autograd.grad(
+                                    ei_loss,
+                                    ei_gradnorm_params,
+                                    retain_graph=True,
+                                    allow_unused=True,
+                                )
+                                mc_grad_norm = _grad_l2_norm(mc_param_grads)
+                                ei_grad_norm = _grad_l2_norm(ei_param_grads)
+                                if mc_grad_norm is not None and ei_grad_norm is not None:
+                                    if config['training']['multigpu'] and dist.is_available() and dist.is_initialized():
+                                        grad_pair = torch.stack((mc_grad_norm, ei_grad_norm))
+                                        dist.all_reduce(grad_pair, op=dist.ReduceOp.SUM)
+                                        grad_pair = grad_pair / float(world_size)
+                                        mc_grad_norm = grad_pair[0]
+                                        ei_grad_norm = grad_pair[1]
+                                    ratio_value = float(
+                                        mc_grad_norm / (ei_grad_norm + ei_gradnorm_eps)
+                                    )
+                                    ratio_clipped = float(
+                                        np.clip(
+                                            ratio_value,
+                                            ei_gradnorm_ratio_min,
+                                            ei_gradnorm_ratio_max,
+                                        )
+                                    )
+                                    if ei_gradnorm_ratio_ema is None:
+                                        ei_gradnorm_ratio_ema = ratio_clipped
+                                    else:
+                                        ei_gradnorm_ratio_ema = (
+                                            ei_gradnorm_ema_beta * ei_gradnorm_ratio_ema
+                                            + (1.0 - ei_gradnorm_ema_beta) * ratio_clipped
+                                        )
+                                    ei_gradnorm_samples += 1
+                                    ei_gradnorm_ratio_history.append(ratio_clipped)
+                                    ei_gradnorm_ratio_epochs.append(
+                                        epoch + (batch_idx / max(1, len(train_loader)))
+                                    )
+                                    if global_rank == 0 or not config['training']['multigpu']:
+                                        writer.add_scalar(
+                                            "Loss/EI_GradNorm_Ratio",
+                                            ratio_clipped,
+                                            iteration_count,
+                                        )
+                                        writer.add_scalar(
+                                            "Loss/EI_GradNorm_Ratio_EMA",
+                                            ei_gradnorm_ratio_ema,
+                                            iteration_count,
+                                        )
                             train_loader_tqdm.set_postfix(
                                 mc_loss=mc_loss.item(),
                                 ei_loss=ei_loss.item(),
@@ -2627,10 +2869,18 @@ def main():
                         raise RuntimeError("total_loss is NaN")
 
                     if use_scaler:
-                        scaler.scale(total_loss).backward()
+                        if detect_anomaly:
+                            with torch.autograd.detect_anomaly():
+                                scaler.scale(total_loss).backward()
+                        else:
+                            scaler.scale(total_loss).backward()
                         scaler.unscale_(optimizer)
                     else:
-                        total_loss.backward()
+                        if detect_anomaly:
+                            with torch.autograd.detect_anomaly():
+                                total_loss.backward()
+                        else:
+                            total_loss.backward()
 
 
                     debug_cfg = config.get("debugging", {})
@@ -2899,7 +3149,7 @@ def main():
                                         val_ei_ctx = nullcontext()
                                     with val_ei_ctx:
                                         val_ei_loss, val_t_img = ei_loss_fn(
-                                            val_x_recon, eval_physics, model, val_csmap, acceleration_encoding, start_timepoint_index
+                                            val_x_recon, eval_physics, model_for_ei, val_csmap, acceleration_encoding, start_timepoint_index
                                         )
 
                                     val_running_ei_loss += val_ei_loss.item()
@@ -3478,7 +3728,7 @@ def main():
                             train_curves,
                             val_curves,
                             eval_curves,
-                            target_w_ei,
+                            ei_target_weight_effective,
                             step0_train_ei_loss,
                             epoch_train_mc_loss,
                             avg_grasp_ssim,
@@ -3932,7 +4182,7 @@ def main():
                     train_curves,
                     val_curves,
                     eval_curves,
-                    target_w_ei,
+                    ei_target_weight_effective,
                     step0_train_ei_loss,
                     epoch_train_mc_loss,
                     avg_grasp_ssim,
@@ -3963,7 +4213,7 @@ def main():
                             train_curves,
                             val_curves,
                             eval_curves,
-                            target_w_ei,
+                            ei_target_weight_effective,
                             step0_train_ei_loss,
                             epoch_train_mc_loss,
                             avg_grasp_ssim,
@@ -3994,7 +4244,7 @@ def main():
     if global_rank == 0 or not config['training']['multigpu']:
         train_curves, val_curves, eval_curves = _build_checkpoint_curves()
         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
-        save_checkpoint(model, optimizer, epochs + 1, train_curves, val_curves, eval_curves, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
+        save_checkpoint(model, optimizer, epochs + 1, train_curves, val_curves, eval_curves, ei_target_weight_effective, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
         print(f'Model saved to {model_save_path}')
 
 

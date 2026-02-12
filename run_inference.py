@@ -61,8 +61,9 @@ def _torch_load_checkpoint(path: str, map_location="cpu"):
         # Older torch versions don't support weights_only.
         return torch.load(path, map_location=map_location)
     except Exception:
-        # Some checkpoints may include unsupported objects for weights_only mode.
-        return torch.load(path, map_location=map_location)
+        # Some checkpoints include objects disallowed in weights_only mode
+        # on torch>=2.6. Fall back to full trusted checkpoint load.
+        return torch.load(path, map_location=map_location, weights_only=False)
 
 
 def _resolve_eval_params(config: dict, spokes: int, frames: int, phase_idx: int) -> Tuple[int, int]:
