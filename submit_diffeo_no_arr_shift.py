@@ -44,7 +44,7 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_diffeo_fop_no_arrival_shift_36spf"
+    job_name = "ei_diffeo_fop_cosine_lr_no_arrival_shift_36spf"
     config_path = 'configs/config_diffeo_no_arr_shift.yaml'
     num_gpus = 4
 

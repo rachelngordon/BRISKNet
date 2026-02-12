@@ -953,6 +953,53 @@ def plot_spatial_quality(
         top_fig.subplots_adjust(**{**PLOT_ADJUST, "top": 0.95, "bottom": 0.04})
         top_fig.savefig(top_row_filename, bbox_inches='tight', pad_inches=0.02)
         plt.close(top_fig)
+
+        # Save a separate bottom-row-only figure (GRASP row) without a suptitle.
+        bottom_fig = plt.figure(figsize=(24, 6))
+        bottom_gs = gridspec.GridSpec(
+            1,
+            4,
+            figure=bottom_fig,
+            width_ratios=[1, 1, 1, 1],
+            wspace=0.24,
+        )
+        bottom_axes = np.empty(4, dtype=object)
+        bottom_axes[0] = bottom_fig.add_subplot(bottom_gs[0, 0])
+        bottom_axes[1] = bottom_fig.add_subplot(bottom_gs[0, 1])
+        bottom_axes[2] = bottom_fig.add_subplot(bottom_gs[0, 2])
+        bottom_axes[3] = bottom_fig.add_subplot(bottom_gs[0, 3])
+
+        bottom_axes[0].imshow(gt_img, cmap='gray', vmin=vmin_gt, vmax=vmax_gt)
+        _overlay_contours(bottom_axes[0])
+        bottom_axes[0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
+        bottom_axes[1].imshow(grasp_img, cmap='gray', vmin=vmin_grasp, vmax=vmax_grasp)
+        _overlay_contours(bottom_axes[1])
+        bottom_axes[1].set_title(r"$|\mathrm{GRASP}|$", fontsize=PLOT_FONT_SIZES["title"])
+        bottom_axes[2].imshow(error_map_grasp, cmap='coolwarm', vmin=-0.5, vmax=0.5)
+        bottom_axes[2].set_title(r"$|\mathrm{GRASP}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
+        div = make_axes_locatable(bottom_axes[2])
+        bottom_cax_err = div.append_axes("right", size="4%", pad=0.04)
+        bottom_cb_err = bottom_fig.colorbar(bottom_axes[2].images[0], cax=bottom_cax_err)
+        bottom_cb_err.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        bottom_cb_err.set_label(r"$|\mathrm{GRASP}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["tick"])
+        bottom_axes[3].imshow(ssim_map_grasp, cmap='viridis', vmin=0, vmax=1)
+        bottom_axes[3].set_title(
+            rf"$\mathrm{{SSIM}}_{{\mathrm{{GRASP}}}}$ ({ssim_grasp:.3f})",
+            fontsize=PLOT_FONT_SIZES["title"],
+        )
+        div = make_axes_locatable(bottom_axes[3])
+        bottom_cax_ssim = div.append_axes("right", size="4%", pad=0.04)
+        bottom_cb_ssim = bottom_fig.colorbar(bottom_axes[3].images[0], cax=bottom_cax_ssim)
+        bottom_cb_ssim.ax.tick_params(labelsize=PLOT_FONT_SIZES["tick"])
+        bottom_cb_ssim.set_label(r"$\mathrm{SSIM}$", fontsize=PLOT_FONT_SIZES["tick"])
+
+        for ax in bottom_axes.flat:
+            ax.axis('off')
+
+        bottom_row_filename = f"{base_name}_bottom_row{ext}"
+        bottom_fig.subplots_adjust(**{**PLOT_ADJUST, "top": 0.95, "bottom": 0.04})
+        bottom_fig.savefig(bottom_row_filename, bbox_inches='tight', pad_inches=0.02)
+        plt.close(bottom_fig)
         plt.close()
 
 
