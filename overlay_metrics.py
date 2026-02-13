@@ -22,24 +22,41 @@ EVAL_PANEL_LAYOUT = [
     ("eval_psnrs", "DRO PSNR", "PSNR", "avg_grasp_psnr", (0, 1)),
     ("eval_mses", "DRO Image MSE", "MSE", "avg_grasp_mse", (0, 2)),
     ("eval_raw_dc_maes", "Non-DRO k-space MAE", "MAE", "avg_grasp_raw_dc_mae", (0, 3)),
+    ("eval_raw_dc_mses", "Non-DRO k-space MSE", "MSE", "avg_grasp_raw_dc_mse", (0, 4)),
     ("eval_lpipses", "DRO LPIPS", "LPIPS", "avg_grasp_lpips", (1, 0)),
     ("eval_curve_corrs", "DRO Curve Correlation", "Pearson Correlation Coefficient", "avg_grasp_curve_corr", (1, 1)),
     ("eval_dl_dc_mae_bestfits", "DRO k-space MAE (best-fit gain)", "MAE", "avg_grasp_dc_mae_bestfit", (1, 2)),
     ("eval_raw_ssdu_nmses", "Non-DRO SSDU NMSE", "NMSE", "avg_grasp_raw_ssdu_nmse", (1, 3)),
+    ("eval_raw_dc_psnrs", "Non-DRO k-space Relative PSNR", "PSNR", "avg_grasp_raw_dc_psnr", (1, 4)),
+    ("eval_raw_dyn_dce_maes", "Non-DRO Dynamic DCE MAE (wtd top%)", "MAE", "avg_grasp_raw_dyn_dce_mae", (2, 0)),
+    ("eval_raw_dc_rel_l2s", "Non-DRO k-space Relative L2", "||Ex-y||2 / ||y||2", "avg_grasp_raw_dc_rel_l2", (2, 1)),
+    ("eval_raw_dc_rel_l2_lows", "Non-DRO k-space Relative L2 (Low)", "Relative L2", "avg_grasp_raw_dc_rel_l2_low", (2, 2)),
+    ("eval_raw_dc_rel_l2_mids", "Non-DRO k-space Relative L2 (Mid)", "Relative L2", "avg_grasp_raw_dc_rel_l2_mid", (2, 3)),
+    ("eval_raw_dc_rel_l2_highs", "Non-DRO k-space Relative L2 (High)", "Relative L2", "avg_grasp_raw_dc_rel_l2_high", (2, 4)),
 ]
 
 TEMPORAL_METRICS = [
-    ("eval_curve_maes", "Curve MAE", "MAE"),
-    ("eval_ttae_secs", "Time to Arrival Error", "Seconds"),
-    ("eval_iauc10_errs", "IAUC10 Error", "Error"),
-    ("eval_peak_errs", "Peak Enhancement Error", "Error"),
+    ("eval_rho_fulls", "ρ_full", "Pearson Correlation"),
+    ("eval_curve_maes", "MAE_full", "MAE"),
+    ("eval_early_corrs", "ρ_early", "Pearson Correlation"),
+    ("eval_early_maes", "MAE_early", "MAE"),
+    ("eval_ttae_secs", "t_arr Error", "Seconds"),
+    ("eval_washin_maes", "MAE_wash-in", "MAE"),
+    ("eval_iauc10_errs", "iAUC_10 Error", "Error"),
+    ("eval_peak_errs", "MAE_peak", "MAE"),
+    ("eval_ttpeak_err_secs", "t_peak Error", "Seconds"),
 ]
 
 TEMPORAL_GRASP_BASELINE_KEYS = {
+    "eval_rho_fulls": "avg_grasp_rho_full",
     "eval_curve_maes": "avg_grasp_curve_mae",
+    "eval_early_corrs": "avg_grasp_early_corr",
+    "eval_early_maes": "avg_grasp_early_mae",
     "eval_ttae_secs": "avg_grasp_ttae_sec",
+    "eval_washin_maes": "avg_grasp_washin_mae",
     "eval_iauc10_errs": "avg_grasp_iauc10_err",
     "eval_peak_errs": "avg_grasp_peak_err",
+    "eval_ttpeak_err_secs": "avg_grasp_ttpeak_err_sec",
 }
 
 TRAIN_METRICS = [
@@ -94,6 +111,26 @@ def _has_finite(values: List[float]) -> bool:
         except (TypeError, ValueError):
             continue
     return False
+
+
+def _mse_to_psnr(mse: Optional[float], peak: float = 1.0) -> float:
+    """Convert MSE to PSNR (dB): 20*log10(peak) - 10*log10(mse)."""
+    if mse is None:
+        return float("nan")
+    try:
+        mse_f = float(mse)
+        peak_f = float(peak)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not math.isfinite(mse_f) or not math.isfinite(peak_f):
+        return float("nan")
+    if mse_f <= 0.0 or peak_f <= 0.0:
+        return float("nan")
+    return 20.0 * math.log10(peak_f) - 10.0 * math.log10(mse_f)
+
+
+def _mse_series_to_psnr(values: List[float], peak: float = 1.0) -> List[float]:
+    return [_mse_to_psnr(v, peak=peak) for v in values]
 
 
 def _load_checkpoint(path: str) -> Dict:
@@ -356,30 +393,6 @@ def _resolve_train_axis(
     return _build_train_epoch_axis(n)
 
 
-def _resolve_temporal_axes(
-    curves: Dict[str, List[float]],
-    eval_frequency: int,
-) -> Optional[Tuple[List[int], Dict[str, List[float]]]]:
-    temporal_epochs = _as_list(curves.get("eval_temporal_epochs", []))
-    metric_lists = [curves.get(k, []) for k, _, _ in TEMPORAL_METRICS]
-
-    if temporal_epochs and len(temporal_epochs) == len(metric_lists[0]):
-        epochs = [int(round(float(v))) for v in temporal_epochs]
-    else:
-        epochs = _build_eval_epoch_axis(len(metric_lists[0]), eval_frequency)
-
-    min_len = min([len(epochs)] + [len(v) for v in metric_lists])
-    if min_len == 0:
-        return None
-
-    epochs = epochs[:min_len]
-    trimmed = {
-        key: values[:min_len]
-        for (key, _, _), values in zip(TEMPORAL_METRICS, metric_lists)
-    }
-    return epochs, trimmed
-
-
 def _resolve_metric_series(
     exp: Dict,
     key: str,
@@ -389,13 +402,19 @@ def _resolve_metric_series(
     eval_frequency = exp["eval_frequency"]
 
     if kind == "temporal":
-        resolved = _resolve_temporal_axes(curves, eval_frequency)
-        if resolved is None:
+        values = curves.get(key, [])
+        # Backward compatibility: older checkpoints stored full-curve rho in eval_curve_corrs.
+        if key == "eval_rho_fulls" and not values:
+            values = curves.get("eval_curve_corrs", [])
+        n = len(values)
+        if n == 0:
             return [], []
-        epochs, temporal_curves = resolved
-        values = temporal_curves.get(key, [])
-        n = min(len(epochs), len(values))
-        return epochs[:n], values[:n]
+        temporal_epochs = _as_list(curves.get("eval_temporal_epochs", []))
+        if len(temporal_epochs) >= n:
+            epochs = [int(round(float(v))) for v in temporal_epochs[:n]]
+        else:
+            epochs = _build_eval_epoch_axis(n, eval_frequency)
+        return epochs, values[:n]
 
     if kind == "eval":
         values = curves.get(key, [])
@@ -496,7 +515,20 @@ def _plot_six_panel(
     dpi: int,
 ) -> bool:
     sns.set_style("whitegrid")
-    fig, axes = plt.subplots(2, 4, figsize=(32, 10))
+    nrows = max(pos[0] for *_, pos in EVAL_PANEL_LAYOUT) + 1
+    ncols = max(pos[1] for *_, pos in EVAL_PANEL_LAYOUT) + 1
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6 + 10, nrows * 5))
+    if nrows == 1 and ncols == 1:
+        axes = [[axes]]
+    elif nrows == 1:
+        axes = [axes]
+    elif ncols == 1:
+        axes = [[ax] for ax in axes]
+    used_positions = {pos for *_, pos in EVAL_PANEL_LAYOUT}
+    for r in range(nrows):
+        for c in range(ncols):
+            if (r, c) not in used_positions:
+                axes[r][c].axis("off")
     fig.suptitle(title, fontsize=20)
 
     if len(experiments) <= 10:
@@ -556,7 +588,7 @@ def _plot_six_panel(
         legend_ax.axis("off")
         legend_ax.legend(handles, labels, loc="upper left", frameon=False, fontsize=9)
 
-    fig.subplots_adjust(left=0.05, right=0.67, bottom=0.10, top=0.88, wspace=0.30, hspace=0.35)
+    fig.subplots_adjust(left=0.05, right=0.70, bottom=0.10, top=0.88, wspace=0.30, hspace=0.35)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return True
@@ -571,7 +603,11 @@ def _plot_temporal(
     dpi: int,
 ) -> bool:
     sns.set_style("whitegrid")
-    fig, axes = plt.subplots(2, 2, figsize=(20, 10))
+    n_metrics = len(TEMPORAL_METRICS)
+    ncols = 3
+    nrows = int(math.ceil(n_metrics / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6 + 8, nrows * 4.8))
+    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
     fig.suptitle(title, fontsize=20)
 
     if len(experiments) <= 10:
@@ -582,7 +618,7 @@ def _plot_temporal(
     plotted_panels = 0
     legend_entries: Dict[str, object] = {}
     for idx, (key, panel_title, ylabel) in enumerate(TEMPORAL_METRICS):
-        ax = axes[idx // 2][idx % 2]
+        ax = axes[idx]
         plotted = False
         for color, exp in zip(palette, experiments):
             epochs, values = _resolve_metric_series(exp, key=key, kind="temporal")
@@ -622,6 +658,8 @@ def _plot_temporal(
         ax.set_title(panel_title)
         ax.set_xlabel("Epoch")
         ax.set_ylabel(ylabel)
+    for idx in range(n_metrics, len(axes)):
+        axes[idx].axis("off")
     if plotted_panels == 0:
         plt.close(fig)
         return False
@@ -633,7 +671,7 @@ def _plot_temporal(
         legend_ax.axis("off")
         legend_ax.legend(handles, labels, loc="upper left", frameon=False, fontsize=9)
 
-    fig.subplots_adjust(left=0.07, right=0.67, bottom=0.10, top=0.88, wspace=0.28, hspace=0.32)
+    fig.subplots_adjust(left=0.05, right=0.67, bottom=0.08, top=0.90, wspace=0.28, hspace=0.32)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return True
@@ -738,7 +776,10 @@ def _metric_sort_goal(metric_key: str) -> str:
     maximize_keys = {
         "eval_ssims",
         "eval_psnrs",
+        "eval_raw_dc_psnrs",
         "eval_curve_corrs",
+        "eval_rho_fulls",
+        "eval_early_corrs",
         "lr_history",
     }
     return "max" if metric_key in maximize_keys else "min"
@@ -931,11 +972,16 @@ def main() -> None:
             curves[key] = _as_list(ckpt.get(key, []))
         curves["eval_temporal_epochs"] = _as_list(ckpt.get("eval_temporal_epochs", []))
         curves["lr_epochs"] = _as_list(ckpt.get("lr_epochs", []))
+        curves["eval_raw_dc_psnrs"] = _mse_series_to_psnr(curves.get("eval_raw_dc_mses", []), peak=1.0)
         baselines = {
             key: _as_scalar(value)
             for key, value in ckpt.items()
             if key.startswith("avg_grasp_")
         }
+        if not _is_finite(baselines.get("avg_grasp_rho_full")):
+            baselines["avg_grasp_rho_full"] = baselines.get("avg_grasp_curve_corr")
+        raw_dc_mse_baseline = baselines.get("avg_grasp_raw_dc_mse")
+        baselines["avg_grasp_raw_dc_psnr"] = _mse_to_psnr(raw_dc_mse_baseline, peak=1.0)
         return {
             "label": _label_with_spf(label, spf),
             "curves": curves,

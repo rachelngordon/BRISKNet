@@ -66,7 +66,7 @@ experiment:
   init_checkpoint: /net/projects2/annawoodard/experiments/mamba_36spf_sweepB_early_ei_archfix_lr5em4_minlf6_wu5_ep160_archtune_dconv4_2n4g/mamba_36spf_sweepB_early_ei_archfix_lr5em4_minlf6_wu5_ep160_archtune_dconv4_2n4g_best_model.pth
 model:
   encode_acceleration: false
-  encode_time_index: false
+  encode_time_index: true
   losses:
     ei_loss:
       arrival_fraction: 0.15

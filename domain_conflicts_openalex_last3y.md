@@ -1,0 +1,1018 @@
+# Domain Conflict Lists (OpenAlex, Last 3 Years)
+
+- Window: `2023-02-12` to `2026-02-12`
+- Source: OpenAlex API
+- Collaborator proxy: coauthors on publications in this window
+- Collaborator institution source: institutions attached to those coauthored publications in OpenAlex
+- Author institution source: last_known_institutions + affiliations with year >= 2023
+- Institutional-level domain used (subdomains removed); common public email domains excluded
+
+## Author IDs Used
+- Rachel Gordon: `https://openalex.org/A5091849231`
+- Ian Foster: `https://openalex.org/A5032231503`
+- Kyle Chard: `https://openalex.org/A5065464552`
+- Michael Maire: `https://openalex.org/A5001371942`
+- Greg Karczmar: `https://openalex.org/A5079213983`
+- Milica Medved: `https://openalex.org/A5056585028`
+- Zhen Ren: `https://openalex.org/A5090331749`
+- Eddy Solomon: `https://openalex.org/A5017245842`
+- Laura Heacock: `https://openalex.org/A5080296152`
+- Anna Woodard: `https://openalex.org/A5101715118`
+- Olufunmilayo Olopade: `https://openalex.org/A5057209864`
+
+## Rachel Gordon
+- OpenAlex author: `https://openalex.org/A5091849231` (Rachel Gordon)
+- Last-known institutions: University of Chicago
+- Publications in window: 8
+- Unique coauthors in window: 12
+
+### Last-3-Year Publications Used
+- 2025: Slice-Aware Attention for Quality Control of Breast MRI Segmentations | https://openalex.org/W4414909065 | DOI: 10.1109/escience65000.2025.00063
+- 2024: Efficacy of a Remote Play-Based Intervention for Children With Prader-Willi Syndrome | https://openalex.org/W4400059001 | DOI: 10.1352/1944-7558-129.4.279
+- 2024: Model, Reflect, Describe: Critical Intervention Strategies within a Pretend Play Intervention for Children with Prader-Willi Syndrome | https://openalex.org/W4404124994 | DOI: 10.2139/ssrn.5004280
+- 2024: Autism Spectrum Disorder: A Lifespan Overview | https://openalex.org/W4402525102 | DOI: 10.1007/978-3-031-66932-3_15
+- 2023: Enhancing stakeholder roles in autism early interventions in the United States: A stakeholder-driven research agenda | https://openalex.org/W4386530696 | DOI: 10.1177/13623613231195743
+- 2023: Considering Examples of Scholarly Publications Modeling Social and Health Variables | https://openalex.org/W4385769143 | DOI: 10.4324/9781003314530-2
+- 2023: Analyzing Multi-Category Outcomes and Offering a Roadmap to Additional Models | https://openalex.org/W4385768929 | DOI: 10.4324/9781003314530-17
+- 2023: Examining Effective Intervention Strategies in a Play-Based Program for Children with Prader-Willi Syndrome | https://openalex.org/W4383311895 | DOI: 10.1007/s10882-023-09920-w
+
+### Deduplicated Institutional-Domain Conflict List
+case.edu; duke.edu; niu.edu; osu.edu; rush.edu; sc.edu; uchicago.edu
+
+## Ian Foster
+- OpenAlex author: `https://openalex.org/A5032231503` (Ian Foster)
+- Last-known institutions: Argonne National Laboratory; Franklin & Marshall College; University of Chicago; Alex's Lemonade Stand Foundation
+- Publications in window: 194
+- Unique coauthors in window: 1041
+
+### Last-3-Year Publications Used
+- 2025: Harnessing Multimodal Data from Scientific Literature for Spectroscopy Informatics | https://openalex.org/W4416618390 | DOI: 10.1149/ma2025-027997mtgabs
+- 2025: Cartesian equivariant representations for learning and understanding molecular orbitals | https://openalex.org/W4416507876 | DOI: 10.1073/pnas.2510235122
+- 2025: Autonomous Synthesis and Inverse Design of Electrochromic Polymers with High Efficiency and Accuracy | https://openalex.org/W4416470833 | DOI: 10.1021/jacs.5c12241
+- 2025: Addressing Reproducibility Challenges in HPC with Continuous Integration | https://openalex.org/W4416203792 | DOI: 10.1145/3712285.3759874
+- 2025: Core Hours and Carbon Credits: Incentivizing Sustainability in HPC | https://openalex.org/W4416155392 | DOI: 10.1145/3712285.3759858
+- 2025: Who Gets the Reward, Who Gets the Blame? Evaluation-Aligned Training Signals for Multi-LLM Agents | https://openalex.org/W4416339326 | DOI: 10.48550/arxiv.2511.10687
+- 2025: To Stream or Not to Stream: Towards A Quantitative Model for Remote HPC Processing Decisions | https://openalex.org/W4416004600 | DOI: 10.1145/3731599.3767455
+- 2025: RESILIO : A Scalable and Composable Architecture for Tomographic Reconstruction Workflows | https://openalex.org/W4416004574 | DOI: 10.1145/3731599.3767575
+- 2025: StreamHub: High-performance Managed SciStream as a Service | https://openalex.org/W4416004562 | DOI: 10.1145/3731599.3767459
+- 2025: LangChain-Parsl: Connect Large Language Model Agents to High Performance Computing Resource | https://openalex.org/W4416004460 | DOI: 10.1145/3731599.3767349
+- 2025: FIRST: Federated Inference Resource Scheduling Toolkit for Scientific AI Model Access | https://openalex.org/W4416004458 | DOI: 10.1145/3731599.3767346
+- 2025: Automated MCQA Benchmarking at Scale: Evaluating Reasoning Traces as Retrieval Sources for Domain Adaptation of Small Language Models | https://openalex.org/W4416004014 | DOI: 10.1145/3731599.3767410
+- 2025: OmniCast: A Masked Latent Diffusion Model for Weather Forecasting Across Time Scales | https://openalex.org/W4416057154 | DOI: 10.48550/arxiv.2510.18707
+- 2025: Radio Afterglow Detection and AI-driven Response (RADAR): A Federated Framework for Gravitational-wave Event Follow-up | https://openalex.org/W4414930272 | DOI: 10.3847/1538-4365/adfbea
+- 2025: Strategic investments in data democratization for scientific innovation | https://openalex.org/W4414713825 | DOI: 10.1177/10943420251383612
+- 2025: Agentic Discovery: Closing the Loop With Cooperative Agents | https://openalex.org/W4414462775 | DOI: 10.1109/mc.2025.3575029
+- 2025: Toward a persistent event-streaming system for high-performance computing applications | https://openalex.org/W4414299303 | DOI: 10.3389/fhpcp.2025.1638203
+- 2025: Slice-Aware Attention for Quality Control of Breast MRI Segmentations | https://openalex.org/W4414909065 | DOI: 10.1109/escience65000.2025.00063
+- 2025: Diamond: Harnessing GPU Resources for Scientific Deep Learning | https://openalex.org/W4414898775 | DOI: 10.1109/escience65000.2025.00031
+- 2025: Steering an Active Learning Workflow Towards Novel Materials Discovery via Queue Prioritization | https://openalex.org/W4414898387 | DOI: 10.1109/escience65000.2025.00013
+- 2025: SMURF: Federated Multimodal Retrieval for Scientific Data via Embedding Alignment | https://openalex.org/W4414898313 | DOI: 10.1109/escience65000.2025.00091
+- 2025: FragmentGPT: A Unified GPT Model for Fragment Growing, Linking, and Merging in Molecular Design | https://openalex.org/W4415087724 | DOI: 10.48550/arxiv.2509.11044
+- 2025: Automated MCQA Benchmarking at Scale: Evaluating Reasoning Traces as Retrieval Sources for Domain Adaptation of Small Language Models | https://openalex.org/W4414597843 | DOI: 10.48550/arxiv.2509.10744
+- 2025: 32 examples of LLM applications in materials science and chemistry: towards automation, assistants, agents, and accelerated scientific discovery | https://openalex.org/W4413820841 | DOI: 10.1088/2632-2153/ae011a
+- 2025: RADAR-Radio Afterglow Detection and AI-driven Response: A Federated Framework for Gravitational Wave Event Follow-Up | https://openalex.org/W4417432437 | DOI: 10.48550/arxiv.2507.14827
+- 2025: Flight: A FaaS-based framework for complex and Hierarchical Federated Learning | https://openalex.org/W4412455516 | DOI: 10.1016/j.future.2025.107998
+- 2025: The computing continuum: Past, present, and future | https://openalex.org/W4412434646 | DOI: 10.1016/j.cosrev.2025.100782
+- 2025: Cartesian Equivariant Representations for Learning and Understanding Molecular Orbitals | https://openalex.org/W4412418172 | DOI: 10.26434/chemrxiv-2024-cvhtp-v3
+- 2025: 2024 NSF CSSI-Cybertraining-SCIPE PI Meeting August 12 to 13, 2024, Charlotte, NC | https://openalex.org/W4415346058
+- 2025: DynoStore: A wide-area distribution system for the management of data over heterogeneous storage | https://openalex.org/W4416886068 | DOI: 10.48550/arxiv.2507.00576
+- 2025: HiPerRAG: High-Performance Retrieval Augmented Generation for Scientific Insights | https://openalex.org/W4411490478 | DOI: 10.1145/3732775.3733586
+- 2025: Autonomous Synthesis and Inverse Design of Electronic Polymers with High Efficiency and Accuracy | https://openalex.org/W4411297144 | DOI: 10.26434/chemrxiv-2025-9pqc0
+- 2025: D-Rex: Heterogeneity-Aware Reliability Framework and Adaptive Algorithms for Distributed Storage | https://openalex.org/W4413411735 | DOI: 10.1145/3721145.3730412
+- 2025: Resilient execution of distributed X-ray image analysis workflows | https://openalex.org/W4411107529 | DOI: 10.3389/fhpcp.2025.1550855
+- 2025: Optimizing Fine-Grained Parallelism Through Dynamic Load Balancing on Multi-Socket Many-Core Systems | https://openalex.org/W4412610514 | DOI: 10.1109/ipdps64566.2025.00016
+- 2025: Trustworthy Provenance for Big Data Science: a Modular Architecture Leveraging Blockchain in Federated Settings | https://openalex.org/W4414858167 | DOI: 10.48550/arxiv.2505.24675
+- 2025: AERO: An autonomous platform for continuous research | https://openalex.org/W4414581310 | DOI: 10.48550/arxiv.2505.18408
+- 2025: Ocelot: An Interactive, Efficient Distributed Compression-As-a-Service Platform With Optimized Data Compression Techniques | https://openalex.org/W4410536772 | DOI: 10.1109/tpds.2025.3568221
+- 2025: Wrath: Workload Resilience Across Task Hierarchies in Task-Based Parallel Programming Frameworks | https://openalex.org/W4411800337 | DOI: 10.1109/ccgrid64434.2025.00058
+- 2025: Dynostore: A Wide-Area Distribution System for the Management of Data Over Heterogeneous Storage | https://openalex.org/W4411800144 | DOI: 10.1109/ccgrid64434.2025.00019
+- 2025: Topology-Aware Knowledge Propagation in Decentralized Learning | https://openalex.org/W4417299948 | DOI: 10.48550/arxiv.2505.11760
+- 2025: 34 Examples of LLM Applications in Materials Science and Chemistry: Towards Automation, Assistants, Agents, and Accelerated Scientific Discovery | https://openalex.org/W4417092504 | DOI: 10.48550/arxiv.2505.03049
+- 2025: Cartesian Equivariant Representations for Learning and Understanding Molecular Orbitals | https://openalex.org/W4409889575 | DOI: 10.26434/chemrxiv-2024-cvhtp-v2
+- 2025: Advances and Challenges in Foundation Agents: From Brain-Inspired Intelligence to Evolutionary, Collaborative, and Safe Systems | https://openalex.org/W4409316940 | DOI: 10.48550/arxiv.2504.01990
+- 2025: ESGF Next Generation and preparations for CMIP7 | https://openalex.org/W4408467977 | DOI: 10.5194/egusphere-egu25-19453
+- 2025: Impacts of Shared Filesystem Performance on Real-Time Data Acquisition and Analysis | https://openalex.org/W4411663232 | DOI: 10.1145/3718350.3727165
+- 2025: EAIRA: Establishing a Methodology for Evaluating AI Models as Scientific Research Assistants | https://openalex.org/W4416150741 | DOI: 10.48550/arxiv.2502.20309
+- 2025: Connecting Large Language Model Agent to High Performance Computing Resource | https://openalex.org/W4407759338 | DOI: 10.48550/arxiv.2502.12280
+- 2025: DrugImproverGPT: A Large Language Model for Drug Optimization with Fine-Tuning via Structured Policy Optimization | https://openalex.org/W4407424308 | DOI: 10.48550/arxiv.2502.07237
+- 2025: Optimizing Fine-Grained Parallelism Through Dynamic Load Balancing on Multi-Socket Many-Core Systems | https://openalex.org/W4407369267 | DOI: 10.48550/arxiv.2502.05293
+- 2025: SinoTx: A Transformer-based Model for Sinogram Inpainting | https://openalex.org/W4407005486 | DOI: 10.2352/ei.2025.37.12.hpci-192
+- 2025: Accurate Dehydrogenation Enthalpies Dataset for Liquid Organic Hydrogen Carriers | https://openalex.org/W4406929659 | DOI: 10.1038/s41597-025-04468-0
+- 2025: MOFA: Discovering Materials for Carbon Capture with a GenAI- and Simulation-Based Workflow | https://openalex.org/W4406699873 | DOI: 10.48550/arxiv.2501.10651
+- 2025: Will It Blend? Mixing Numerical and Machine-Learned Physics Quantities for Accurate on-the-Fly Surrogate Modeling | https://openalex.org/W4412042152 | DOI: 10.1007/978-3-031-97632-2_19
+- 2025: COMPARING ANALYTICAL DATA FROM A HANDHELD ENERGY-DISPERSIVE XRF INSTRUMENT WITH A LABORATORY-BASED WAVELENGTH-DISPERSIVE XRF INSTRUMENT, WITH IMPLICATIONS FOR FINGERPRINTING OF OBSIDIAN ARTIFACTS IN THE AMERICAN SOUTHWEST | https://openalex.org/W4411145339 | DOI: 10.1130/abs/2025ne-408479
+- 2024: Model and Data Management for Machine Learning (M2ML): Integrating Instruments, Edge and HPC for Accelerated Machine Learning | https://openalex.org/W4406459161 | DOI: 10.1109/bigdata62323.2024.10825634
+- 2024: Object Proxy Patterns for Accelerating Distributed Applications | https://openalex.org/W4405022542 | DOI: 10.1109/tpds.2024.3511347
+- 2024: Machine learning materials properties with accurate predictions, uncertainty estimates, domain guidance, and persistent online accessibility | https://openalex.org/W4404936357 | DOI: 10.1088/2632-2153/ad95db
+- 2024: Assessment of fine-tuned large language models for real-world chemistry and material science applications | https://openalex.org/W4404620644 | DOI: 10.1039/d4sc04401k
+- 2024: Octopus: Experiences with a Hybrid Event-Driven Architecture for Distributed Scientific Computing | https://openalex.org/W4406164037 | DOI: 10.1109/scw63240.2024.00071
+- 2024: Establishing a High-Performance and Productive Ecosystem for Distributed Execution of Python Functions Using Globus Compute | https://openalex.org/W4406157764 | DOI: 10.1109/scw63240.2024.00083
+- 2024: MProt-DPO: Breaking the ExaFLOPS Barrier for Multimodal Protein Design Workflows with Direct Preference Optimization | https://openalex.org/W4405756116 | DOI: 10.1109/sc41406.2024.00013
+- 2024: Reverse AFM Height Map Search: Content-Based Topography Retrieval via Self-Supervised Deep Learning | https://openalex.org/W4404399849 | DOI: 10.1007/s40192-024-00381-3
+- 2024: Shaping the Future of Self-Driving Autonomous Laboratories Workshop | https://openalex.org/W4405413097 | DOI: 10.2172/2481197
+- 2024: The River Rother: | https://openalex.org/W4403934985 | DOI: 10.2307/jj.21275914.11
+- 2024: Author response for "Assessment of Fine-Tuned Large Language Models for Real-World Chemistry and Material Science Applications" | https://openalex.org/W4404653984 | DOI: 10.1039/d4sc04401k/v2/response1
+- 2024: Workflows Community Summit 2024: Future Trends and Challenges in Scientific Workflows | https://openalex.org/W4404088211 | DOI: 10.5281/zenodo.13844758
+- 2024: Deep Model Merging: The Sister of Neural Network Interpretability -- A Survey | https://openalex.org/W4403578872 | DOI: 10.48550/arxiv.2410.12927
+- 2024: Accelerating Python Applications with Dask and ProxyStore | https://openalex.org/W4403578577 | DOI: 10.48550/arxiv.2410.12092
+- 2024: Employing artificial intelligence to steer exascale workflows with colmena | https://openalex.org/W4403258217 | DOI: 10.1177/10943420241288242
+- 2024: Machine learning-guided discovery of gas evolving electrode bubble inactivation | https://openalex.org/W4403215897 | DOI: 10.1039/d4nr02628d
+- 2024: Mitigating Memorization In Language Models | https://openalex.org/W4403882442 | DOI: 10.48550/arxiv.2410.02159
+- 2024: Workflows Community Summit 2024: Future Trends and Challenges in Scientific Workflows | https://openalex.org/W4403801662 | DOI: 10.2172/2474744
+- 2024: Binding Affinity Prediction: From Conventional to Machine Learning-Based Approaches | https://openalex.org/W4403820985 | DOI: 10.48550/arxiv.2410.00709
+- 2024: Flight: A FaaS-Based Framework for Complex and Hierarchical Federated Learning | https://openalex.org/W4403783858 | DOI: 10.48550/arxiv.2409.16495
+- 2024: Diaspora: Resilience-Enabling Services for Real-Time Distributed Workflows | https://openalex.org/W4402673683 | DOI: 10.1109/e-science62913.2024.10678669
+- 2024: Accelerating multiscale electronic stopping power predictions with time-dependent density functional theory and machine learning | https://openalex.org/W4402489574 | DOI: 10.1038/s41524-024-01374-8
+- 2024: Globus service enhancements for exascale applications and facilities | https://openalex.org/W4402411478 | DOI: 10.1177/10943420241281744
+- 2024: Sustainable Data Democratization: A Multifaceted Investment for an Equitable Future | https://openalex.org/W4402704288 | DOI: 10.48550/arxiv.2408.14627
+- 2024: Employing Artificial Intelligence to Steer Exascale Workflows with Colmena | https://openalex.org/W4402703173 | DOI: 10.48550/arxiv.2408.14434
+- 2024: Frontiers in Scientific Workflows: Pervasive Integration With High-Performance Computing | https://openalex.org/W4401453588 | DOI: 10.1109/mc.2024.3401542
+- 2024: Assessment of Fine-Tuned Large Language Models for Real-World Chemistry and Material Science Applications | https://openalex.org/W4401183144 | DOI: 10.26434/chemrxiv-2024-mm31v
+- 2024: Twins in rotational spectroscopy: Does a rotational spectrum uniquely identify a molecule? | https://openalex.org/W4400982471 | DOI: 10.1063/5.0212632
+- 2024: Efficient distributed continual learning for steering experiments in real-time | https://openalex.org/W4400856287 | DOI: 10.1016/j.future.2024.07.016
+- 2024: Enabling Remote Management of FaaS Endpoints with Globus Compute Multi-User Endpoints | https://openalex.org/W4400799117 | DOI: 10.1145/3626203.3670612
+- 2024: Zero Code and Infrastructure Research Data Portals | https://openalex.org/W4400798707 | DOI: 10.1145/3626203.3670595
+- 2024: Octopus: Experiences with a Hybrid Event-Driven Architecture for Distributed Scientific Computing | https://openalex.org/W4403808659 | DOI: 10.48550/arxiv.2407.11432
+- 2024: Rapid detection of rare events from <i>in situ</i> X-ray diffraction data using machine learning | https://openalex.org/W4400725845 | DOI: 10.1107/s160057672400517x
+- 2024: Object Proxy Patterns for Accelerating Distributed Applications | https://openalex.org/W4400377705 | DOI: 10.48550/arxiv.2407.01764
+- 2024: GreenFaaS: Maximizing Energy Efficiency of HPC Workloads with FaaS | https://openalex.org/W4400065229 | DOI: 10.48550/arxiv.2406.17710
+- 2024: Machine Learning Materials Properties with Accurate Predictions, Uncertainty Estimates, Domain Guidance, and Persistent Online Accessibility | https://openalex.org/W4400025514 | DOI: 10.48550/arxiv.2406.15650
+- 2024: An End-to-End Programming Model for AI Engine Architectures | https://openalex.org/W4399723097 | DOI: 10.1145/3665283.3665294
+- 2024: BraggHLS: High-Level Synthesis for Low-Latency Deep Neural Networks for Experimental Science | https://openalex.org/W4399723085 | DOI: 10.1145/3665283.3665284
+- 2024: An Investigation of Multiple Classifications of Clouds Over Mid-latitude Cyclones | https://openalex.org/W4399605743 | DOI: 10.22541/essoar.171828430.03272929/v1
+- 2024: Causal Discovery over High-Dimensional Structured Hypothesis Spaces with Causal Graph Partitioning | https://openalex.org/W4399554315 | DOI: 10.48550/arxiv.2406.06348
+- 2024: Enhancing Energy Efficiency with Multi-Site Scheduling Strategies | https://openalex.org/W4401018228 | DOI: 10.1109/ipdpsw63119.2024.00197
+- 2024: UniFaaS: Programming across Distributed Cyberinfrastructure with Federated Function Serving | https://openalex.org/W4400409828 | DOI: 10.1109/ipdps57955.2024.00027
+- 2024: Thinking in Categories: A Survey on Assessing the Quality for Time Series Synthesis | https://openalex.org/W4399022044 | DOI: 10.1145/3666006
+- 2024: Evaluation is key: a survey on evaluation measures for synthetic time series | https://openalex.org/W4396694695 | DOI: 10.1186/s40537-024-00924-7
+- 2024: Efficient Data-Parallel Continual Learning with Asynchronous Distributed Rehearsal Buffers | https://openalex.org/W4399448016 | DOI: 10.1109/ccgrid59990.2024.00036
+- 2024: MalleTrain: Deep Neural Networks Training on Unfillable Supercomputer Nodes | https://openalex.org/W4395483140 | DOI: 10.1145/3629526.3645035
+- 2024: Inter-planner Variability in Expert Driven Pareto-guided Automated Planning Solutions | https://openalex.org/W4398146791 | DOI: 10.18573/conf1.g
+- 2024: Automated, Reliable, and Efficient Continental-Scale Replication of 7.3 Petabytes of Climate Simulation Data: A Case Study | https://openalex.org/W4396600915 | DOI: 10.48550/arxiv.2404.19717
+- 2024: Deep Learning for Molecular Orbitals | https://openalex.org/W4396513868 | DOI: 10.26434/chemrxiv-2024-cvhtp
+- 2024: Twins in rotational spectroscopy: Does a rotational spectrum uniquely identify a molecule? | https://openalex.org/W4394590947 | DOI: 10.48550/arxiv.2404.04225
+- 2024: Modeling the effects of tropospheric ozone on the growth and yield of global staple crops with DSSAT v4.8.0 | https://openalex.org/W4393981863 | DOI: 10.5194/gmd-17-2547-2024
+- 2024: RuralAI in Tomato Farming: Integrated Sensor System, Distributed Computing, and Hierarchical Federated Learning for Crop Health Monitoring | https://openalex.org/W4393972637 | DOI: 10.1109/lsens.2024.3384935
+- 2024: XaaS: Acceleration as a Service to Enable Productive High-Performance Cloud Computing | https://openalex.org/W4393405311 | DOI: 10.1109/mcse.2024.3382154
+- 2024: UniFaaS: Programming across Distributed Cyberinfrastructure with Federated Function Serving | https://openalex.org/W4393335906 | DOI: 10.48550/arxiv.2403.19257
+- 2024: QoS-aware edge AI placement and scheduling with multiple implementations in FaaS-based edge computing | https://openalex.org/W4393237747 | DOI: 10.1016/j.future.2024.03.035
+- 2024: Pretraining a foundation model using MODIS observations of the earth&amp;#8217;s atmosphere | https://openalex.org/W4392663086 | DOI: 10.5194/egusphere-egu24-22461
+- 2024: Steering a Fleet: Adaptation for Large-Scale, Workflow-Based Experiments | https://openalex.org/W4392737210 | DOI: 10.48550/arxiv.2403.06077
+- 2024: FastqZip: An Improved Reference-Based Genome Sequence Lossy Compression Framework | https://openalex.org/W4393967765 | DOI: 10.48550/arxiv.2404.02163
+- 2024: Combining Language and Graph Models for Semi-structured Information Extraction on the Web | https://openalex.org/W4392120567 | DOI: 10.48550/arxiv.2402.14129
+- 2024: <i>E</i><sub>min</sub>: A First-Principles Thermochemical Descriptor for Predicting Molecular Synthesizability | https://openalex.org/W4391846177 | DOI: 10.1021/acs.jcim.3c01583
+- 2024: A generative artificial intelligence framework based on a molecular diffusion model for the design of metal-organic frameworks for carbon capture | https://openalex.org/W4391821797 | DOI: 10.1038/s42004-023-01090-2
+- 2024: Trillion Parameter AI Serving Infrastructure for Scientific Discovery: A Survey and Vision | https://openalex.org/W4391631449 | DOI: 10.48550/arxiv.2402.03480
+- 2024: E_min: A First-Principles Thermochemical Descriptor for Predicting Molecular Synthesizability | https://openalex.org/W4391338518 | DOI: 10.26434/chemrxiv-2024-d4jbl
+- 2024: Author response for "Review of low-cost self-driving laboratories in chemistry and materials science: the "frugal twin" concept" | https://openalex.org/W4402935674 | DOI: 10.1039/d3dd00223c/v2/response1
+- 2024: Foundry-ML - Software and Services to Simplify Accessto Machine Learning Datasets in Materials Science | https://openalex.org/W4391136690 | DOI: 10.21105/joss.05467
+- 2024: XaaS: Acceleration as a Service to Enable Productive High-Performance Cloud Computing | https://openalex.org/W4390784770 | DOI: 10.48550/arxiv.2401.04552
+- 2024: Comprehensive Exploration of Synthetic Data Generation: A Survey | https://openalex.org/W4390690081 | DOI: 10.48550/arxiv.2401.02524
+- 2024: Scaling transformer neural networks for skillful and reliable medium-range weather forecasting | https://openalex.org/W4415797118 | DOI: 10.52202/079017-2196
+- 2024: Machine learning and TDDFT software for stopping power computation | https://openalex.org/W4403050048 | DOI: 10.11578/dc.20240902.1
+- 2024: Review of low-cost self-driving laboratories in chemistry and materials science: the “frugal twin” concept | https://openalex.org/W4391853808 | DOI: 10.1039/d3dd00223c
+- 2023: SECRE: Surrogate-Based Error-Controlled Lossy Compression Ratio Estimation Framework | https://openalex.org/W4394002928 | DOI: 10.1109/hipc58850.2023.00029
+- 2023: WordScape: a Pipeline to extract multilingual, visually rich Documents with Layout Annotations from Web Crawl Data | https://openalex.org/W4389982623 | DOI: 10.48550/arxiv.2312.10188
+- 2023: Comment on egusphere-2023-1540 | https://openalex.org/W4389781845 | DOI: 10.5194/egusphere-2023-1540-rc2
+- 2023: The globus compute dataset: An open function-as-a-service dataset from the edge to the cloud | https://openalex.org/W4389617340 | DOI: 10.1016/j.future.2023.12.007
+- 2023: Rapid detection of rare events from in situ X-ray diffraction data using machine learning | https://openalex.org/W4389500966 | DOI: 10.48550/arxiv.2312.03989
+- 2023: Scaling transformer neural networks for skillful and reliable medium-range weather forecasting | https://openalex.org/W4389500830 | DOI: 10.48550/arxiv.2312.03876
+- 2023: Trillion Parameter AI Serving Infrastructure for Scientific Discovery: A Survey and Vision | https://openalex.org/W4393869221 | DOI: 10.1145/3632366.3632396
+- 2023: 2023 AI Testbed Expeditions Report | https://openalex.org/W4402464907 | DOI: 10.2172/2439992
+- 2023: De Bello Homomorphico: Investigation of the extensibility of the OpenFHE library with basic mathematical functions by means of common approaches using the example of the CKKS cryptosystem | https://openalex.org/W4389035934 | DOI: 10.1007/s10207-023-00781-0
+- 2023: Measurement and Applications: Exploring the Challenges and Opportunities of Hierarchical Federated Learning in Sensor Applications | https://openalex.org/W4388966655 | DOI: 10.1109/mim.2023.10328671
+- 2023: Correction: Reproducible big data science: A case study in continuous FAIRness | https://openalex.org/W4388857726 | DOI: 10.1371/journal.pone.0294883
+- 2023: Review of Low-cost Self-driving Laboratories: The "Frugal Twin" Concept | https://openalex.org/W4388732400 | DOI: 10.26434/chemrxiv-2023-6z9mq-v2
+- 2023: Fine-grained accelerator partitioning for Machine Learning and Scientific Computing in Function as a Service Platform | https://openalex.org/W4388581250 | DOI: 10.1145/3624062.3624238
+- 2023: Linking the Dynamic PicoProbe Analytical Electron-Optical Beam Line / Microscope to Supercomputers | https://openalex.org/W4388581148 | DOI: 10.1145/3624062.3624614
+- 2023: Exploring Benchmarks for Self-Driving Labs using Color Matching | https://openalex.org/W4388581071 | DOI: 10.1145/3624062.3624615
+- 2023: Tournament-Based Pretraining to Accelerate Federated Learning | https://openalex.org/W4388581040 | DOI: 10.1145/3624062.3626089
+- 2023: Protein Generation via Genome-scale Language Models with Bio-physical Scoring | https://openalex.org/W4388581010 | DOI: 10.1145/3624062.3626087
+- 2023: Deep learning at the edge enables real-time streaming ptychographic imaging | https://openalex.org/W4388328602 | DOI: 10.1038/s41467-023-41496-z
+- 2023: Accelerating Electronic Stopping Power Predictions by 10 Million Times with a Combination of Time-Dependent Density Functional Theory and Machine Learning | https://openalex.org/W4388328648 | DOI: 10.48550/arxiv.2311.00787
+- 2023: Accelerating Communications in Federated Applications with Transparent Object Proxies | https://openalex.org/W4388105673 | DOI: 10.1145/3581784.3607047
+- 2023: Comment on egusphere-2023-1540 | https://openalex.org/W4388015452 | DOI: 10.5194/egusphere-2023-1540-rc1
+- 2023: GenSLMs: Genome-scale language models reveal SARS-CoV-2 evolutionary dynamics | https://openalex.org/W4387994442 | DOI: 10.1177/10943420231201154
+- 2023: The Globus Compute Dataset | https://openalex.org/W4393461825 | DOI: 10.5281/zenodo.10044779
+- 2023: The Globus Compute Dataset | https://openalex.org/W4393432522 | DOI: 10.5281/zenodo.10044780
+- 2023: Attention Lens: A Tool for Mechanistically Interpreting the Attention Head Information Retrieval Mechanism | https://openalex.org/W4387963693 | DOI: 10.48550/arxiv.2310.16270
+- 2023: DeepSpeed4Science Initiative: Enabling Large-Scale Scientific Discovery through Sophisticated AI System Technologies | https://openalex.org/W4387559225 | DOI: 10.48550/arxiv.2310.04610
+- 2023: Exploring Benchmarks for Self-Driving Labs using Color Matching | https://openalex.org/W4387323544 | DOI: 10.48550/arxiv.2310.00510
+- 2023: Telescope: An Automated Hybrid Forecasting Approach on a Level-Playing Field | https://openalex.org/W4387228670 | DOI: 10.48550/arxiv.2309.15871
+- 2023: PSI/J: A Portable Interface for Submitting, Monitoring, and Managing Jobs | https://openalex.org/W4387006225 | DOI: 10.1109/e-science58273.2023.10254912
+- 2023: Let's Put the Science in eScience | https://openalex.org/W4387006143 | DOI: 10.1109/e-science58273.2023.10254914
+- 2023: Can Automated Metadata Extraction Make Scientific Data More Navigable? | https://openalex.org/W4387005685 | DOI: 10.1109/e-science58273.2023.10254801
+- 2023: Tomo2Mesh: Fast Porosity Mapping and Visualization for Synchrotron Tomography | https://openalex.org/W4387005623 | DOI: 10.1109/e-science58273.2023.10254907
+- 2023: Lazy Python Dependency Management in Large-Scale Systems | https://openalex.org/W4387005442 | DOI: 10.1109/e-science58273.2023.10254910
+- 2023: Memory Injections: Correcting Multi-Hop Reasoning Failures during Inference in Transformer-Based Language Models | https://openalex.org/W4386655755 | DOI: 10.48550/arxiv.2309.05605
+- 2023: Evaluation is Key: A Survey on Evaluation Measures for Synthetic Time Series | https://openalex.org/W4386621319 | DOI: 10.21203/rs.3.rs-3331381/v1
+- 2023: Supplementary material to "Modeling the effects of tropospheric ozone on the growth and yield of global staple crops with DSSAT v4.8.0" | https://openalex.org/W4386558927 | DOI: 10.5194/egusphere-2023-1540-supplement
+- 2023: Modeling the effects of tropospheric ozone on the growth and yield of global staple crops with DSSAT v4.8.0 | https://openalex.org/W4386545646 | DOI: 10.5194/egusphere-2023-1540
+- 2023: Data for modeling the effects of tropospheric ozone on the growth and yield of global staple crops with DSSAT v4.8.0 | https://openalex.org/W4398317204 | DOI: 10.7910/dvn/0nn9mh
+- 2023: Linking the Dynamic PicoProbe Analytical Electron-Optical Beam Line / Microscope to Supercomputers | https://openalex.org/W4386269589 | DOI: 10.48550/arxiv.2308.13701
+- 2023: Serverless Computing: What It Is, and What It Is Not? | https://openalex.org/W4386099569 | DOI: 10.1145/3587249
+- 2023: Towards a Modular Architecture for Science Factories | https://openalex.org/W4386080753 | DOI: 10.48550/arxiv.2308.09793
+- 2023: Robotic pendant drop: containerless liquid for μs-resolved, AI-executable XPCS | https://openalex.org/W4385984522 | DOI: 10.1038/s41377-023-01233-z
+- 2023: RAPIDS: Reconciling Availability, Accuracy, and Performance in Managing Geo-Distributed Scientific Data | https://openalex.org/W4385623344 | DOI: 10.1145/3588195.3592983
+- 2023: Author response for "14 examples of how LLMs can transform materials science and chemistry: a reflection on a large language model hackathon" | https://openalex.org/W4402935393 | DOI: 10.1039/d3dd00113j/v3/response1
+- 2023: FAIR for AI: An interdisciplinary and international community building perspective | https://openalex.org/W4385276403 | DOI: 10.1038/s41597-023-02298-6
+- 2023: Globus Timers: Scheduling Periodic Data Management Actions on Distributed Research Infrastructure | https://openalex.org/W4386585106 | DOI: 10.1145/3569951.3597571
+- 2023: Active Research Data Management with the Django Globus Portal Framework | https://openalex.org/W4386585066 | DOI: 10.1145/3569951.3593597
+- 2023: Author response for "14 examples of how LLMs can transform materials science and chemistry: a reflection on a large language model hackathon" | https://openalex.org/W4402934518 | DOI: 10.1039/d3dd00113j/v2/response1
+- 2023: PSI/J: A Portable Interface for Submitting, Monitoring, and Managing Jobs | https://openalex.org/W4384644026 | DOI: 10.48550/arxiv.2307.07895
+- 2023: Optimizing Scientific Data Transfer on Globus with Error-bounded Lossy Compression | https://openalex.org/W4384115481 | DOI: 10.48550/arxiv.2307.05416
+- 2023: AL4GAP: Active learning workflow for generating DFT-SCAN accurate machine-learning potentials for combinatorial molten salt mixtures | https://openalex.org/W4383710766 | DOI: 10.1063/5.0153021
+- 2023: Optimizing Scientific Data Transfer on Globus with Error-Bounded Lossy Compression | https://openalex.org/W4387544162 | DOI: 10.1109/icdcs57875.2023.00064
+- 2023: GHP-MOFassemble: Diffusion modeling, high throughput screening, and molecular dynamics for rational discovery of novel metal-organic frameworks for carbon capture at scale | https://openalex.org/W4382520131 | DOI: 10.21203/rs.3.rs-3084157/v1
+- 2023: Can the United States Maintain Its Leadership in High-Performance Computing? - A report from the ASCAC Subcommittee on American Competitiveness and Innovation to the ASCR Office | https://openalex.org/W4384297502 | DOI: 10.2172/1989107
+- 2023: A generative artificial intelligence framework based on a molecular diffusion model for the design of metal-organic frameworks for carbon capture | https://openalex.org/W4380993789 | DOI: 10.48550/arxiv.2306.08695
+- 2023: A materials data framework and dataset for elastomeric foam impact mitigating materials | https://openalex.org/W4379472510 | DOI: 10.1038/s41597-023-02092-4
+- 2023: Accelerating Communications in Federated Applications with Transparent Object Proxies | https://openalex.org/W4377009966 | DOI: 10.48550/arxiv.2305.09593
+- 2023: Data Station: Delegated, Trustworthy, and Auditable Computation to Enable Data-Sharing Consortia with a Data Escrow | https://openalex.org/W4375957354 | DOI: 10.48550/arxiv.2305.03842
+- 2023: Cloud Services Enable Efficient AI-Guided Simulation Workflows across Heterogeneous Resources | https://openalex.org/W4385585393 | DOI: 10.1109/ipdpsw59300.2023.00018
+- 2023: An Empirical Study of Container Image Configurations and Their Impact on Start Times | https://openalex.org/W4383749793 | DOI: 10.1109/ccgrid57682.2023.00019
+- 2023: FreeTrain: A Framework to Utilize Unused Supercomputer Nodes for Training Neural Networks | https://openalex.org/W4383749386 | DOI: 10.1109/ccgrid57682.2023.00036
+- 2023: Advanced Research Directions on AI for Science, Energy, and Security: Report on Summer 2022 Workshops | https://openalex.org/W4382775943 | DOI: 10.2172/1986455
+- 2023: Hierarchical and Decentralised Federated Learning | https://openalex.org/W4367628399 | DOI: 10.48550/arxiv.2304.14982
+- 2023: AL4GAP: Active Learning Workflow for generating DFT-SCAN Accurate Machine-Learning Potentials for Combinatorial Molten Salt Mixtures | https://openalex.org/W4366828631 | DOI: 10.26434/chemrxiv-2023-wzv3q
+- 2023: What is missing in autonomous discovery: Open challenges for the community | https://openalex.org/W4366850557 | DOI: 10.48550/arxiv.2304.11120
+- 2023: Community action on FAIR data will fuel a revolution in materials research | https://openalex.org/W4361305538 | DOI: 10.1557/s43577-023-00498-4
+- 2023: Cloud Services Enable Efficient AI-Guided Simulation Workflows across Heterogeneous Resources | https://openalex.org/W4327673723 | DOI: 10.48550/arxiv.2303.08803
+- 2023: Balancing Federated Learning Trade-Offs for Heterogeneous Environments | https://openalex.org/W4381747061 | DOI: 10.1109/percomworkshops56833.2023.10150228
+- 2023: OpenHLS: High-Level Synthesis for Low-Latency Deep Neural Networks for Experimental Science | https://openalex.org/W4321160224 | DOI: 10.48550/arxiv.2302.06751
+
+### Deduplicated Institutional-Domain Conflict List
+adas.uk; af.mil; alexslemonade.org; amd.com; anl.gov; ansys.com; astrazeneca.com; asu.edu; au.dk; bam.de; baxter.de; berkeley.edu; biocom.org; blueplanet.no; bnl.gov; bronxdefenders.org; bsc.es; caltech.edu; cam.ac.uk; canterbury.ac.nz; cardiff.ac.uk; cdac.in; ceh.ac.uk; cens.de; certh.gr; cft.edu.pl; cinvestav.mx; cmu.edu; cnrs.fr; columbia.edu; cscs.ch; csic.es; depaul.edu; dkfz.de; doe.gov; dtu.dk; duke.edu; ed.ac.uk; eoneo.co.kr; epfl.ch; espol.edu.ec; ethz.ch; fandm.edu; fernuni-hagen.de; fordham.edu; fsu.edu; futureearth.org; fz-juelich.de; gatech.edu; ge.com; gla.ac.uk; gsu.edu; harvard.edu; hawaii.edu; helmholtz-berlin.de; helmholtz-muenchen.de; helsinki.fi; hereon.de; hi-jena.de; himax.com.tw; hip.fi; hp.com; hpe.com; hu-berlin.de; hw.ac.uk; iit.edu; illinois.edu; inria.fr; insa-rennes.fr; intel.co.uk; intel.com; irisa.fr; ista.ac.at; iuc2.edu.jm; jhu.edu; kaust.edu.sa; knoxvillecollege.edu; ku.edu.tr; kuleuven.be; lanl.gov; lbl.gov; liv.ac.uk; llnl.gov; lmu.de; lmu.edu; lrz.de; lsbu.ac.uk; lu.se; manchester.ac.uk; mcgill.ca; mdu.se; microsoft.com; missouri.edu; mit.edu; monash.edu; montclair.edu; mpie.de; nasa.gov; nasb.gov.by; navy.mil; ncsu.edu; nd.edu; ndu.edu.ph; nersc.gov; nesi.org.nz; newcastle.edu.au; newhaven.edu; nih.gov; nist.gov; niu.edu; niwa.co.nz; njit.edu; northeastern.edu; northwestern.edu; nrel.gov; nvidia.co.uk; nvidia.com; nyu.edu; ornl.gov; ox.ac.uk; pacb.com; pawsey.org.au; petermac.org; philips.co.uk; pnnl.gov; polito.it; polyu.edu.hk; pppl.gov; psicorp.com; psl.eu; purdue.edu; renci.org; rigaku.com; riken.jp; rutgers.edu; rutgers.international; sandia.gov; scu.edu; sdsc.edu; seikagaku.co.jp; shinstitute.org; stanford.edu; stats.govt.nz; sustech.edu.cn; swisscom.ch; technovacorp.com; tennessee.edu; titech.ac.jp; tntech.edu; tu.berlin; tum.de; tuwien.at; uab.edu; uacm.edu.mx; uah.edu; uc3m.es; uchicago.edu; uci.edu; ucla.edu; uclouvain.be; ucr.edu; ucsd.edu; uff.br; ufl.edu; ufpa.br; ufrj.br; ufsc.br; uga.edu; ugent.be; uh.edu; uibk.ac.at; uic.edu; ukri.org; uky.edu; uma.ac.ir; umass.edu; umd.edu; unam.mx; une.edu.mx; uni-freiburg.de; uni-heidelberg.de; uni-hohenheim.de; uni-jena.de; uni-wuerzburg.de; unibas.ch; unical.it; unicamp.br; unimelb.edu.au; unipi.it; unitn.it; unito.it; univ-rennes.fr; universityofcalifornia.edu; unr.edu; unt.edu; upc.edu; upm.es; upr.edu; usc.edu; usda.gov; ut.ac.ir; utah.edu; utexas.edu; utk.edu; utoronto.ca; uu.nl; uu.se; uva.nl; uwa.edu.au; uwaterloo.ca; uwtsd.ac.uk; virginia.edu; vu.nl; waikato.ac.nz; wales.nhs.uk; washington.edu; wisc.edu; york.ac.uk; zhaw.ch
+
+## Kyle Chard
+- OpenAlex author: `https://openalex.org/A5065464552` (Kyle Chard)
+- Last-known institutions: Argonne National Laboratory; University of Illinois Chicago; University of Chicago
+- Publications in window: 129
+- Unique coauthors in window: 545
+
+### Last-3-Year Publications Used
+- 2025: Experiences Building Enterprise-Level Privacy-Preserving Federated Learning to Power AI for Science | https://openalex.org/W4416235979 | DOI: 10.48550/arxiv.2511.08998
+- 2025: Addressing Reproducibility Challenges in HPC with Continuous Integration | https://openalex.org/W4416203792 | DOI: 10.1145/3712285.3759874
+- 2025: What to Support When You’re Compressing | https://openalex.org/W4416203732 | DOI: 10.1145/3712285.3759856
+- 2025: Core Hours and Carbon Credits: Incentivizing Sustainability in HPC | https://openalex.org/W4416155392 | DOI: 10.1145/3712285.3759858
+- 2025: XaaS Containers: Performance-Portable Representation With Source and IR Containers | https://openalex.org/W4415255641 | DOI: 10.1145/3712285.3759868
+- 2025: RESILIO : A Scalable and Composable Architecture for Tomographic Reconstruction Workflows | https://openalex.org/W4416004574 | DOI: 10.1145/3731599.3767575
+- 2025: StreamHub: High-performance Managed SciStream as a Service | https://openalex.org/W4416004562 | DOI: 10.1145/3731599.3767459
+- 2025: Exploring Distributed Vector Databases Performance on HPC Platforms: A Study with Qdrant | https://openalex.org/W4416003979 | DOI: 10.1145/3731599.3767404
+- 2025: The False Promise of Zero-Shot Super-Resolution in Machine-Learned Operators | https://openalex.org/W4415097166 | DOI: 10.48550/arxiv.2510.06646
+- 2025: Radio Afterglow Detection and AI-driven Response (RADAR): A Federated Framework for Gravitational-wave Event Follow-up | https://openalex.org/W4414930272 | DOI: 10.3847/1538-4365/adfbea
+- 2025: Agentic Discovery: Closing the Loop With Cooperative Agents | https://openalex.org/W4414462775 | DOI: 10.1109/mc.2025.3575029
+- 2025: Toward a persistent event-streaming system for high-performance computing applications | https://openalex.org/W4414299303 | DOI: 10.3389/fhpcp.2025.1638203
+- 2025: Slice-Aware Attention for Quality Control of Breast MRI Segmentations | https://openalex.org/W4414909065 | DOI: 10.1109/escience65000.2025.00063
+- 2025: ControlA: Agentic Workflow Control Mechanisms for Reliable Science | https://openalex.org/W4414909013 | DOI: 10.1109/escience65000.2025.00086
+- 2025: Diamond: Harnessing GPU Resources for Scientific Deep Learning | https://openalex.org/W4414898775 | DOI: 10.1109/escience65000.2025.00031
+- 2025: SMURF: Federated Multimodal Retrieval for Scientific Data via Embedding Alignment | https://openalex.org/W4414898313 | DOI: 10.1109/escience65000.2025.00091
+- 2025: Biological Query and Pes2o Corpus Embedding Dataset | https://openalex.org/W4415315374 | DOI: 10.48550/arxiv.2509.12384
+- 2025: Deadline-Aware Scheduling of Mixed-Criticality Tasks | https://openalex.org/W7116351482 | DOI: 10.1145/3754598.3754639
+- 2025: Automation and Collaboration in Complex Epidemiological Workflows with OSPREY | https://openalex.org/W7116347814 | DOI: 10.1145/3750720.3757294
+- 2025: Addressing Reproducibility Challenges in HPC with Continuous Integration | https://openalex.org/W4415989253 | DOI: 10.48550/arxiv.2508.21289
+- 2025: Throughput Estimation of Data Transport Networks from Digital Twin Measurements | https://openalex.org/W4412565458 | DOI: 10.36227/techrxiv.175321965.50953118/v1
+- 2025: RADAR-Radio Afterglow Detection and AI-driven Response: A Federated Framework for Gravitational Wave Event Follow-Up | https://openalex.org/W4417432437 | DOI: 10.48550/arxiv.2507.14827
+- 2025: Flight: A FaaS-based framework for complex and Hierarchical Federated Learning | https://openalex.org/W4412455516 | DOI: 10.1016/j.future.2025.107998
+- 2025: DynoStore: A wide-area distribution system for the management of data over heterogeneous storage | https://openalex.org/W4416886068 | DOI: 10.48550/arxiv.2507.00576
+- 2025: A terminology for scientific workflow systems | https://openalex.org/W4411593202 | DOI: 10.1016/j.future.2025.107974
+- 2025: A Terminology for Scientific Workflow Systems | https://openalex.org/W4417135964 | DOI: 10.48550/arxiv.2506.07838
+- 2025: D-Rex: Heterogeneity-Aware Reliability Framework and Adaptive Algorithms for Distributed Storage | https://openalex.org/W4413411735 | DOI: 10.1145/3721145.3730412
+- 2025: RO-Crate Metadata Specification 1.2.0 | https://openalex.org/W4400118483 | DOI: 10.5281/zenodo.3406497
+- 2025: Optimizing Fine-Grained Parallelism Through Dynamic Load Balancing on Multi-Socket Many-Core Systems | https://openalex.org/W4412610514 | DOI: 10.1109/ipdps64566.2025.00016
+- 2025: AERO: An autonomous platform for continuous research | https://openalex.org/W4414581310 | DOI: 10.48550/arxiv.2505.18408
+- 2025: Ocelot: An Interactive, Efficient Distributed Compression-As-a-Service Platform With Optimized Data Compression Techniques | https://openalex.org/W4410536772 | DOI: 10.1109/tpds.2025.3568221
+- 2025: Wrath: Workload Resilience Across Task Hierarchies in Task-Based Parallel Programming Frameworks | https://openalex.org/W4411800337 | DOI: 10.1109/ccgrid64434.2025.00058
+- 2025: Dynostore: A Wide-Area Distribution System for the Management of Data Over Heterogeneous Storage | https://openalex.org/W4411800144 | DOI: 10.1109/ccgrid64434.2025.00019
+- 2025: Topology-Aware Knowledge Propagation in Decentralized Learning | https://openalex.org/W4417299948 | DOI: 10.48550/arxiv.2505.11760
+- 2025: Empowering Scientific Workflows with Federated Agents | https://openalex.org/W4416092149 | DOI: 10.48550/arxiv.2505.05428
+- 2025: Exascale workflow applications and middleware: An ExaWorks retrospective | https://openalex.org/W4409816173 | DOI: 10.1177/10943420251331674
+- 2025: Lossy Compression of Scientific Data: Applications Constrains and Requirements | https://openalex.org/W4409016680 | DOI: 10.48550/arxiv.2503.20031
+- 2025: Optimizing Fine-Grained Parallelism Through Dynamic Load Balancing on Multi-Socket Many-Core Systems | https://openalex.org/W4407369267 | DOI: 10.48550/arxiv.2502.05293
+- 2025: MOFA: Discovering Materials for Carbon Capture with a GenAI- and Simulation-Based Workflow | https://openalex.org/W4406699873 | DOI: 10.48550/arxiv.2501.10651
+- 2025: Core Hours and Carbon Credits: Incentivizing Sustainability in HPC | https://openalex.org/W4406549012 | DOI: 10.48550/arxiv.2501.09557
+- 2025: Core Hours and Carbon Credits: Incentivizing Sustainability in HPC | https://openalex.org/W7118535651 | DOI: 10.3929/ethz-c-000789877
+- 2025: Will It Blend? Mixing Numerical and Machine-Learned Physics Quantities for Accurate on-the-Fly Surrogate Modeling | https://openalex.org/W4412042152 | DOI: 10.1007/978-3-031-97632-2_19
+- 2024: Parsl+CWL: Towards Combining the Python and CWL Ecosystems | https://openalex.org/W4405301101 | DOI: 10.48550/arxiv.2412.08062
+- 2024: Object Proxy Patterns for Accelerating Distributed Applications | https://openalex.org/W4405022542 | DOI: 10.1109/tpds.2024.3511347
+- 2024: Parsl+CWL: Towards Combining the Python and CWL Ecosystems | https://openalex.org/W4406172220 | DOI: 10.1109/scw63240.2024.00255
+- 2024: Octopus: Experiences with a Hybrid Event-Driven Architecture for Distributed Scientific Computing | https://openalex.org/W4406164037 | DOI: 10.1109/scw63240.2024.00071
+- 2024: Establishing a High-Performance and Productive Ecosystem for Distributed Execution of Python Functions Using Globus Compute | https://openalex.org/W4406157764 | DOI: 10.1109/scw63240.2024.00083
+- 2024: Exascale Workflow Applications and Middleware: An ExaWorks Retrospective | https://openalex.org/W4404570042 | DOI: 10.48550/arxiv.2411.10637
+- 2024: LSHBloom: Memory-efficient, Extreme-scale Document Deduplication | https://openalex.org/W4404404699 | DOI: 10.48550/arxiv.2411.04257
+- 2024: ExaWorks software development kit: a robust and scalable collection of interoperable workflows technologies | https://openalex.org/W4403880903 | DOI: 10.3389/fhpcp.2024.1394615
+- 2024: Workflows Community Summit 2024: Future Trends and Challenges in Scientific Workflows | https://openalex.org/W4404088211 | DOI: 10.5281/zenodo.13844758
+- 2024: Deep Model Merging: The Sister of Neural Network Interpretability -- A Survey | https://openalex.org/W4403578872 | DOI: 10.48550/arxiv.2410.12927
+- 2024: Accelerating Python Applications with Dask and ProxyStore | https://openalex.org/W4403578577 | DOI: 10.48550/arxiv.2410.12092
+- 2024: Employing artificial intelligence to steer exascale workflows with colmena | https://openalex.org/W4403258217 | DOI: 10.1177/10943420241288242
+- 2024: Mitigating Memorization In Language Models | https://openalex.org/W4403882442 | DOI: 10.48550/arxiv.2410.02159
+- 2024: Workflows Community Summit 2024: Future Trends and Challenges in Scientific Workflows | https://openalex.org/W4403801662 | DOI: 10.2172/2474744
+- 2024: Flight: A FaaS-Based Framework for Complex and Hierarchical Federated Learning | https://openalex.org/W4403783858 | DOI: 10.48550/arxiv.2409.16495
+- 2024: An Empirical Investigation of Container Building Strategies and Warm Times to Reduce Cold Starts in Scientific Computing Serverless Functions | https://openalex.org/W4402673979 | DOI: 10.1109/e-science62913.2024.10678668
+- 2024: TaPS: A Performance Evaluation Suite for Task-based Execution Frameworks | https://openalex.org/W4402673833 | DOI: 10.1109/e-science62913.2024.10678702
+- 2024: Diaspora: Resilience-Enabling Services for Real-Time Distributed Workflows | https://openalex.org/W4402673683 | DOI: 10.1109/e-science62913.2024.10678669
+- 2024: Employing Artificial Intelligence to Steer Exascale Workflows with Colmena | https://openalex.org/W4402703173 | DOI: 10.48550/arxiv.2408.14434
+- 2024: TaPS: A Performance Evaluation Suite for Task-based Execution Frameworks | https://openalex.org/W4402427628 | DOI: 10.48550/arxiv.2408.07236
+- 2024: ExaWorks Software Development Kit: A Robust and Scalable Collection of Interoperable Workflow Technologies | https://openalex.org/W4406074134 | DOI: 10.48550/arxiv.2407.16646
+- 2024: Enabling Remote Management of FaaS Endpoints with Globus Compute Multi-User Endpoints | https://openalex.org/W4400799117 | DOI: 10.1145/3626203.3670612
+- 2024: Zero Code and Infrastructure Research Data Portals | https://openalex.org/W4400798707 | DOI: 10.1145/3626203.3670595
+- 2024: Octopus: Experiences with a Hybrid Event-Driven Architecture for Distributed Scientific Computing | https://openalex.org/W4403808659 | DOI: 10.48550/arxiv.2407.11432
+- 2024: Object Proxy Patterns for Accelerating Distributed Applications | https://openalex.org/W4400377705 | DOI: 10.48550/arxiv.2407.01764
+- 2024: GreenFaaS: Maximizing Energy Efficiency of HPC Workloads with FaaS | https://openalex.org/W4400065229 | DOI: 10.48550/arxiv.2406.17710
+- 2024: An End-to-End Programming Model for AI Engine Architectures | https://openalex.org/W4399723097 | DOI: 10.1145/3665283.3665294
+- 2024: BraggHLS: High-Level Synthesis for Low-Latency Deep Neural Networks for Experimental Science | https://openalex.org/W4399723085 | DOI: 10.1145/3665283.3665284
+- 2024: Accelerating Function-Centric Applications by Discovering, Distributing, and Retaining Reusable Context in Workflow Systems | https://openalex.org/W4402046291 | DOI: 10.1145/3625549.3658663
+- 2024: Enhancing Energy Efficiency with Multi-Site Scheduling Strategies | https://openalex.org/W4401018228 | DOI: 10.1109/ipdpsw63119.2024.00197
+- 2024: Towards Fine-Grained Parallelism in Parallel and Distributed Python Libraries | https://openalex.org/W4401018196 | DOI: 10.1109/ipdpsw63119.2024.00133
+- 2024: UniFaaS: Programming across Distributed Cyberinfrastructure with Federated Function Serving | https://openalex.org/W4400409828 | DOI: 10.1109/ipdps57955.2024.00027
+- 2024: Thinking in Categories: A Survey on Assessing the Quality for Time Series Synthesis | https://openalex.org/W4399022044 | DOI: 10.1145/3666006
+- 2024: X-OpenMP — eXtreme fine-grained tasking using lock-less work stealing | https://openalex.org/W4397009504 | DOI: 10.1016/j.future.2024.05.019
+- 2024: Unveiling Temporal Performance Deviation: Leveraging Clustering in Microservices Performance Analysis | https://openalex.org/W4396686498 | DOI: 10.1145/3629527.3651843
+- 2024: Automated, Reliable, and Efficient Continental-Scale Replication of 7.3 Petabytes of Climate Simulation Data: A Case Study | https://openalex.org/W4396600915 | DOI: 10.48550/arxiv.2404.19717
+- 2024: RuralAI in Tomato Farming: Integrated Sensor System, Distributed Computing, and Hierarchical Federated Learning for Crop Health Monitoring | https://openalex.org/W4393972637 | DOI: 10.1109/lsens.2024.3384935
+- 2024: UniFaaS: Programming across Distributed Cyberinfrastructure with Federated Function Serving | https://openalex.org/W4393335906 | DOI: 10.48550/arxiv.2403.19257
+- 2024: QoS-aware edge AI placement and scheduling with multiple implementations in FaaS-based edge computing | https://openalex.org/W4393237747 | DOI: 10.1016/j.future.2024.03.035
+- 2024: SCIPIS: Scalable and concurrent persistent indexing and search in high-end computing systems | https://openalex.org/W4393166897 | DOI: 10.1016/j.jpdc.2024.104878
+- 2024: Steering a Fleet: Adaptation for Large-Scale, Workflow-Based Experiments | https://openalex.org/W4392737210 | DOI: 10.48550/arxiv.2403.06077
+- 2024: FastqZip: An Improved Reference-Based Genome Sequence Lossy Compression Framework | https://openalex.org/W4393967765 | DOI: 10.48550/arxiv.2404.02163
+- 2024: Combining Language and Graph Models for Semi-structured Information Extraction on the Web | https://openalex.org/W4392120567 | DOI: 10.48550/arxiv.2402.14129
+- 2024: Trillion Parameter AI Serving Infrastructure for Scientific Discovery: A Survey and Vision | https://openalex.org/W4391631449 | DOI: 10.48550/arxiv.2402.03480
+- 2024: Comprehensive Exploration of Synthetic Data Generation: A Survey | https://openalex.org/W4390690081 | DOI: 10.48550/arxiv.2401.02524
+- 2023: SECRE: Surrogate-Based Error-Controlled Lossy Compression Ratio Estimation Framework | https://openalex.org/W4394002928 | DOI: 10.1109/hipc58850.2023.00029
+- 2023: The globus compute dataset: An open function-as-a-service dataset from the edge to the cloud | https://openalex.org/W4389617340 | DOI: 10.1016/j.future.2023.12.007
+- 2023: Trillion Parameter AI Serving Infrastructure for Scientific Discovery: A Survey and Vision | https://openalex.org/W4393869221 | DOI: 10.1145/3632366.3632396
+- 2023: Measurement and Applications: Exploring the Challenges and Opportunities of Hierarchical Federated Learning in Sensor Applications | https://openalex.org/W4388966655 | DOI: 10.1109/mim.2023.10328671
+- 2023: Correction: Reproducible big data science: A case study in continuous FAIRness | https://openalex.org/W4388857726 | DOI: 10.1371/journal.pone.0294883
+- 2023: Fine-grained accelerator partitioning for Machine Learning and Scientific Computing in Function as a Service Platform | https://openalex.org/W4388581250 | DOI: 10.1145/3624062.3624238
+- 2023: Tournament-Based Pretraining to Accelerate Federated Learning | https://openalex.org/W4388581040 | DOI: 10.1145/3624062.3626089
+- 2023: Maximizing Data Utility for HPC Python Workflow Execution | https://openalex.org/W4388561279 | DOI: 10.1145/3624062.3624136
+- 2023: An Efficient and Accurate Compression Ratio Estimation Model for SZx | https://openalex.org/W4388894014 | DOI: 10.1109/clusterworkshops61457.2023.00019
+- 2023: Accelerating Communications in Federated Applications with Transparent Object Proxies | https://openalex.org/W4388105673 | DOI: 10.1145/3581784.3607047
+- 2023: The Globus Compute Dataset | https://openalex.org/W4393461825 | DOI: 10.5281/zenodo.10044779
+- 2023: The Globus Compute Dataset | https://openalex.org/W4393432522 | DOI: 10.5281/zenodo.10044780
+- 2023: Attention Lens: A Tool for Mechanistically Interpreting the Attention Head Information Retrieval Mechanism | https://openalex.org/W4387963693 | DOI: 10.48550/arxiv.2310.16270
+- 2023: Adversarial Predictions of Data Distributions Across Federated Internet-of-Things Devices | https://openalex.org/W4399154656 | DOI: 10.1109/wf-iot58464.2023.10539465
+- 2023: PSI/J: A Portable Interface for Submitting, Monitoring, and Managing Jobs | https://openalex.org/W4387006225 | DOI: 10.1109/e-science58273.2023.10254912
+- 2023: Can Automated Metadata Extraction Make Scientific Data More Navigable? | https://openalex.org/W4387005685 | DOI: 10.1109/e-science58273.2023.10254801
+- 2023: Lazy Python Dependency Management in Large-Scale Systems | https://openalex.org/W4387005442 | DOI: 10.1109/e-science58273.2023.10254910
+- 2023: Memory Injections: Correcting Multi-Hop Reasoning Failures during Inference in Transformer-Based Language Models | https://openalex.org/W4386655755 | DOI: 10.48550/arxiv.2309.05605
+- 2023: Adversarial Predictions of Data Distributions Across Federated Internet-of-Things Devices | https://openalex.org/W4386273300 | DOI: 10.48550/arxiv.2308.14658
+- 2023: Towards a Modular Architecture for Science Factories | https://openalex.org/W4386080753 | DOI: 10.48550/arxiv.2308.09793
+- 2023: NSF RESUME HPC Workshop: High-Performance Computing and Large-Scale Data Management in Service of Epidemiological Modeling | https://openalex.org/W4385749943 | DOI: 10.48550/arxiv.2308.04602
+- 2023: nelli: a lightweight frontend for MLIR | https://openalex.org/W4385473805 | DOI: 10.48550/arxiv.2307.16080
+- 2023: Globus Timers: Scheduling Periodic Data Management Actions on Distributed Research Infrastructure | https://openalex.org/W4386585106 | DOI: 10.1145/3569951.3597571
+- 2023: Active Research Data Management with the Django Globus Portal Framework | https://openalex.org/W4386585066 | DOI: 10.1145/3569951.3593597
+- 2023: The Changing Role of RSEs over the Lifetime of Parsl | https://openalex.org/W4385008566 | DOI: 10.48550/arxiv.2307.11060
+- 2023: PSI/J: A Portable Interface for Submitting, Monitoring, and Managing Jobs | https://openalex.org/W4384644026 | DOI: 10.48550/arxiv.2307.07895
+- 2023: Optimizing Scientific Data Transfer on Globus with Error-bounded Lossy Compression | https://openalex.org/W4384115481 | DOI: 10.48550/arxiv.2307.05416
+- 2023: Optimizing Scientific Data Transfer on Globus with Error-Bounded Lossy Compression | https://openalex.org/W4387544162 | DOI: 10.1109/icdcs57875.2023.00064
+- 2023: Accelerating Communications in Federated Applications with Transparent Object Proxies | https://openalex.org/W4377009966 | DOI: 10.48550/arxiv.2305.09593
+- 2023: Data Station: Delegated, Trustworthy, and Auditable Computation to Enable Data-Sharing Consortia with a Data Escrow | https://openalex.org/W4375957354 | DOI: 10.48550/arxiv.2305.03842
+- 2023: Developing Distributed High-performance Computing Capabilities of an Open Science Platform for Robust Epidemic Analysis | https://openalex.org/W4385585547 | DOI: 10.1109/ipdpsw59300.2023.00143
+- 2023: Cloud Services Enable Efficient AI-Guided Simulation Workflows across Heterogeneous Resources | https://openalex.org/W4385585393 | DOI: 10.1109/ipdpsw59300.2023.00018
+- 2023: An Empirical Study of Container Image Configurations and Their Impact on Start Times | https://openalex.org/W4383749793 | DOI: 10.1109/ccgrid57682.2023.00019
+- 2023: Hierarchical and Decentralised Federated Learning | https://openalex.org/W4367628399 | DOI: 10.48550/arxiv.2304.14982
+- 2023: Developing Distributed High-performance Computing Capabilities of an Open Science Platform for Robust Epidemic Analysis | https://openalex.org/W4367369640 | DOI: 10.48550/arxiv.2304.14244
+- 2023: Linking scientific instruments and computation: Patterns, technologies, and experiences | https://openalex.org/W4366813443 | DOI: 10.5281/zenodo.7859486
+- 2023: Searching for the Ground Truth: Assessing the Similarity of Benchmarking Runs | https://openalex.org/W4362505456 | DOI: 10.1145/3578245.3584693
+- 2023: Workflows Community Summit 2022: A Roadmap Revolution | https://openalex.org/W4361806078 | DOI: 10.48550/arxiv.2304.00019
+- 2023: Cloud Services Enable Efficient AI-Guided Simulation Workflows across Heterogeneous Resources | https://openalex.org/W4327673723 | DOI: 10.48550/arxiv.2303.08803
+- 2023: Balancing Federated Learning Trade-Offs for Heterogeneous Environments | https://openalex.org/W4381747061 | DOI: 10.1109/percomworkshops56833.2023.10150228
+- 2023: Workflows Community Summit 2022: A Roadmap Revolution | https://openalex.org/W4387236975 | DOI: 10.2172/2006942
+- 2023: OpenHLS: High-Level Synthesis for Low-Latency Deep Neural Networks for Experimental Science | https://openalex.org/W4321160224 | DOI: 10.48550/arxiv.2302.06751
+
+### Deduplicated Institutional-Domain Conflict List
+agh.edu.pl; agnostiqlabs.com; agu.org; amd.com; anl.gov; atlanticgeneral.org; au.dk; bnl.gov; bsc.es; cambridgequantum.com; cardiff.ac.uk; cdac.in; charlotte.edu; cinvestav.mx; cnam.fr; cnrs.fr; crs4.it; depaul.edu; dkfz.de; duke.edu; ed.ac.uk; ejust.edu.eg; eoneo.co.kr; epfl.ch; ethz.ch; fernuni-hagen.de; fsu.edu; fz-juelich.de; ge.com; georgetown.edu; gla.ac.uk; gmu.edu; harvard.edu; hawaii.edu; hec.ca; himax.com.tw; hp.com; hpe.com; hu-berlin.de; humboldt.edu; hw.ac.uk; idiv.de; iit.edu; illinois.edu; inria.fr; intel.com; iu.edu; jhu.edu; kth.se; landcareresearch.co.nz; lanl.gov; lbl.gov; llnl.gov; llnsllc.com; lmu.de; lmu.edu; lrz.de; manchester.ac.uk; mdu.se; michaeljfox.org; mines.edu; montana.edu; montclair.edu; mpie.de; museum.ie; navy.mil; ncsu.edu; nd.edu; ndu.edu.ph; nersc.gov; nesi.org.nz; newcastle.edu.au; nims.go.jp; nist.gov; niwa.co.nz; noaa.gov; northeastern.edu; northshore.org; northwestern.edu; nvidia.com; ornl.gov; osu.edu; pacb.com; pawsey.org.au; petermac.org; pnnl.gov; polyu.edu.hk; pppl.gov; princeton.edu; psi.ch; psicorp.com; psl.eu; psnc.pl; queensu.ca; riken.jp; rutgers.edu; rutgers.international; sandia.gov; sandiego.edu; scs.ch; scu.edu; scups.net; sdsc.edu; simula.no; sintef.no; st-andrews.ac.uk; stanford.edu; statestreet.com; stats.govt.nz; stonybrook.edu; su.se; sustech.edu.cn; swisscom.ch; temple.edu; tntech.edu; tu.berlin; tum.de; tuwien.at; txst.edu; ua.edu; uc3m.es; ucar.edu; uchicago.edu; uci.edu; ucr.edu; ucsb.edu; ucsd.edu; udelosandes.edu.bo; uff.br; ufpa.br; ufrj.br; uga.edu; ugent.be; uibk.ac.at; uic.edu; uio.no; uiowa.edu; uj.edu.pl; uky.edu; um.si; umass.edu; umd.edu; uml.edu; une.edu.mx; uni-bielefeld.de; uni-due.de; uni-freiburg.de; uni-heidelberg.de; uni-jena.de; uni-ulm.de; uni-wuerzburg.de; uniandes.edu.co; unibas.ch; unibo.it; unical.it; unimelb.edu.au; unirio.br; unito.it; univ-rennes.fr; upc.edu; upm.es; upr.edu; uq.edu.au; usa.gov; usc.edu; usp.br; ustc.edu.cn; utah.edu; utexas.edu; utk.edu; uu.nl; uu.se; uva.nl; uw.edu.pl; uwa.edu.au; uzgent.be; vib.be; vliz.be; vu.nl; waikato.ac.nz; wisc.edu; wur.nl; zbmed.de
+
+## Michael Maire
+- OpenAlex author: `https://openalex.org/A5001371942` (Michael Maire)
+- Last-known institutions: University of Chicago
+- Publications in window: 27
+- Unique coauthors in window: 69
+
+### Last-3-Year Publications Used
+- 2025: HyperDiffusionFields (HyDiF): Diffusion-Guided Hypernetworks for Learning Implicit Molecular Neural Fields | https://openalex.org/W4416055100 | DOI: 10.48550/arxiv.2510.18122
+- 2025: Nested Diffusion Models Using Hierarchical Latent Priors | https://openalex.org/W4413144580 | DOI: 10.1109/cvpr52734.2025.00239
+- 2025: Hierarchical Implicit Neural Emulators | https://openalex.org/W4416132303 | DOI: 10.48550/arxiv.2506.04528
+- 2025: Keeper: Automated Testing and Fixing of Machine Learning Software—RCR Report | https://openalex.org/W4411059610 | DOI: 10.1145/3737284
+- 2024: Nested Diffusion Models Using Hierarchical Latent Priors | https://openalex.org/W4405253839 | DOI: 10.48550/arxiv.2412.05984
+- 2024: PROGRESSOR: A Perceptually Guided Reward Estimator with Self-Supervised Online Refinement | https://openalex.org/W4404990077 | DOI: 10.48550/arxiv.2411.17764
+- 2024: Approaching Deep Learning through the Spectral Dynamics of Weights | https://openalex.org/W4405419023 | DOI: 10.48550/arxiv.2408.11804
+- 2024: CacheGen: KV Cache Compression and Streaming for Fast Large Language Model Serving | https://openalex.org/W4401176373 | DOI: 10.1145/3651890.3672274
+- 2024: Deciphering ‘What’ and ‘Where’ Visual Pathways from Spectral Clustering of Layer-Distributed Neural Representations | https://openalex.org/W4402753897 | DOI: 10.1109/cvpr52733.2024.00399
+- 2024: Keeper: Automated Testing and Fixing of Machine Learning Software | https://openalex.org/W4399601922 | DOI: 10.1145/3672451
+- 2024: Generative Lifting of Multiview to 3D from Unknown Pose: Wrapping NeRF inside Diffusion | https://openalex.org/W4399655864 | DOI: 10.48550/arxiv.2406.06972
+- 2024: Latent Intrinsics Emerge from Training to Relight | https://openalex.org/W4399318006 | DOI: 10.48550/arxiv.2405.21074
+- 2024: Drop-Connect as a Fault-Tolerance Approach for RRAM-based Deep Neural Network Accelerators | https://openalex.org/W4395481845 | DOI: 10.48550/arxiv.2404.15498
+- 2024: Drop-Connect as a Fault-Tolerance Approach for RRAM-based Deep Neural Network Accelerators | https://openalex.org/W4399144004 | DOI: 10.1109/vts60656.2024.10538531
+- 2024: Residual Connections Harm Generative Representation Learning | https://openalex.org/W4394947085 | DOI: 10.48550/arxiv.2404.10947
+- 2024: Factorized Diffusion Architectures for Unsupervised Image Generation and Segmentation | https://openalex.org/W4415797140 | DOI: 10.52202/079017-2194
+- 2024: Latent Intrinsics Emerge from Training to Relight | https://openalex.org/W4415796421 | DOI: 10.52202/079017-3068
+- 2023: Deciphering 'What' and 'Where' Visual Pathways from Spectral Clustering of Layer-Distributed Neural Representations | https://openalex.org/W4389713808 | DOI: 10.48550/arxiv.2312.06716
+- 2023: SONIQ: System-Optimized Noise-Injected Ultra-Low-Precision Quantization with Full-Precision Parity | https://openalex.org/W4389072746 | DOI: 10.48550/arxiv.2311.14114
+- 2023: HyperFields: Towards Zero-Shot Generation of NeRFs from Text | https://openalex.org/W4387995110 | DOI: 10.48550/arxiv.2310.17075
+- 2023: Run-Time Prevention of Software Integration Failures of Machine Learning APIs | https://openalex.org/W4387667017 | DOI: 10.1145/3622806
+- 2023: CacheGen: KV Cache Compression and Streaming for Fast Large Language Model Serving | https://openalex.org/W4387596152 | DOI: 10.48550/arxiv.2310.07240
+- 2023: Automatic and Efficient Customization of Neural Networks for ML Applications | https://openalex.org/W4387559285 | DOI: 10.48550/arxiv.2310.04685
+- 2023: Structural Adversarial Objectives for Self-Supervised Representation Learning | https://openalex.org/W4387323465 | DOI: 10.48550/arxiv.2310.00357
+- 2023: Factorized Diffusion Architectures for Unsupervised Image Generation and Segmentation | https://openalex.org/W4387159999 | DOI: 10.48550/arxiv.2309.15726
+- 2023: Accelerated Training via Incrementally Growing Neural Networks using Variance Transfer and Learning Rate Adaptation | https://openalex.org/W4381827110 | DOI: 10.48550/arxiv.2306.12700
+- 2023: Evaluating Machine Learning Models with NERO: Non-Equivariance Revealed on Orbits | https://openalex.org/W4379089504 | DOI: 10.48550/arxiv.2305.19889
+
+### Deduplicated Institutional-Domain Conflict List
+berkeley.edu; cuhk.edu.cn; ecnu.edu.cn; microsoft.com; paloaltou.edu; seattleu.edu; stanford.edu; ttic.edu; uchicago.edu; uic.edu
+
+## Greg Karczmar
+- OpenAlex author: `https://openalex.org/A5079213983` (Gregory S. Karczmar)
+- Last-known institutions: University of Chicago
+- Publications in window: 66
+- Unique coauthors in window: 149
+
+### Last-3-Year Publications Used
+- 2025: Initial Experience and Clinical Application of Gadoterate Meglumine in Abbreviated DCE-MRI of the Breast with Ultrafast Imaging. | https://openalex.org/W4414238231 | DOI: 10.58530/2025/1988
+- 2025: Empirically determined spatial properties of noise in prostate diffusion weighted imaging | https://openalex.org/W4414237499 | DOI: 10.58530/2025/3919
+- 2025: Extended intra-voxel incoherent motion (X-IVIM) modeling in breast cancer patients for improved quantitative cancer markers | https://openalex.org/W4414237204 | DOI: 10.58530/2025/2035
+- 2025: Arterial input function derived using the Xiphoid process as a reference tissue for breast DCE-MRI | https://openalex.org/W4414237168 | DOI: 10.58530/2025/3249
+- 2025: Prospective Validation of Hybrid Multidimensional MRI for Prostate Cancer Detection using Targeted Biopsy: Comparison with PIRADS | https://openalex.org/W4414236192 | DOI: 10.58530/2025/0801
+- 2025: Implementation of hybrid multi-dimensional MRI (HM-MRI) for non-endo-rectal coil prostate MR imaging | https://openalex.org/W4414235166 | DOI: 10.58530/2025/3886
+- 2025: Cluster analysis of quantitative ultrafast DCE-MRI for prediction of breast cancer response to neoadjuvant chemotherapy | https://openalex.org/W4414234316 | DOI: 10.58530/2025/1987
+- 2025: Cluster analysis of quantitative ultrafast DCE-MRI for DCIS grading and upgrading without tracing lesion region-of-interest | https://openalex.org/W4414173813 | DOI: 10.58530/2025/2126
+- 2025: Author response for "A Translational Research Leveraging Diagnostic Accuracy of Innovations in MRI as a Model for Early Breast Cancer Detection in Uganda" | https://openalex.org/W4412435931 | DOI: 10.1177/15330338251356549/v2/response1
+- 2025: Physics-Informed Autoencoder for Prostate Tissue Microstructure Profiling with Hybrid Multidimensional MRI | https://openalex.org/W4407174296 | DOI: 10.1148/ryai.240167
+- 2025: Prospective Validation of an Automated Hybrid Multidimensional MRI Tool for Prostate Cancer Detection Using Targeted Biopsy: Comparison with PI-RADS-based Assessment | https://openalex.org/W4406664874 | DOI: 10.1148/rycan.240156
+- 2024: Hybrid Multidimensional MRI: Demonstrating Repeatability in Non-Invasive Prostate Cancer Tissue Characterization | https://openalex.org/W4404748662 | DOI: 10.58530/2024/0854
+- 2024: Prostate Specific Antigen Density Normalized by Volume Fractions from Hybrid Multi-dimensional MRI Can Improve Prostate Cancer Diagnosis | https://openalex.org/W4404747170 | DOI: 10.58530/2024/3342
+- 2024: Advanced Prostate Cancer Characterization: Enhanced Tissue Compartment Estimation with Extended Grid Sampling and HM-MRI | https://openalex.org/W4404746976 | DOI: 10.58530/2024/3332
+- 2024: Pathology Without a Knife: MRI-based Non-invasive Determination of Prostate Cancer Grade with Physics-Informed Deep Learning | https://openalex.org/W4404746846 | DOI: 10.58530/2024/0867
+- 2024: Tensor MP-PCA Denoising for Prostate MRI | https://openalex.org/W4404744885 | DOI: 10.58530/2024/4677
+- 2024: Introduction to matrix‐based method for analyzing hybrid multidimensional prostate MRI data | https://openalex.org/W4404601387 | DOI: 10.1002/acm2.14544
+- 2024: Quantitative Multi-Parametric MRI of the Prostate Reveals Racial Differences | https://openalex.org/W4403460674 | DOI: 10.3390/cancers16203499
+- 2024: Quantitative Multi-Parametric MRI of the Prostate Reveals Racial Differences | https://openalex.org/W4402962608 | DOI: 10.20944/preprints202409.2234.v1
+- 2024: Comparison of synthesized and acquired high b-value diffusion-weighted MRI for detection of prostate cancer | https://openalex.org/W4401576045 | DOI: 10.58530/2023/1636
+- 2024: THE ADDED VALUE OF HYBRID MULTIDIMENSIONAL MRI TO MULTIPARAMETRIC MRI IN DIAGNOSING CLINICALLY SIGNIFICANT PROSTATE CANCERS | https://openalex.org/W4401574580 | DOI: 10.58530/2023/0316
+- 2024: Screening abbreviated breast MRI with ultrafast imaging: prospective study results | https://openalex.org/W4401572385 | DOI: 10.58530/2023/0184
+- 2024: Effect of Echo Times on Prostate Cancer Detection on Diffusion Weighted Images at high b-value and Apparent Diffusion Coefficient maps | https://openalex.org/W4401572370 | DOI: 10.58530/2023/2062
+- 2024: Bilateral asymmetry of parenchymal kinetics from ultrafast DCE-MRI predicts HER2+ breast cancer response to neoadjuvant chemotherapy | https://openalex.org/W4401571810 | DOI: 10.58530/2023/1143
+- 2024: Four Quadrant Vector Mapping of Hybrid Multidimensional MRI data for the diagnosis of prostate cancer | https://openalex.org/W4401570692 | DOI: 10.58530/2023/0725
+- 2024: Signal intensity form of extended Tofts model for quantitative analysis of dynamic contrast enhanced MRI data | https://openalex.org/W4401570161 | DOI: 10.58530/2023/1788
+- 2024: Breast lesion detection scheme for low gadolinium dose DCE-MRI using radon cumulative distribution transform and domain transfer: preliminary results | https://openalex.org/W4393404729 | DOI: 10.1117/12.3004216
+- 2024: Systematic evaluation of MRI-based characterization of tumor-associated vascular morphology and hemodynamics via a dynamic digital phantom | https://openalex.org/W4392600911 | DOI: 10.1117/1.jmi.11.2.024002
+- 2024: Bridging physics and deep learning: an autoencoder-based approach for non-invasive estimation of prostate tissue composition | https://openalex.org/W4391876223 | DOI: 10.1117/12.3006626
+- 2024: Self‐supervised multicontrast super‐resolution for diffusion‐weighted prostate MRI | https://openalex.org/W4391513407 | DOI: 10.1002/mrm.30047
+- 2023: Prostate Cancers Invisible on Multiparametric MRI: Pathologic Features in Correlation with Whole-Mount Prostatectomy | https://openalex.org/W4389672576 | DOI: 10.3390/cancers15245825
+- 2023: Multi-model sequential analysis of MRI data for microstructure prediction in heterogeneous tissue | https://openalex.org/W4387232986 | DOI: 10.1038/s41598-023-43329-x
+- 2023: Four‐quadrant vector mapping of hybrid multidimensional MRI data for the diagnosis of prostate cancer | https://openalex.org/W4386255047 | DOI: 10.1002/mp.16687
+- 2023: Bilateral asymmetry of quantitative parenchymal kinetics at ultrafast DCE-MRI predict response to neoadjuvant chemotherapy in patients with HER2+ breast cancer | https://openalex.org/W4386034842 | DOI: 10.1016/j.mri.2023.08.003
+- 2023: Histological validation of prostate tissue composition measurement using Hybrid Multidimensional MRI: Agreement with pathologists’ measures | https://openalex.org/W4385555051 | DOI: 10.58530/2022/4008
+- 2023: Spatial properties of noise in prostate DWI acquired with an endo-rectal coil as critical information for clinical QA | https://openalex.org/W4385554750 | DOI: 10.58530/2022/3292
+- 2023: Bilateral asymmetry of early parenchymal kinetics predicts response of breast cancer to neoadjuvant therapy | https://openalex.org/W4385554424 | DOI: 10.58530/2022/4002
+- 2023: Standardization of breast dynamic contrast-enhanced MRI signal for assessment of background parenchymal enhancement rate | https://openalex.org/W4385547492 | DOI: 10.58530/2022/4001
+- 2023: Addressing Acquisition Variability in DWI on Prostate Cancer with Unsupervised Methods | https://openalex.org/W4385545727 | DOI: 10.58530/2022/4081
+- 2023: An Interactive App with Multi-parametric MRI - Whole Mount Histology Correlation for Enhanced Prostate MRI Training of Radiologists | https://openalex.org/W4385545063 | DOI: 10.58530/2022/4019
+- 2023: Application of compressed sensing in High Spectral and Spatial resolution (HiSS) MRI – evaluation of effective resolution and image quality | https://openalex.org/W4385545045 | DOI: 10.58530/2022/3511
+- 2023: Reducing fluctuations in prostate DCE-MRI physiological parameters using muscle as a reference to modulate arterial input function | https://openalex.org/W4385543218 | DOI: 10.58530/2022/5002
+- 2023: External Evaluation of a Mammography-based Deep Learning Model for Predicting Breast Cancer in an Ethnically Diverse Population | https://openalex.org/W4385287108 | DOI: 10.1148/ryai.220299
+- 2023: Parametric maps of spatial two-tissue compartment model for prostate dynamic contrast enhanced MRI - comparison with the standard tofts model in the diagnosis of prostate cancer | https://openalex.org/W4383873264 | DOI: 10.1007/s13246-023-01289-6
+- 2023: Improving reader accuracy and specificity with the addition of hybrid multidimensional-MRI to multiparametric-MRI in diagnosing clinically significant prostate cancers | https://openalex.org/W4382010817 | DOI: 10.1007/s00261-023-03969-z
+- 2023: Pharmacokinetic Analysis of Enhancement-Constrained Acceleration (ECA) reconstruction-based high temporal resolution breast DCE-MRI | https://openalex.org/W4380853737 | DOI: 10.1371/journal.pone.0286123
+- 2023: An Interactive App with Multi-parametric MRI – Whole-Mount Histology Correlation for Enhanced Prostate MRI Training of Radiology Residents | https://openalex.org/W4367554234 | DOI: 10.1016/j.acra.2023.04.001
+- 2023: Abstract 1941: Barriers and effective interventions to engage Latinas' participation in breast cancer clinical trials | https://openalex.org/W4362594339 | DOI: 10.1158/1538-7445.am2023-1941
+- 2023: Supplemental Methods and Figure Legends from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4362433131 | DOI: 10.1158/1078-0432.22456941
+- 2023: Supplemental Figure S1 from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4362400405 | DOI: 10.1158/1078-0432.22456953
+- 2023: Supplemental Figure S3 from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4362397333 | DOI: 10.1158/1078-0432.22456947
+- 2023: Supplemental Figure S2 from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4362396750 | DOI: 10.1158/1078-0432.22456950
+- 2023: Data from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4361958139 | DOI: 10.1158/1078-0432.c.6523464.v1
+- 2023: Data from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4361945623 | DOI: 10.1158/1078-0432.c.6523464
+- 2023: Supplemental Figure S1 from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4361913288 | DOI: 10.1158/1078-0432.22456953.v1
+- 2023: Supplemental Figure S2 from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4361912962 | DOI: 10.1158/1078-0432.22456950.v1
+- 2023: Supplemental Figure S3 from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4361912960 | DOI: 10.1158/1078-0432.22456947.v1
+- 2023: Supplemental Methods and Figure Legends from The Renin–Angiotensin System Mediates EGF Receptor–Vitamin D Receptor Cross-Talk in Colitis-Associated Colon Cancer | https://openalex.org/W4361912338 | DOI: 10.1158/1078-0432.22456941.v1
+- 2023: Data from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361863691 | DOI: 10.1158/1078-0432.c.6528339.v1
+- 2023: Table S1, Table S2, Table S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816926 | DOI: 10.1158/1078-0432.22472829
+- 2023: Figure S1, Figure S2, Figure S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816884 | DOI: 10.1158/1078-0432.22472832
+- 2023: Figure S1, Figure S2, Figure S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816875 | DOI: 10.1158/1078-0432.22472832.v1
+- 2023: Table S1, Table S2, Table S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816852 | DOI: 10.1158/1078-0432.22472829.v1
+- 2023: Data from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816841 | DOI: 10.1158/1078-0432.c.6528339
+- 2023: Characterization of Effects of Compressed Sensing on High Spectral and Spatial Resolution (HiSS) MRI with Comparison to SENSE | https://openalex.org/W4327946439 | DOI: 10.3390/tomography9020055
+- 2023: Standardization of Breast Dynamic Contrast-enhanced MRI Signal withApplication to the Assessment of Background Parenchymal Enhancement Rate | https://openalex.org/W4323294740 | DOI: 10.2174/1573405619666230306105820
+
+### Deduplicated Institutional-Domain Conflict List
+chicago.gov; fraunhofer.de; hrbu.edu.cn; luc.edu; mcw.edu; northwestern.edu; pcf.org; philips.nl; pitt.edu; shiga-med.ac.jp; sydney.edu.au; uchicago.edu; utexas.edu; wustl.edu
+
+## Milica Medved
+- OpenAlex author: `https://openalex.org/A5056585028` (Milica Medved)
+- Last-known institutions: University of Chicago
+- Publications in window: 29
+- Unique coauthors in window: 181
+
+### Last-3-Year Publications Used
+- 2025: K‐means clustering‐based analysis of quantitative ultrafast DCE‐MRI for predicting breast cancer response to neoadjuvant chemotherapy | https://openalex.org/W7117413660 | DOI: 10.1002/acm2.70439
+- 2025: Empirically determined spatial properties of noise in prostate diffusion weighted imaging | https://openalex.org/W4414237499 | DOI: 10.58530/2025/3919
+- 2025: Extended intra-voxel incoherent motion (X-IVIM) modeling in breast cancer patients for improved quantitative cancer markers | https://openalex.org/W4414237204 | DOI: 10.58530/2025/2035
+- 2025: Comparing Performance of a New 50-Channel Pelvic Coil to that of the 30-Channel Anterior Array Coil for MRI of the Prostate | https://openalex.org/W4414237103 | DOI: 10.58530/2025/2283
+- 2025: Impact of Deep Learning denoising and ultra-high density coil array on prostate diffusion imaging | https://openalex.org/W4414236563 | DOI: 10.58530/2025/0101
+- 2025: Implementation of hybrid multi-dimensional MRI (HM-MRI) for non-endo-rectal coil prostate MR imaging | https://openalex.org/W4414235166 | DOI: 10.58530/2025/3886
+- 2025: Physics-Informed Autoencoder for Prostate Tissue Microstructure Profiling with Hybrid Multidimensional MRI | https://openalex.org/W4407174296 | DOI: 10.1148/ryai.240167
+- 2025: Prospective Validation of an Automated Hybrid Multidimensional MRI Tool for Prostate Cancer Detection Using Targeted Biopsy: Comparison with PI-RADS-based Assessment | https://openalex.org/W4406664874 | DOI: 10.1148/rycan.240156
+- 2024: Advanced Prostate Cancer Characterization: Enhanced Tissue Compartment Estimation with Extended Grid Sampling and HM-MRI | https://openalex.org/W4404746976 | DOI: 10.58530/2024/3332
+- 2024: Introduction to matrix‐based method for analyzing hybrid multidimensional prostate MRI data | https://openalex.org/W4404601387 | DOI: 10.1002/acm2.14544
+- 2024: Creation of aortic regurgitation model on isolated porcine heart and aortic valve-sparing root replacement using a new device for aortic valve cusps positioning | https://openalex.org/W4404521922 | DOI: 10.29296/25877305-2024-11-19
+- 2024: Quantitative Multi-Parametric MRI of the Prostate Reveals Racial Differences | https://openalex.org/W4403460674 | DOI: 10.3390/cancers16203499
+- 2024: Quantitative Multi-Parametric MRI of the Prostate Reveals Racial Differences | https://openalex.org/W4402962608 | DOI: 10.20944/preprints202409.2234.v1
+- 2024: Radiomics and quantitative multi-parametric MRI for predicting uterine fibroid growth | https://openalex.org/W4402491626 | DOI: 10.1117/1.jmi.11.5.054501
+- 2024: Effect of Echo Times on Prostate Cancer Detection on Diffusion Weighted Images at high b-value and Apparent Diffusion Coefficient maps | https://openalex.org/W4401572370 | DOI: 10.58530/2023/2062
+- 2024: Multiparametric quantitative magnetic resonance imaging of uterine fibroids for prediction of growth rate—a pilot study | https://openalex.org/W4399898714 | DOI: 10.21037/qims-23-1663
+- 2024: Radiomics and quantitative multi-parametric MRI for predicting uterine fibroid growth | https://openalex.org/W4393571850 | DOI: 10.1117/12.3005190
+- 2024: Implementation of a high-resolution, high-contrast magnetic resonance imaging protocol with extended delayed phases for peritoneal mesothelioma | https://openalex.org/W4392593968 | DOI: 10.21037/qims-23-13
+- 2024: Self‐supervised multicontrast super‐resolution for diffusion‐weighted prostate MRI | https://openalex.org/W4391513407 | DOI: 10.1002/mrm.30047
+- 2023: Prostate Cancers Invisible on Multiparametric MRI: Pathologic Features in Correlation with Whole-Mount Prostatectomy | https://openalex.org/W4389672576 | DOI: 10.3390/cancers15245825
+- 2023: Spatial properties of noise in prostate DWI acquired with an endo-rectal coil as critical information for clinical QA | https://openalex.org/W4385554750 | DOI: 10.58530/2022/3292
+- 2023: Bilateral asymmetry of early parenchymal kinetics predicts response of breast cancer to neoadjuvant therapy | https://openalex.org/W4385554424 | DOI: 10.58530/2022/4002
+- 2023: Standardization of breast dynamic contrast-enhanced MRI signal for assessment of background parenchymal enhancement rate | https://openalex.org/W4385547492 | DOI: 10.58530/2022/4001
+- 2023: Addressing Acquisition Variability in DWI on Prostate Cancer with Unsupervised Methods | https://openalex.org/W4385545727 | DOI: 10.58530/2022/4081
+- 2023: High-resolution, high-contrast MRI protocol with extended delayed imaging for peritoneal mesothelioma | https://openalex.org/W4385545442 | DOI: 10.58530/2022/4479
+- 2023: Application of compressed sensing in High Spectral and Spatial resolution (HiSS) MRI – evaluation of effective resolution and image quality | https://openalex.org/W4385545045 | DOI: 10.58530/2022/3511
+- 2023: Effect of Longitudinal Variation in Tumor Volume Estimation for MRI-guided Personalization of Breast Cancer Neoadjuvant Treatment | https://openalex.org/W4385330543 | DOI: 10.1148/rycan.220126
+- 2023: Characterization of Effects of Compressed Sensing on High Spectral and Spatial Resolution (HiSS) MRI with Comparison to SENSE | https://openalex.org/W4327946439 | DOI: 10.3390/tomography9020055
+- 2023: Standardization of Breast Dynamic Contrast-enhanced MRI Signal withApplication to the Assessment of Background Parenchymal Enhancement Rate | https://openalex.org/W4323294740 | DOI: 10.2174/1573405619666230306105820
+
+### Deduplicated Institutional-Domain Conflict List
+almazovcentre.ru; chicago.gov; fraunhofer.de; gov.ru; luc.edu; mcw.edu; northshore.org; northwestern.edu; philips.nl; sheba.co.il; shiga-med.ac.jp; sydney.edu.au; tau.ac.il; uchicago.edu; yale.edu
+
+## Zhen Ren
+- OpenAlex author: `https://openalex.org/A5090331749` (Zhen Ren)
+- Last-known institutions: Wuhan Conservatory of Music; University of Manchester; University of Chicago; Gansu University of Traditional Chinese Medicine; Shandong Jianzhu University
+- Publications in window: 18
+- Unique coauthors in window: 52
+
+### Last-3-Year Publications Used
+- 2025: Ultrafast breast DCE-MRI: comparative analysis of semi-quantitative and pharmacokinetic parameters with gadoterate meglumine versus gadobutrol in malignant lesions and background parenchymal enhancement | https://openalex.org/W4415655876 | DOI: 10.21037/qims-2025-1111
+- 2025: Unravelling key genes and molecular pathways in gastric inflammation-to-cancer transition through causal discovery: implications for early diagnosis and therapy | https://openalex.org/W4414949236 | DOI: 10.1177/20503121251380131
+- 2025: Clinical application of gadoterate meglumine in abbreviated dynamic contrast-enhanced magnetic resonance imaging of the breast with ultrafast imaging: a single-center retrospective study | https://openalex.org/W4414450245 | DOI: 10.21037/qims-2025-653
+- 2025: Initial Experience and Clinical Application of Gadoterate Meglumine in Abbreviated DCE-MRI of the Breast with Ultrafast Imaging. | https://openalex.org/W4414238231 | DOI: 10.58530/2025/1988
+- 2025: Extended intra-voxel incoherent motion (X-IVIM) modeling in breast cancer patients for improved quantitative cancer markers | https://openalex.org/W4414237204 | DOI: 10.58530/2025/2035
+- 2025: Cluster analysis of quantitative ultrafast DCE-MRI for prediction of breast cancer response to neoadjuvant chemotherapy | https://openalex.org/W4414234316 | DOI: 10.58530/2025/1987
+- 2025: Data-driven approach of atrium skylights-integrated photovoltaic systems design based on multimodal deep learning: Considering different regions in China | https://openalex.org/W4413388891 | DOI: 10.1016/j.energy.2025.138099
+- 2025: Zero-Static-Power Beamforming Antenna Array Enabled by RF Memristive Switches | https://openalex.org/W4417131804 | DOI: 10.1109/ap-s/cnc-usnc-ursi55537.2025.11266795
+- 2025: Author response for "A Translational Research Leveraging Diagnostic Accuracy of Innovations in MRI as a Model for Early Breast Cancer Detection in Uganda" | https://openalex.org/W4412435931 | DOI: 10.1177/15330338251356549/v2/response1
+- 2025: A Translational Research Leveraging Diagnostic Accuracy of Innovations in MRI as a Model for Early Breast Cancer Detection in Uganda | https://openalex.org/W4412418107 | DOI: 10.1177/15330338251356549
+- 2025: Intelligent generation of robotic dance motions via convolution-enhanced transformer networks | https://openalex.org/W4412784577 | DOI: 10.1504/ijict.2025.147764
+- 2024: Screening abbreviated breast MRI with ultrafast imaging: prospective study results | https://openalex.org/W4401572385 | DOI: 10.58530/2023/0184
+- 2024: Bilateral asymmetry of parenchymal kinetics from ultrafast DCE-MRI predicts HER2+ breast cancer response to neoadjuvant chemotherapy | https://openalex.org/W4401571810 | DOI: 10.58530/2023/1143
+- 2024: Signal intensity form of extended Tofts model for quantitative analysis of dynamic contrast enhanced MRI data | https://openalex.org/W4401570161 | DOI: 10.58530/2023/1788
+- 2024: Comparison of Adversarial Robustness of Convolutional Neural Networks for Handwritten Digit Recognition | https://openalex.org/W4403343736 | DOI: 10.2991/978-94-6463-540-9_54
+- 2023: Bilateral asymmetry of quantitative parenchymal kinetics at ultrafast DCE-MRI predict response to neoadjuvant chemotherapy in patients with HER2+ breast cancer | https://openalex.org/W4386034842 | DOI: 10.1016/j.mri.2023.08.003
+- 2023: Bilateral asymmetry of early parenchymal kinetics predicts response of breast cancer to neoadjuvant therapy | https://openalex.org/W4385554424 | DOI: 10.58530/2022/4002
+- 2023: Pharmacokinetic Analysis of Enhancement-Constrained Acceleration (ECA) reconstruction-based high temporal resolution breast DCE-MRI | https://openalex.org/W4380853737 | DOI: 10.1371/journal.pone.0286123
+
+### Deduplicated Institutional-Domain Conflict List
+cdc.gov; chulabhornhospital.com; gszy.edu.cn; hbeu.cn; huat.edu.cn; mak.ac.ug; manchester.ac.uk; pitt.edu; sdjzu.edu.cn; sdu.edu.cn; uchicago.edu; uci.or.ug; whcm.edu.cn; wustl.edu
+
+## Eddy Solomon
+- OpenAlex author: `https://openalex.org/A5017245842` (Eddy Solomon)
+- Last-known institutions: Technion – Israel Institute of Technology; Cornell University
+- Publications in window: 30
+- Unique coauthors in window: 127
+
+### Last-3-Year Publications Used
+- 2025: Rapid quantitative susceptibility mapping using single-shot echo planar time-resolved imaging | https://openalex.org/W4416929767 | DOI: 10.1088/1361-6560/ae273d
+- 2025: High‐Accelerated Parallel Imaging With the Inherent Local Feature in <scp>PE</scp> ‐ <scp>xSPEN MRI</scp> | https://openalex.org/W4415456586 | DOI: 10.1002/mrm.70146
+- 2025: A Phase 2 Exploratory Trial Evaluating Computed Tomography–Based Midtreatment Nodal Response to Select for De-escalated Chemoradiation Therapy in the Definitive Management of p16+ Oropharyngeal Cancer | https://openalex.org/W4415214489 | DOI: 10.1016/j.ijrobp.2025.09.054
+- 2025: MR fingerprinting with implicit neural representation (FINR) for free-breathing 3D whole-liver water T1, water T2, fat fraction, and R2* mapping | https://openalex.org/W4414238594 | DOI: 10.58530/2025/1370
+- 2025: Motion detection using Doppler radar: Towards subject- and organ-specific motion correction | https://openalex.org/W4414235799 | DOI: 10.58530/2025/4590
+- 2025: Direct Reconstruction of Tracer Kinetic Parameter Maps in Abbreviated Breast MRI | https://openalex.org/W4414235142 | DOI: 10.58530/2025/0520
+- 2025: Navigator motion‐resolved <scp>MR</scp> fingerprinting using implicit neural representation: Feasibility for free‐breathing <scp>three‐dimensional</scp> whole‐liver multiparametric mapping | https://openalex.org/W4413932394 | DOI: 10.1002/mrm.70063
+- 2025: Free-Breathing Hybrid Technique for Simultaneous Morphological and Quantitative Abdominal Imaging at 0.55 T | https://openalex.org/W4411256641 | DOI: 10.1097/rli.0000000000001214
+- 2025: Experience of how to build an MRI machine from scratch | https://openalex.org/W4410946463 | DOI: 10.1016/j.pnmrs.2025.101574
+- 2025: Dynamic MRI with Locally Low-Rank Subspace Constraint: Towards 1-Second Temporal Resolution Aided by Deep Learning | https://openalex.org/W4407997018 | DOI: 10.21203/rs.3.rs-5448452/v1
+- 2025: FastMRI Breast: A Publicly Available Radial k-Space Dataset of Breast Dynamic Contrast-enhanced MRI | https://openalex.org/W4406172881 | DOI: 10.1148/ryai.240345
+- 2024: fastMRI Breast: A publicly available radial k-space dataset of breast dynamic contrast-enhanced MRI | https://openalex.org/W4404747642 | DOI: 10.58530/2024/2777
+- 2024: Sub-Second GRASP-LLR DCE: Locally Low-Rank Subspace Constraint aided by Deep Learning | https://openalex.org/W4404745768 | DOI: 10.58530/2024/0626
+- 2024: ezyMRI: How to build an MRI machine from scratch -- Experience from a four-day hackathon | https://openalex.org/W4404570864 | DOI: 10.48550/arxiv.2411.11365
+- 2024: Implicit neural representation for free-breathing MR fingerprinting (INR-MRF): co-registered 3D whole-liver water T1, water T2, proton density fat fraction, and R2* mapping | https://openalex.org/W4404088464 | DOI: 10.48550/arxiv.2410.15175
+- 2024: A new approach for multislice spatiotemporal encoding <scp>MRI</scp> in a portable low‐field system | https://openalex.org/W4402697758 | DOI: 10.1002/mrm.30300
+- 2024: Contrast Kinetic Model-based GRASP Reconstruction for Small Animal Imaging at 7T | https://openalex.org/W4401576049 | DOI: 10.58530/2023/3756
+- 2024: Time-dependent diffusion MRI study of chemoradiation treatment response in patients with HPV positive oropharyngeal carcinoma | https://openalex.org/W4401574523 | DOI: 10.58530/2023/4156
+- 2024: Measuring cellular-interstitial water exchange time in patients with head and neck cancer using time-dependent diffusion experiments | https://openalex.org/W4401574341 | DOI: 10.58530/2023/4149
+- 2024: Reproducibility of diffusion kurtosis parameters for a quantitative phantom in a multi-system study | https://openalex.org/W4401571755 | DOI: 10.58530/2023/5084
+- 2024: mcLARO: Multi-Contrast Learned Acquisition and Reconstruction Optimization for simultaneous multi-contrast and multi-parametric mapping | https://openalex.org/W4401570096 | DOI: 10.58530/2023/1642
+- 2024: fastMRI Breast: A publicly available radial k-space dataset of breast dynamic contrast-enhanced MRI | https://openalex.org/W4399554656 | DOI: 10.48550/arxiv.2406.05270
+- 2024: Digital reference object toolkit of breast DCE MRI for quantitative evaluation of image reconstruction and analysis methods | https://openalex.org/W4398210944 | DOI: 10.1002/mrm.30152
+- 2023: <scp>mcLARO</scp>: Multi‐contrast learned acquisition and reconstruction optimization for simultaneous quantitative multi‐parametric mapping | https://openalex.org/W4386347537 | DOI: 10.1002/mrm.29854
+- 2023: High resolution 3D whole brain T1, T2, T2* and QSM mapping within 3.5 mins | https://openalex.org/W4385555919 | DOI: 10.58530/2022/5013
+- 2023: A Free-Breathing Hybrid Technique for Simultaneous T2w, T1w, PDFF, and R2* Imaging at 0.55T | https://openalex.org/W4385554621 | DOI: 10.58530/2022/3932
+- 2023: Abdominal Water-Only T2 Estimation at 0.55T using a 3D Stack-of-Stars TSE-DIXON Technique | https://openalex.org/W4385545148 | DOI: 10.58530/2022/3933
+- 2023: 1D Convolutional Neural Network as Regularizer for Learning DCE-MRI Reconstruction | https://openalex.org/W4385545137 | DOI: 10.58530/2022/4046
+- 2023: GRASP-Pro+: GRASP reconstruction with locally low-rank subspace constraint for DCE-MRI | https://openalex.org/W4385543150 | DOI: 10.58530/2022/1603
+- 2023: mcLARO: Multi-Contrast Learned Acquisition and Reconstruction Optimization for simultaneous quantitative multi-parametric mapping | https://openalex.org/W4363672020 | DOI: 10.48550/arxiv.2304.03458
+
+### Deduplicated Institutional-Domain Conflict List
+6thhosp.com; advimg.com; clevelandclinic.org; cornell.edu; fau.de; hingehealth.com; huashan.org.cn; liu.edu; moffitt.org; nyu.edu; shxkyy.net; sjtu.edu.cn; technion.ac.il; weizmann.ac.il
+
+## Laura Heacock
+- OpenAlex author: `https://openalex.org/A5080296152` (Laura Heacock)
+- Last-known institutions: NYU Langone Health
+- Publications in window: 22
+- Unique coauthors in window: 104
+
+### Last-3-Year Publications Used
+- 2026: Breast US: State of the Art | https://openalex.org/W7123526622 | DOI: 10.1148/radiol.233101
+- 2025: Evaluating Generative AI as an Educational Tool for Radiology Resident Report Drafting | https://openalex.org/W4414973156 | DOI: 10.1101/2025.10.06.25337417
+- 2025: Evaluating Generative AI as an Educational Tool for Radiology Resident Report Drafting | https://openalex.org/W4416017811 | DOI: 10.48550/arxiv.2511.02839
+- 2025: Understanding differences in applying DETR to natural and medical images | https://openalex.org/W4399151402 | DOI: 10.59275/j.melba.2025-g137
+- 2025: A Multi-Modal AI System for Screening Mammography: Integrating 2D and 3D Imaging to Improve Breast Cancer Detection in a Prospective Clinical Study | https://openalex.org/W4414791945 | DOI: 10.48550/arxiv.2504.05636
+- 2025: Dynamic MRI with Locally Low-Rank Subspace Constraint: Towards 1-Second Temporal Resolution Aided by Deep Learning | https://openalex.org/W4407997018 | DOI: 10.21203/rs.3.rs-5448452/v1
+- 2025: FastMRI Breast: A Publicly Available Radial k-Space Dataset of Breast Dynamic Contrast-enhanced MRI | https://openalex.org/W4406172881 | DOI: 10.1148/ryai.240345
+- 2024: Multi-modal large language models in radiology: principles, applications, and potential | https://openalex.org/W4404900783 | DOI: 10.1007/s00261-024-04708-8
+- 2024: fastMRI Breast: A publicly available radial k-space dataset of breast dynamic contrast-enhanced MRI | https://openalex.org/W4404747642 | DOI: 10.58530/2024/2777
+- 2024: Sub-Second GRASP-LLR DCE: Locally Low-Rank Subspace Constraint aided by Deep Learning | https://openalex.org/W4404745768 | DOI: 10.58530/2024/0626
+- 2024: Invasive Lobular Carcinoma in the Screening Setting | https://openalex.org/W4405222410 | DOI: 10.1093/jbi/wbae082
+- 2024: A training regime to learn unified representations from complementary breast imaging modalities | https://openalex.org/W4402500952 | DOI: 10.48550/arxiv.2408.08560
+- 2024: Realistic Digital Reference Object (DRO) toolkit for quantitative breast Ultra-Fast Dynamic Contrast-Enhanced (UF-DCE) MRI | https://openalex.org/W4401569147 | DOI: 10.58530/2023/2738
+- 2024: fastMRI Breast: A publicly available radial k-space dataset of breast dynamic contrast-enhanced MRI | https://openalex.org/W4399554656 | DOI: 10.48550/arxiv.2406.05270
+- 2024: Digital reference object toolkit of breast DCE MRI for quantitative evaluation of image reconstruction and analysis methods | https://openalex.org/W4398210944 | DOI: 10.1002/mrm.30152
+- 2023: Leveraging Transformers to Improve Breast Cancer Classification and Risk Assessment with Multi-modal and Longitudinal Data | https://openalex.org/W4388482132 | DOI: 10.48550/arxiv.2311.03217
+- 2023: Problem-solving Breast MRI | https://openalex.org/W4386941448 | DOI: 10.1148/rg.230026
+- 2023: An Efficient Deep Neural Network to Classify Large 3D Images With Small Objects | https://openalex.org/W4385945267 | DOI: 10.1109/tmi.2023.3302799
+- 2023: PACS-integrated machine learning breast density classifier: clinical validation | https://openalex.org/W4383311361 | DOI: 10.1016/j.clinimag.2023.06.023
+- 2023: Improving Information Extraction from Pathology Reports using Named Entity Recognition | https://openalex.org/W4382985799 | DOI: 10.21203/rs.3.rs-3035772/v1
+- 2023: BenchMD: A Benchmark for Unified Learning on Medical Images and Sensors | https://openalex.org/W4366330380 | DOI: 10.48550/arxiv.2304.08486
+- 2023: Women 75 Years Old or Older: To Screen or Not to Screen? | https://openalex.org/W4365444023 | DOI: 10.1148/rg.220166
+
+### Deduplicated Institutional-Domain Conflict List
+advimg.com; cornell.edu; fau.de; hingehealth.com; mdanderson.org; nyu.edu; nyulangone.org; snu.ac.kr; snuh.org; uj.edu.pl; yale.edu
+
+## Anna Woodard
+- OpenAlex author: `https://openalex.org/A5101715118` (Anna Woodard)
+- Last-known institutions: University of Chicago
+- Publications in window: 9
+- Unique coauthors in window: 51
+
+### Last-3-Year Publications Used
+- 2025: Slice-Aware Attention for Quality Control of Breast MRI Segmentations | https://openalex.org/W4414909065 | DOI: 10.1109/escience65000.2025.00063
+- 2025: Abstract P2-02-19: Virtual Multiplex Immunofluorescence Identifies Lymphocyte Subsets Predictive of Response to Neoadjuvant Therapy | https://openalex.org/W4411290477 | DOI: 10.1158/1557-3265.sabcs24-p2-02-19
+- 2024: Integration of clinical features and deep learning on pathology for the prediction of breast cancer recurrence assays and risk of recurrence | https://openalex.org/W4400031003 | DOI: 10.17615/nbrq-z246
+- 2024: Benign breast disease and breast cancer risk in African women: a case–control study | https://openalex.org/W4390619487 | DOI: 10.1007/s10552-023-01837-1
+- 2023: Benign breast disease and breast cancer risk in African women: A case-control study | https://openalex.org/W4386370219 | DOI: 10.21203/rs.3.rs-3301977/v1
+- 2023: External Evaluation of a Mammography-based Deep Learning Model for Predicting Breast Cancer in an Ethnically Diverse Population | https://openalex.org/W4385287108 | DOI: 10.1148/ryai.220299
+- 2023: The Changing Role of RSEs over the Lifetime of Parsl | https://openalex.org/W4385008566 | DOI: 10.48550/arxiv.2307.11060
+- 2023: Integration of clinical features and deep learning on pathology for the prediction of breast cancer recurrence assays and risk of recurrence | https://openalex.org/W4365516941 | DOI: 10.1038/s41523-023-00530-5
+- 2023: Abstract P2-11-08: Multimodal Prediction of Breast Cancer Recurrence Assays and Risk of Recurrence | https://openalex.org/W4322774310 | DOI: 10.1158/1538-7445.sabcs22-p2-11-08
+
+### Deduplicated Institutional-Domain Conflict List
+cancergenetics.com; chicago.gov; duke.edu; fnal.gov; lasu.edu.ng; lifebridgehealth.org; mssm.edu; mulago.or.ug; uchicago.edu; ui.edu.ng; unc.edu
+
+## Olufunmilayo Olopade
+- OpenAlex author: `https://openalex.org/A5057209864` (Olufunmilayo I. Olopade)
+- Last-known institutions: Chicago Department of Public Health; University of Chicago; University of Chicago Medical Center; University of Kansas Medical Center; Center for Global Health; Cancer Genetics (United States); Azienda Ospedaliera Universitaria Pisana
+- Publications in window: 341
+- Unique coauthors in window: 1294
+
+### Last-3-Year Publications Used
+- 2025: WISDOM Randomized Trial Comparing Risk-Based Versus Annual Breast Cancer Screening: Study Cohort Characteristics and Design | https://openalex.org/W4417339792 | DOI: 10.21203/rs.3.rs-7665355/v2
+- 2025: Skin Cancer Predisposition Genes, Full‐Body Skin Examinations, Familial Disclosure, and Genetic Testing Among High‐Risk Individuals | https://openalex.org/W4417216127 | DOI: 10.1111/ijd.70206
+- 2025: Reported Biologic Differences in Breast Cancer by Race Due to Disparities in Screening—Reply | https://openalex.org/W4417182626 | DOI: 10.17615/n8qy-y663
+- 2025: Supplementary Tables 1-3 from Validation of the Nigerian Breast Cancer Study Model for Predicting Individual Breast Cancer Risk in Cameroon and Uganda | https://openalex.org/W4416719851 | DOI: 10.1158/1055-9965.30722224
+- 2025: Supplementary Table 1 from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4416719728 | DOI: 10.1158/1055-9965.30722460
+- 2025: Data from Validation of the Nigerian Breast Cancer Study Model for Predicting Individual Breast Cancer Risk in Cameroon and Uganda | https://openalex.org/W4416692730 | DOI: 10.1158/1055-9965.c.8170189
+- 2025: Treatment of infertility and risk of breast cancer among women with a BRCA pathogenic variant: a matched case-control study | https://openalex.org/W4416070235 | DOI: 10.1186/s12885-025-15146-0
+- 2025: Awareness, knowledge, and attitudes toward polygenic risk scores for breast cancer in multiethnic high-risk cohorts of women | https://openalex.org/W4415045089 | DOI: 10.1016/j.gim.2025.101603
+- 2025: WISDOM Randomized Trial Comparing Risk-Based Versus Annual Breast Cancer Screening: Study Cohort Characteristics and Design | https://openalex.org/W4414830482 | DOI: 10.21203/rs.3.rs-7665355/v1
+- 2025: Landscape of Genetic Alterations Underlying Hallmark Signature Changes in Cancer Reveals TP53-Aneuploidy Driven Metabolic Reprogramming | https://openalex.org/W4415283735 | DOI: 10.17615/h5bg-3c19
+- 2025: Temporal trends in active surveillance and treatment strategies for low-risk, hormone receptor-positive ductal carcinoma in situ in the US. | https://openalex.org/W4414893608 | DOI: 10.1200/op.2025.21.10_suppl.181
+- 2025: Total Radiotherapy Treatment Time in Head and Neck Cancer Patients Treated with IGRT in a Latin American Middle-Income Country | https://openalex.org/W4414574143 | DOI: 10.1016/j.ijrobp.2025.07.1272
+- 2025: Radiotherapy Barriers and Costs for Cervical Cancer Patients in a Latin American Middle-Income Country | https://openalex.org/W4414557801 | DOI: 10.1016/j.ijrobp.2025.06.2453
+- 2025: Multi-Ancestry Transcriptome-wide Association Studies Uncover New Insights into Breast Cancer Genetics and Biology | https://openalex.org/W4413114954 | DOI: 10.1101/2025.08.12.25333509
+- 2025: Predictors of unintended pregnancy among adolescent schoolgirls during the COVID-19-induced school closures: The case of rural and underserved communities in Ghana | https://openalex.org/W4413254239 | DOI: 10.36922/ijps025110042
+- 2025: Disparities in the Surgical Management of the Axilla by Self-Identified Race in the Multicenter Neoadjuvant I-SPY2 Trial | https://openalex.org/W4412596958 | DOI: 10.1245/s10434-025-17864-y
+- 2025: Differential BACH1 Expression in Basal-like Breast Tumors of Black Women Identified via Immunohistochemistry | https://openalex.org/W4412423334 | DOI: 10.3390/curroncol32070404
+- 2025: Integrating multi‐ancestry genomic and proteomic data to identify blood risk biomarkers and target proteins for breast cancer genetic risk loci | https://openalex.org/W4412395357 | DOI: 10.1002/ijc.70041
+- 2025: Refining breast cancer genetic risk and biology through multi-ancestry fine-mapping analyses of 192 risk regions | https://openalex.org/W4416123228 | DOI: 10.17615/2s37-a444
+- 2025: Abstract P2-05-04: Associations between Hearing/Vestibular Problems and Levels of Physical Function Impairment among Breast Cancer Survivors in a Multiethnic Study Cohort | https://openalex.org/W4411287110 | DOI: 10.1158/1557-3265.sabcs24-p2-05-04
+- 2025: Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer. | https://openalex.org/W4415037740 | DOI: 10.17615/c9v1-2627
+- 2025: Longitudinal Changes in Stress and Isolation Among Multi‐Ethnic Breast Cancer Survivors Throughout COVID‐19 | https://openalex.org/W4411422020 | DOI: 10.1002/smi.70063
+- 2025: Immune Subtyping Identifies Patients With Hormone Receptor–Positive Early-Stage Breast Cancer Who Respond to Neoadjuvant Immunotherapy (IO): Results From Five IO Arms of the I-SPY2 Trial | https://openalex.org/W4411369108 | DOI: 10.1200/po-24-00776
+- 2025: Awareness, knowledge, and attitudes toward breast cancer polygenic risk scores for precision prevention in a multiethnic cohort of high-risk women. | https://openalex.org/W4410820324 | DOI: 10.1200/jco.2025.43.16_suppl.10531
+- 2025: Breast Cancer: Genetic Risk Assessment, Diagnostics, and Therapeutics in African Populations | https://openalex.org/W4409880454 | DOI: 10.1146/annurev-genom-111522-013953
+- 2025: A Breast Cancer Polygenic Risk Score Validation in 15,490 Brazilians Using Exome Sequencing | https://openalex.org/W4409800408 | DOI: 10.3390/diagnostics15091098
+- 2025: Abstract 2286: Integrating multi-ancestry genomic and proteomic data to identify blood risk biomarkers and target proteins for breast cancer genetic risk loci | https://openalex.org/W4409629653 | DOI: 10.1158/1538-7445.am2025-2286
+- 2025: Abstract 3892: Multi-sample whole genome sequencing unveils complex mutational dynamics and clonal evolutionary patterns in young onset breast cancer from Nigeria | https://openalex.org/W4409628895 | DOI: 10.1158/1538-7445.am2025-3892
+- 2025: Abstract 3099: Predicting response to trastuzumab deruxtecan in breast cancer using flow cytometry | https://openalex.org/W4409625170 | DOI: 10.1158/1538-7445.am2025-3099
+- 2025: Genetic and Nongenetic Risk Factors for Breast Cancer Risk Estimation | https://openalex.org/W4409583083 | DOI: 10.1001/jamanetworkopen.2025.5804
+- 2025: A National Study Among Diverse US Populations of Exposure to Prescription Medications with Evidence‐Based Pharmacogenomic Information | https://openalex.org/W4408162132 | DOI: 10.1002/cpt.3617
+- 2025: Novel breast cancer susceptibility loci under linkage peaks identified in African ancestry consortia | https://openalex.org/W4406813322 | DOI: 10.17615/h2se-na13
+- 2025: Refining breast cancer genetic risk and biology through multi-ancestry fine-mapping analyses of 192 risk regions | https://openalex.org/W4406036488 | DOI: 10.1038/s41588-024-02031-y
+- 2024: The genetic architecture of the β-globin chain in individuals with and without sickle cell disease in Nigeria: A case for beta thalassemia? | https://openalex.org/W4405739456 | DOI: 10.1101/2024.12.20.24319473
+- 2024: The incidence of pancreatic cancer in women with a <i>BRCA1</i> or <i>BRCA2</i> mutation | https://openalex.org/W4404861260 | DOI: 10.1002/cncr.35666
+- 2024: The convergence of genomic medicine and translational omics in transforming breast cancer patient care | https://openalex.org/W4403925090 | DOI: 10.1172/jci187520
+- 2024: Predicting pathologic complete response to neoadjuvant chemotherapy in breast cancer using a machine learning approach | https://openalex.org/W4403875792 | DOI: 10.1186/s13058-024-01905-7
+- 2024: Single-cell chemoproteomics identifies metastatic activity signatures in breast cancer | https://openalex.org/W4403664602 | DOI: 10.1126/sciadv.adp2622
+- 2024: Using genome and transcriptome data from African-ancestry female participants to identify putative breast cancer susceptibility genes | https://openalex.org/W4403284232 | DOI: 10.17615/0qfx-ep12
+- 2024: Evaluation of a Graphic Narrative Patient Education Tool to Reduce Pre-Treatment Anxiety for Patients Receiving Radiotherapy in a Latin American Hospital | https://openalex.org/W4402906724 | DOI: 10.1016/j.ijrobp.2024.07.1578
+- 2024: Abstract C036: Prevalence of and racial/ethnic differences in hearing and balance problems in a multiethnic cohort of patients with breast cancer | https://openalex.org/W4402708898 | DOI: 10.1158/1538-7755.disp24-c036
+- 2024: Abstract A021: Development of cross-ancestry polygenic risk. scores for breast cancer in women of African ancestry | https://openalex.org/W4402708645 | DOI: 10.1158/1538-7755.disp24-a021
+- 2024: Data from Area Deprivation Index in patients with invasive lobular carcinoma of the breast: associations with tumor characteristics and outcomes | https://openalex.org/W4402803182 | DOI: 10.1158/1055-9965.c.6706644.v3
+- 2024: Supplementary Table 1 from Area Deprivation Index in patients with invasive lobular carcinoma of the breast: associations with tumor characteristics and outcomes | https://openalex.org/W4402800419 | DOI: 10.1158/1055-9965.27029605
+- 2024: Supplementary Table 1 from Area Deprivation Index in patients with invasive lobular carcinoma of the breast: associations with tumor characteristics and outcomes | https://openalex.org/W4402799633 | DOI: 10.1158/1055-9965.27029605.v1
+- 2024: Supplementary Data from Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4401992217 | DOI: 10.1158/0008-5472.26871046.v1
+- 2024: Data from Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4401992060 | DOI: 10.1158/0008-5472.c.7380274.v2
+- 2024: Supplementary Data from Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4401992032 | DOI: 10.1158/0008-5472.26871046
+- 2024: PTPN2 copper-sensing relays copper level fluctuations into EGFR/CREB activation and associated CTR1 transcriptional repression | https://openalex.org/W4401536444 | DOI: 10.1038/s41467-024-50524-5
+- 2024: Supplementary Data from Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4401205169 | DOI: 10.1158/0008-5472.26424058
+- 2024: Supplementary Data from Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4401205055 | DOI: 10.1158/0008-5472.26424058.v1
+- 2024: Data from Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4401204935 | DOI: 10.1158/0008-5472.c.7380274
+- 2024: Data from Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4401204576 | DOI: 10.1158/0008-5472.c.7380274.v1
+- 2024: Incidence of peritoneal cancer after oophorectomy among <i>BRCA1</i> and <i>BRCA2</i> mutation carriers | https://openalex.org/W4400137539 | DOI: 10.1093/jnci/djae151
+- 2024: Development and validation of a clinical breast cancer tool for accurate prediction of recurrence | https://openalex.org/W4399702093 | DOI: 10.1038/s41523-024-00651-5
+- 2024: Case-Case Genome-Wide Analyses Identify Subtype-Informative Variants That Confer Risk for Breast Cancer | https://openalex.org/W4399323434 | DOI: 10.1158/0008-5472.can-23-3854
+- 2024: Supplementary Figure S3 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399298258 | DOI: 10.1158/1078-0432.25956337
+- 2024: Supplementary Figure S2 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399298159 | DOI: 10.1158/1078-0432.25956340.v1
+- 2024: Supplementary Figure S4 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399297980 | DOI: 10.1158/1078-0432.25956334.v1
+- 2024: Supplementary Figure S2 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399297955 | DOI: 10.1158/1078-0432.25956340
+- 2024: Supplementary Figure S1 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399297865 | DOI: 10.1158/1078-0432.25956343.v1
+- 2024: Supplementary Figure S3 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399297658 | DOI: 10.1158/1078-0432.25956337.v1
+- 2024: Supplementary Figure S4 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399297597 | DOI: 10.1158/1078-0432.25956334
+- 2024: Supplementary Table S1 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399294138 | DOI: 10.1158/1078-0432.25956328.v1
+- 2024: Supplementary Figure S1 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399293939 | DOI: 10.1158/1078-0432.25956343
+- 2024: Supplementary Table S1 from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399293843 | DOI: 10.1158/1078-0432.25956328
+- 2024: Data from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399293777 | DOI: 10.1158/1078-0432.c.7265761
+- 2024: Data from The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4399293766 | DOI: 10.1158/1078-0432.c.7265761.v1
+- 2024: Validation of a clinical breast cancer risk assessment tool combining a polygenic score for all ancestries with traditional risk factors | https://openalex.org/W4399293311 | DOI: 10.1016/j.gim.2024.101128
+- 2024: I-SPY2 Endocrine Optimization Pilot (EOP): Neoadjuvant amcenestrant +/- abemaciclib +/- letrozole in molecularly selected patients (pts) with HR+ HER2- stage 2/3 breast cancer (BC). | https://openalex.org/W4400522842 | DOI: 10.1200/jco.2024.42.16_suppl.601
+- 2024: Familial disclosure of mutational status and cascade testing: Relationships with cancer-predisposing genes and race/ethnicity. | https://openalex.org/W4399565494 | DOI: 10.1200/jco.2024.42.16_suppl.10605
+- 2024: Patterns of cancer screening practice and mutational status of cancer-predisposing genes among individuals at high risk for cancer. | https://openalex.org/W4399304826 | DOI: 10.1200/jco.2024.42.16_suppl.10557
+- 2024: Racial differences in familiarity, interest, and use of integrative medicine among patients with breast cancer | https://openalex.org/W4396932588 | DOI: 10.1007/s10549-024-07363-1
+- 2024: The risk of skin cancer in women who carry BRCA1 or BRCA2 mutations | https://openalex.org/W4396865901 | DOI: 10.1186/s13053-024-00277-5
+- 2024: A multi-tissue, splicing-based joint transcriptome-wide association study identifies susceptibility genes for breast cancer | https://openalex.org/W4396813542 | DOI: 10.1016/j.ajhg.2024.04.010
+- 2024: Using genome and transcriptome data from African-ancestry female participants to identify putative breast cancer susceptibility genes | https://openalex.org/W4396592905 | DOI: 10.1038/s41467-024-47650-5
+- 2024: Genome-wide association analyses of breast cancer in women of African ancestry identify new susceptibility loci and improve risk prediction | https://openalex.org/W4396855053 | DOI: 10.1038/s41588-024-01736-4
+- 2024: Differences in somatic TP53 mutation type in breast tumors by race and receptor status | https://openalex.org/W4400025785 | DOI: 10.17615/3r8m-ja65
+- 2024: Assessing the Relationship Between Neighborhood Socioeconomic Disadvantage and Telemedicine Use Among Patients With Breast Cancer and Examining Differential Provisions of Oncology Services Between Telehealth and In-Person Visits: Quantitative Study | https://openalex.org/W4395072384 | DOI: 10.2196/55438
+- 2024: A Breast Cancer Polygenic Risk Score Validation in 15,490 Brazilians using Exome Sequencing | https://openalex.org/W4395045282 | DOI: 10.1101/2024.04.21.24306089
+- 2024: The Lancet Breast Cancer Commission | https://openalex.org/W4394824835 | DOI: 10.1016/s0140-6736(24)00747-5
+- 2024: Remote Monitoring and Data Collection for Decentralized Clinical Trials | https://openalex.org/W4394748253 | DOI: 10.1001/jamanetworkopen.2024.6228
+- 2024: Abstract LB223: The molecular landscape of injury-induced mammary epithelial cell fate switching | https://openalex.org/W4393988719 | DOI: 10.1158/1538-7445.am2024-lb223
+- 2024: The VEGF-Hypoxia Signature Is Upregulated in Basal-like Breast Tumors from Women of African Ancestry and Associated with Poor Outcomes in Breast Cancer | https://openalex.org/W4393715301 | DOI: 10.1158/1078-0432.ccr-23-1526
+- 2024: Abstract 386: BACH1 is a key regulator of the tumor hypoxia response | https://openalex.org/W4393094992 | DOI: 10.1158/1538-7445.am2024-386
+- 2024: Implementing genetic testing in diabetes: Knowledge, perceptions of healthcare professionals, and barriers in a developing country | https://openalex.org/W4392864612 | DOI: 10.18332/popmed/184210
+- 2024: MRI Surveillance and Breast Cancer Mortality in Women With <i>BRCA1</i> and <i>BRCA2</i> Sequence Variations | https://openalex.org/W4394760621 | DOI: 10.1001/jamaoncol.2023.6944
+- 2024: Bilateral Oophorectomy and All-Cause Mortality in Women With <i>BRCA1</i> and <i>BRCA2</i> Sequence Variations | https://openalex.org/W4392284556 | DOI: 10.1001/jamaoncol.2023.6937
+- 2024: Abstract A069: The molecular landscape of injury-induced mammary epithelial cell fate switching | https://openalex.org/W4391445945 | DOI: 10.1158/1538-7445.advbc23-a069
+- 2024: Racial differences in familiarity, interest, and use of integrative medicine among patients with breast cancer | https://openalex.org/W4391430867 | DOI: 10.21203/rs.3.rs-3909360/v1
+- 2024: RE: Supplemental magnetic resonance imaging plus mammography compared with magnetic resonance imaging or mammography by extent of breast density | https://openalex.org/W4391294987 | DOI: 10.1093/jnci/djae010
+- 2024: Novel breast cancer susceptibility loci under linkage peaks identified in African ancestry consortia | https://openalex.org/W4391173401 | DOI: 10.1093/hmg/ddae002
+- 2024: Patient-derived tumor organoids with p53 mutations, and not wild-type p53, are sensitive to synergistic combination PARP inhibitor treatment | https://openalex.org/W4390686030 | DOI: 10.1016/j.canlet.2024.216608
+- 2024: Benign breast disease and breast cancer risk in African women: a case–control study | https://openalex.org/W4390619487 | DOI: 10.1007/s10552-023-01837-1
+- 2023: Race, Gene Expression Signatures, and Clinical Outcomes of Patients With High-Risk Early Breast Cancer | https://openalex.org/W4390339854 | DOI: 10.1001/jamanetworkopen.2023.49646
+- 2023: Validation of the RSClin risk calculator in the National Cancer Data Base | https://openalex.org/W4390233269 | DOI: 10.1002/cncr.35163
+- 2023: Assessing the Relationship Between Neighborhood Socioeconomic Disadvantage and Telemedicine Use Among Patients With Breast Cancer and Examining Differential Provisions of Oncology Services Between Telehealth and In-Person Visits: Quantitative Study (Preprint) | https://openalex.org/W4389879446 | DOI: 10.2196/preprints.55438
+- 2023: Abstract C070: BACH1 regulates the hypoxia response and metastasis in triple negative breast cancer | https://openalex.org/W4389227854 | DOI: 10.1158/1538-7755.disp23-c070
+- 2023: Risk-reducing mastectomy and breast cancer mortality in women with a BRCA1 or BRCA2 pathogenic variant: an international analysis | https://openalex.org/W4389134878 | DOI: 10.1038/s41416-023-02503-8
+- 2023: Supplementary Table 6 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099692 | DOI: 10.1158/2767-9764.24649692
+- 2023: FIGURE 1 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099667 | DOI: 10.1158/2767-9764.24649710.v1
+- 2023: Supplementary Table 7 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099658 | DOI: 10.1158/2767-9764.24649689
+- 2023: TABLE 4 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099624 | DOI: 10.1158/2767-9764.24649677.v1
+- 2023: Data from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099592 | DOI: 10.1158/2767-9764.c.6951875.v1
+- 2023: FIGURE 1 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099498 | DOI: 10.1158/2767-9764.24649710
+- 2023: Supplementary Table 6 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099430 | DOI: 10.1158/2767-9764.24649692.v1
+- 2023: TABLE 1 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389099382 | DOI: 10.1158/2767-9764.24649686
+- 2023: Data from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389098879 | DOI: 10.1158/2767-9764.c.6951875
+- 2023: Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a <i>BRCA1</i> or <i>BRCA2</i> Mutation | https://openalex.org/W4389085040 | DOI: 10.1158/2767-9764.crc-23-0223
+- 2023: Supplementary Table 7 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083377 | DOI: 10.1158/2767-9764.24649689.v1
+- 2023: TABLE 4 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083375 | DOI: 10.1158/2767-9764.24649677
+- 2023: TABLE 3 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083374 | DOI: 10.1158/2767-9764.24649680.v1
+- 2023: Supplementary Table 1 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083350 | DOI: 10.1158/2767-9764.24649707.v1
+- 2023: Supplementary Table 3 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083349 | DOI: 10.1158/2767-9764.24649701
+- 2023: Supplementary Table 4 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083302 | DOI: 10.1158/2767-9764.24649698.v1
+- 2023: Supplementary Table 2 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083291 | DOI: 10.1158/2767-9764.24649704.v1
+- 2023: Supplementary Table 3 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083266 | DOI: 10.1158/2767-9764.24649701.v1
+- 2023: Supplementary Table 2 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083241 | DOI: 10.1158/2767-9764.24649704
+- 2023: Supplementary Table 5 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083203 | DOI: 10.1158/2767-9764.24649695
+- 2023: Supplementary Table 1 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083201 | DOI: 10.1158/2767-9764.24649707
+- 2023: Supplementary Table 4 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083200 | DOI: 10.1158/2767-9764.24649698
+- 2023: Supplementary Table 5 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083199 | DOI: 10.1158/2767-9764.24649695.v1
+- 2023: TABLE 2 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083126 | DOI: 10.1158/2767-9764.24649683
+- 2023: TABLE 1 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083125 | DOI: 10.1158/2767-9764.24649686.v1
+- 2023: TABLE 2 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083091 | DOI: 10.1158/2767-9764.24649683.v1
+- 2023: TABLE 3 from Physical Activity During Adolescence and Early-adulthood and Ovarian Cancer Among Women with a &lt;i&gt;BRCA1&lt;/i&gt; or &lt;i&gt;BRCA2&lt;/i&gt; Mutation | https://openalex.org/W4389083071 | DOI: 10.1158/2767-9764.24649680
+- 2023: Comparisons of telemedicine and in-person visits: Utilization, oncology services and satisfaction among patients with breast cancer. | https://openalex.org/W4388204677 | DOI: 10.1200/op.2023.19.11_suppl.517
+- 2023: A splicing-based multi-tissue joint transcriptome-wide association study identifies susceptibility genes for breast cancer | https://openalex.org/W4387671666 | DOI: 10.1101/2023.10.15.23297045
+- 2023: Clinicopathological pattern of oestrogen receptor, progesterone receptor and human epidermal growth factor receptor-2 over-expression of epithelial ovarian carcinomas in Nigeria | https://openalex.org/W4387570324 | DOI: 10.4314/ahs.v23i3.29
+- 2023: 262P Pragmatic clinical trial assessing response to neoadjuvant taxotere and trastuzumab in Nigerian women with HER2-positive breast cancer (ARETTA): First report from the Nigerian breast cancer study group | https://openalex.org/W4387808872 | DOI: 10.1016/j.annonc.2023.09.459
+- 2023: Erratum: Feasibility of cancer genetic counselling and screening in Cameroon: perceived benefits and barriers | https://openalex.org/W4387013693 | DOI: 10.3332/ecancer.2023.1604
+- 2023: Remotely Delivered Cancer Genetic Testing in the Making Genetic Testing Accessible (MAGENTA) Trial | https://openalex.org/W4386726388 | DOI: 10.1001/jamaoncol.2023.3748
+- 2023: Racial/Ethnic Disparities in Telemedicine Utilization and Satisfaction Among Breast Cancer Patients During the COVID-19 Pandemic: A Mixed-Methods Analysis | https://openalex.org/W4386494460 | DOI: 10.1089/tmj.2023.0225
+- 2023: Breast Cancer Germline Genetic Counseling and Testing for Populations of African Heritage Globally: A Scoping Review on Research, Practice, and Bioethical Considerations | https://openalex.org/W4388521819 | DOI: 10.1200/go.23.00154
+- 2023: Benign breast disease and breast cancer risk in African women: A case-control study | https://openalex.org/W4386370219 | DOI: 10.21203/rs.3.rs-3301977/v1
+- 2023: PTPN2 copper-sensing rapidly relays copper level fluctuations into EGFR/CREB activation and associated <i>CTR1</i> transcriptional repression | https://openalex.org/W4386293278 | DOI: 10.1101/2023.08.29.555401
+- 2023: Uptake of Genetic Research Results and Patient-Reported Outcomes With Return of Results Incorporating Web-Based Predisclosure Education | https://openalex.org/W4386100445 | DOI: 10.1200/jco.22.00516
+- 2023: Polygenic risk scores for prediction of breast cancer risk in women of African ancestry: A cross-ancestry approach | https://openalex.org/W4385889356 | DOI: 10.17615/kpmk-zq11
+- 2023: Evaluating Polygenic Risk Scores for Breast Cancer in Women of African Ancestry | https://openalex.org/W4385889346 | DOI: 10.17615/7c17-8b80
+- 2023: Cross-ancestry GWAS meta-analysis identifies six breast cancer loci in African and European ancestry women | https://openalex.org/W4385889334 | DOI: 10.17615/t87t-nr08
+- 2023: Feasibility of cancer genetic counselling and screening in Cameroon: perceived benefits and barriers | https://openalex.org/W4385810817 | DOI: 10.3332/ecancer.2023.1588
+- 2023: Stress, Isolation, and Sleep Quality among Breast Cancer Survivors throughout the COVID-19 Pandemic: A Longitudinal Study in a Multi-Ethnic Cohort | https://openalex.org/W4385740261 | DOI: 10.21203/rs.3.rs-3231825/v1
+- 2023: Supplementary Table 1 from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4385460599 | DOI: 10.1158/1055-9965.23814236
+- 2023: Data from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4385446041 | DOI: 10.1158/1055-9965.c.6706644.v2
+- 2023: Supplementary Table 1 from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4385445754 | DOI: 10.1158/1055-9965.23814236.v1
+- 2023: External Evaluation of a Mammography-based Deep Learning Model for Predicting Breast Cancer in an Ethnically Diverse Population | https://openalex.org/W4385287108 | DOI: 10.1148/ryai.220299
+- 2023: Tamoxifen and the risk of breast cancer in women with a BRCA1 or BRCA2 mutation | https://openalex.org/W4383873232 | DOI: 10.1007/s10549-023-06991-3
+- 2023: Expression analysis of BACH1 with clinical variables using the US breast cancer patient cohort | https://openalex.org/W4383216664 | DOI: 10.21203/rs.3.rs-3121163/v1
+- 2023: Patient-derived tumor organoids with p53 mutations, and not wild-type p53, are sensitive to synergistic combination PARP inhibitor treatment | https://openalex.org/W4381856779 | DOI: 10.1101/2023.06.22.544406
+- 2023: Data from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4381490262 | DOI: 10.1158/1055-9965.c.6706644
+- 2023: Supplementary Table 1 from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4381490197 | DOI: 10.1158/1055-9965.23553123.v1
+- 2023: Data from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4381489919 | DOI: 10.1158/1055-9965.c.6706644.v1
+- 2023: Supplementary Table 1 from Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4381489867 | DOI: 10.1158/1055-9965.23553123
+- 2023: Compositions and methods involving methyladenosine phosphorylase in the diagnosis and treatment of proliferative disorders | https://openalex.org/W4301132624
+- 2023: Polygenic risk score calibration and association with breast cancer in diverse ancestries. | https://openalex.org/W4379341013 | DOI: 10.1200/jco.2023.41.16_suppl.10505
+- 2023: Validation of a breast cancer polygenic risk score in 15,490 Brazilians using exome sequencing. | https://openalex.org/W4379340586 | DOI: 10.1200/jco.2023.41.16_suppl.10631
+- 2023: Global adoption of remote technologies to enable patient-centric oncology clinical trials: Analysis by the Bloomberg New Economy International Cancer Coalition. | https://openalex.org/W4379285839 | DOI: 10.1200/jco.2023.41.16_suppl.1584
+- 2023: Treatment outcomes in patients with discordant recurrence score and RSClin risk predictions. | https://openalex.org/W4379284356 | DOI: 10.1200/jco.2023.41.16_suppl.574
+- 2023: A CBTH intervention for reducing stress in women with high risk in a DCE-MRI breast cancer screening study. | https://openalex.org/W4379281636 | DOI: 10.1200/jco.2023.41.16_suppl.e22507
+- 2023: Racial differences in patterns of clinical trial discussion and participation among breast cancer patients at the University of Chicago. | https://openalex.org/W4379281418 | DOI: 10.1200/jco.2023.41.16_suppl.e18540
+- 2023: Area Deprivation Index in Patients with Invasive Lobular Carcinoma of the Breast: Associations with Tumor Characteristics and Outcomes | https://openalex.org/W4378904557 | DOI: 10.1158/1055-9965.epi-22-1353
+- 2023: Molecular profiling of a real-world breast cancer cohort with genetically inferred ancestries reveals actionable tumor biology differences between European ancestry and African ancestry patient populations | https://openalex.org/W4378211361 | DOI: 10.1186/s13058-023-01627-2
+- 2023: A joint transcriptome-wide association study across multiple tissues identifies candidate breast cancer susceptibility genes | https://openalex.org/W4375948288 | DOI: 10.1016/j.ajhg.2023.04.005
+- 2023: Integration of clinical features and deep learning on pathology for the prediction of breast cancer recurrence assays and risk of recurrence | https://openalex.org/W4365516941 | DOI: 10.1038/s41523-023-00530-5
+- 2023: Adapting a Medical School Cancer Research Education Program to the Virtual Environment: a Mixed-Methods Study | https://openalex.org/W4365482941 | DOI: 10.1007/s13187-023-02291-y
+- 2023: A joint transcriptome-wide association study across multiple tissues identifies candidate susceptibility genes for breast cancer | https://openalex.org/W4364395036 | DOI: 10.5281/zenodo.7814694
+- 2023: Abstract 4807: BACH1 proline hydroxylation regulates the hypoxia response and metastasis in triple negative breast cancer | https://openalex.org/W4362544459 | DOI: 10.1158/1538-7445.am2023-4807
+- 2023: Data from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4392721726 | DOI: 10.1158/1940-6207.c.6546703.v1
+- 2023: Data from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4392698986 | DOI: 10.1158/1541-7786.c.6540504.v1
+- 2023: Data from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4392692980 | DOI: 10.1158/1940-6207.c.6546703
+- 2023: Data from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4392689015 | DOI: 10.1158/1541-7786.c.6540504
+- 2023: Data from Inhibition of Copper Transport Induces Apoptosis in Triple-Negative Breast Cancer Cells and Suppresses Tumor Angiogenesis | https://openalex.org/W4392688182 | DOI: 10.1158/1535-7163.c.6538056
+- 2023: Supplementary Figure Legends from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362617167 | DOI: 10.1158/1940-6207.22532350
+- 2023: Fig S2 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362617108 | DOI: 10.1158/1940-6207.22532368
+- 2023: Fig S6 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362617098 | DOI: 10.1158/1940-6207.22532356
+- 2023: Fig S1 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362617088 | DOI: 10.1158/1940-6207.22532371
+- 2023: Fig S5 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362617080 | DOI: 10.1158/1940-6207.22532359
+- 2023: Fig S3 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362617077 | DOI: 10.1158/1940-6207.22532365
+- 2023: Fig S4 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362617069 | DOI: 10.1158/1940-6207.22532362
+- 2023: Fig S7 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362616950 | DOI: 10.1158/1940-6207.22532353
+- 2023: Supplementary Figures 1-5 and Supplmentary Materials and Methods. from Inhibition of Copper Transport Induces Apoptosis in Triple-Negative Breast Cancer Cells and Suppresses Tumor Angiogenesis | https://openalex.org/W4362611831 | DOI: 10.1158/1535-7163.22505424
+- 2023: Table S1 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362595139 | DOI: 10.1158/1541-7786.22513374
+- 2023: Figure S3 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362594521 | DOI: 10.1158/1541-7786.22513377
+- 2023: Figure S1 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362594424 | DOI: 10.1158/1541-7786.22513383
+- 2023: Table S3 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362542306 | DOI: 10.1158/1541-7786.22513368
+- 2023: Table S4 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362542292 | DOI: 10.1158/1541-7786.22513365
+- 2023: Table S2 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362542290 | DOI: 10.1158/1541-7786.22513371
+- 2023: Figure S2 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362542215 | DOI: 10.1158/1541-7786.22513380
+- 2023: Data from Inhibition of Copper Transport Induces Apoptosis in Triple-Negative Breast Cancer Cells and Suppresses Tumor Angiogenesis | https://openalex.org/W4362542053 | DOI: 10.1158/1535-7163.c.6538056.v1
+- 2023: Fig S5 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362539355 | DOI: 10.1158/1940-6207.22532359.v1
+- 2023: Fig S2 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362539208 | DOI: 10.1158/1940-6207.22532368.v1
+- 2023: Fig S7 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362539206 | DOI: 10.1158/1940-6207.22532353.v1
+- 2023: Fig S1 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362539204 | DOI: 10.1158/1940-6207.22532371.v1
+- 2023: Fig S6 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362538734 | DOI: 10.1158/1940-6207.22532356.v1
+- 2023: Fig S4 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362538728 | DOI: 10.1158/1940-6207.22532362.v1
+- 2023: Supplementary Figure Legends from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362538598 | DOI: 10.1158/1940-6207.22532350.v1
+- 2023: Fig S3 from Loss of BRCA1 in the Cells of Origin of Ovarian Cancer Induces Glycolysis: A Window of Opportunity for Ovarian Cancer Chemoprevention | https://openalex.org/W4362538577 | DOI: 10.1158/1940-6207.22532365.v1
+- 2023: Supplementary Figures 1-5 and Supplmentary Materials and Methods. from Inhibition of Copper Transport Induces Apoptosis in Triple-Negative Breast Cancer Cells and Suppresses Tumor Angiogenesis | https://openalex.org/W4362534682 | DOI: 10.1158/1535-7163.22505424.v1
+- 2023: Table S1 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362486806 | DOI: 10.1158/1541-7786.22513374.v1
+- 2023: Table S2 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362486756 | DOI: 10.1158/1541-7786.22513371.v1
+- 2023: Figure S1 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362486744 | DOI: 10.1158/1541-7786.22513383.v1
+- 2023: Figure S3 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362486731 | DOI: 10.1158/1541-7786.22513377.v1
+- 2023: Table S3 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362486728 | DOI: 10.1158/1541-7786.22513368.v1
+- 2023: Figure S2 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362486705 | DOI: 10.1158/1541-7786.22513380.v1
+- 2023: Table S4 from Population-dependent Intron Retention and DNA Methylation in Breast Cancer | https://openalex.org/W4362486610 | DOI: 10.1158/1541-7786.22513365.v1
+- 2023: Data from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4392723885 | DOI: 10.1158/0008-5472.c.6511948
+- 2023: Data from The &lt;i&gt;BRCA1&lt;/i&gt; Pseudogene Negatively Regulates Antitumor Responses through Inhibition of Innate Immune Defense Mechanisms | https://openalex.org/W4392723726 | DOI: 10.1158/0008-5472.c.6513133
+- 2023: Supplementary Table S3 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362433879 | DOI: 10.1158/1055-9965.22436265
+- 2023: Supplementary Table S6 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362431965 | DOI: 10.1158/1055-9965.22436256.v1
+- 2023: Supplementary Table S4 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362431928 | DOI: 10.1158/1055-9965.22436262.v1
+- 2023: Supplementary Table S2 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362431321 | DOI: 10.1158/1055-9965.22436268.v1
+- 2023: Supplementary Figure S2 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362431164 | DOI: 10.1158/1055-9965.22436274.v1
+- 2023: Related Article from Hidden Dangers: A Cryptic Exon Disrupts &lt;i&gt;BRCA2&lt;/i&gt; mRNA | https://openalex.org/W4362428519 | DOI: 10.1158/1078-0432.22446254.v1
+- 2023: Supplementary Fig Leg from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362425382 | DOI: 10.1158/1055-9965.22436280.v1
+- 2023: Supplementary Table S3 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362425266 | DOI: 10.1158/1055-9965.22436265.v1
+- 2023: Supplementary Table S1 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362425197 | DOI: 10.1158/1055-9965.22436271.v1
+- 2023: Supplementary Figure S1 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362425090 | DOI: 10.1158/1055-9965.22436277.v1
+- 2023: Supplementary Table S5 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362425089 | DOI: 10.1158/1055-9965.22436259.v1
+- 2023: Supplementary Data from The &lt;i&gt;BRCA1&lt;/i&gt; Pseudogene Negatively Regulates Antitumor Responses through Inhibition of Innate Immune Defense Mechanisms | https://openalex.org/W4362424195 | DOI: 10.1158/0008-5472.22428772.v1
+- 2023: Supplementary Data 1 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4362423470 | DOI: 10.1158/0008-5472.22425133.v1
+- 2023: Supplementary Data 2 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4362423406 | DOI: 10.1158/0008-5472.22425130.v1
+- 2023: Supplementary Data 3 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4362423357 | DOI: 10.1158/0008-5472.22425127.v1
+- 2023: Supplementary Data 4 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4362423345 | DOI: 10.1158/0008-5472.22425124.v1
+- 2023: Related Article from Hidden Dangers: A Cryptic Exon Disrupts &lt;i&gt;BRCA2&lt;/i&gt; mRNA | https://openalex.org/W4362394117 | DOI: 10.1158/1078-0432.22446254
+- 2023: Supplementary Table 1 from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4362393104 | DOI: 10.1158/1078-0432.22443474
+- 2023: Supplementary Figure Legend 1 from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4362393056 | DOI: 10.1158/1078-0432.22443477
+- 2023: Supplementary Figure 1 from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4362393030 | DOI: 10.1158/1078-0432.22443480
+- 2023: Supplementary Table S2 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362391747 | DOI: 10.1158/1055-9965.22436268
+- 2023: Supplementary Table S5 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362391725 | DOI: 10.1158/1055-9965.22436259
+- 2023: Supplementary Fig Leg from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362391605 | DOI: 10.1158/1055-9965.22436280
+- 2023: Supplementary Table S4 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362391315 | DOI: 10.1158/1055-9965.22436262
+- 2023: Supplementary Table S1 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362391172 | DOI: 10.1158/1055-9965.22436271
+- 2023: Supplementary Figure S1 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362391170 | DOI: 10.1158/1055-9965.22436277
+- 2023: Supplementary Table S6 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362390330 | DOI: 10.1158/1055-9965.22436256
+- 2023: Supplementary Figure S2 from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4362390290 | DOI: 10.1158/1055-9965.22436274
+- 2023: Table S3 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4362014935 | DOI: 10.1158/0008-5472.22419659.v1
+- 2023: Table S2 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4362014931 | DOI: 10.1158/0008-5472.22419662.v1
+- 2023: Supplementary Data from The &lt;i&gt;BRCA1&lt;/i&gt; Pseudogene Negatively Regulates Antitumor Responses through Inhibition of Innate Immune Defense Mechanisms | https://openalex.org/W4361972734 | DOI: 10.1158/0008-5472.22428772
+- 2023: Table S8 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361972080 | DOI: 10.1158/0008-5472.22419635
+- 2023: Data from Hidden Dangers: A Cryptic Exon Disrupts &lt;i&gt;BRCA2&lt;/i&gt; mRNA | https://openalex.org/W4361960858 | DOI: 10.1158/1078-0432.c.6520700
+- 2023: Data from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361958992 | DOI: 10.1158/1055-9965.c.6516276.v1
+- 2023: Data from Hidden Dangers: A Cryptic Exon Disrupts &lt;i&gt;BRCA2&lt;/i&gt; mRNA | https://openalex.org/W4361950451 | DOI: 10.1158/1078-0432.c.6520700.v1
+- 2023: Data from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4361949637 | DOI: 10.1158/1078-0432.c.6519828.v1
+- 2023: Data from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4361947951 | DOI: 10.1158/1055-9965.c.6515301.v1
+- 2023: Data from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4361944171 | DOI: 10.1158/1078-0432.c.6519828
+- 2023: Data from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361942534 | DOI: 10.1158/1055-9965.c.6516276
+- 2023: Data from Characterizing Genetic Susceptibility to Breast Cancer in Women of African Ancestry | https://openalex.org/W4361942445 | DOI: 10.1158/1055-9965.c.6515301
+- 2023: Supplementary Figure Legend 1 from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4361902366 | DOI: 10.1158/1078-0432.22443477.v1
+- 2023: Supplementary Table 1 from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4361902364 | DOI: 10.1158/1078-0432.22443474.v1
+- 2023: Supplementary Figure 1 from Molecular Analysis of Colorectal Tumors within a Diverse Patient Cohort at a Single Institution | https://openalex.org/W4361902340 | DOI: 10.1158/1078-0432.22443480.v1
+- 2023: Supplementary Table 3 from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361901344 | DOI: 10.1158/1055-9965.22438230.v1
+- 2023: Supplementary Table 1 from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361901339 | DOI: 10.1158/1055-9965.22438239.v1
+- 2023: Supplementary Table 2 from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361900817 | DOI: 10.1158/1055-9965.22438236.v1
+- 2023: Table S5 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361898370 | DOI: 10.1158/0008-5472.22419647.v1
+- 2023: Table S7 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361898361 | DOI: 10.1158/0008-5472.22419638.v1
+- 2023: Table S8 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361898258 | DOI: 10.1158/0008-5472.22419635.v1
+- 2023: Table S6 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361898242 | DOI: 10.1158/0008-5472.22419644.v1
+- 2023: Supplementary Table 2 from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361879726 | DOI: 10.1158/1055-9965.22438236
+- 2023: Supplementary Table 3 from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361879721 | DOI: 10.1158/1055-9965.22438230
+- 2023: Supplementary Table 1 from Candidate Genetic Modifiers for Breast and Ovarian Cancer Risk in &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361879587 | DOI: 10.1158/1055-9965.22438239
+- 2023: Supplementary Data 2 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4361877584 | DOI: 10.1158/0008-5472.22425130
+- 2023: Supplementary Data 1 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4361877579 | DOI: 10.1158/0008-5472.22425133
+- 2023: Supplementary Data 3 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4361877567 | DOI: 10.1158/0008-5472.22425127
+- 2023: Supplementary Data 4 from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4361877410 | DOI: 10.1158/0008-5472.22425124
+- 2023: Table S6 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361876524 | DOI: 10.1158/0008-5472.22419644
+- 2023: Table S7 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361876503 | DOI: 10.1158/0008-5472.22419638
+- 2023: Data from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361863691 | DOI: 10.1158/1078-0432.c.6528339.v1
+- 2023: Table S5 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361847688 | DOI: 10.1158/0008-5472.22419647
+- 2023: Table S1 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361847665 | DOI: 10.1158/0008-5472.22419665.v1
+- 2023: Table S3 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361847661 | DOI: 10.1158/0008-5472.22419659
+- 2023: Online Supplementary Materials from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361847502 | DOI: 10.1158/0008-5472.22419671.v1
+- 2023: Table S1 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361834243 | DOI: 10.1158/0008-5472.22419665
+- 2023: Online Supplementary Materials from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361834222 | DOI: 10.1158/0008-5472.22419671
+- 2023: Table S2 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361834096 | DOI: 10.1158/0008-5472.22419662
+- 2023: Table S4 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361834050 | DOI: 10.1158/0008-5472.22419653.v1
+- 2023: Data from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361833941 | DOI: 10.1158/0008-5472.c.6510431
+- 2023: Table S4 from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361833917 | DOI: 10.1158/0008-5472.22419653
+- 2023: Data from A Transcriptome-Wide Association Study Among 97,898 Women to Identify Candidate Susceptibility Genes for Epithelial Ovarian Cancer Risk | https://openalex.org/W4361833849 | DOI: 10.1158/0008-5472.c.6510431.v1
+- 2023: Data from The &lt;i&gt;BRCA1&lt;/i&gt; Pseudogene Negatively Regulates Antitumor Responses through Inhibition of Innate Immune Defense Mechanisms | https://openalex.org/W4361827129 | DOI: 10.1158/0008-5472.c.6513133.v1
+- 2023: Data from Gain-of-Function Mutant p53 R273H Interacts with Replicating DNA and PARP1 in Breast Cancer | https://openalex.org/W4361824901 | DOI: 10.1158/0008-5472.c.6511948.v1
+- 2023: Data from Genetic Variation in &lt;i&gt;IGF2&lt;/i&gt; and &lt;i&gt;HTRA1&lt;/i&gt; and Breast Cancer Risk among &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Carriers | https://openalex.org/W4361821295 | DOI: 10.1158/1055-9965.c.6514932.v1
+- 2023: Supplementary Table 1 from Genetic Variation in &lt;i&gt;IGF2&lt;/i&gt; and &lt;i&gt;HTRA1&lt;/i&gt; and Breast Cancer Risk among &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Carriers | https://openalex.org/W4361821294 | DOI: 10.1158/1055-9965.22435452.v1
+- 2023: Supplementary Table 1 from Genetic Variation in &lt;i&gt;IGF2&lt;/i&gt; and &lt;i&gt;HTRA1&lt;/i&gt; and Breast Cancer Risk among &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Carriers | https://openalex.org/W4361821292 | DOI: 10.1158/1055-9965.22435452
+- 2023: Data from Genetic Variation in &lt;i&gt;IGF2&lt;/i&gt; and &lt;i&gt;HTRA1&lt;/i&gt; and Breast Cancer Risk among &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Carriers | https://openalex.org/W4361821291 | DOI: 10.1158/1055-9965.c.6514932
+- 2023: Table S1, Table S2, Table S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816926 | DOI: 10.1158/1078-0432.22472829
+- 2023: Figure S1, Figure S2, Figure S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816884 | DOI: 10.1158/1078-0432.22472832
+- 2023: Figure S1, Figure S2, Figure S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816875 | DOI: 10.1158/1078-0432.22472832.v1
+- 2023: Table S1, Table S2, Table S3; source file format .docx from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816852 | DOI: 10.1158/1078-0432.22472829.v1
+- 2023: Data from Intensive Surveillance with Biannual Dynamic Contrast-Enhanced Magnetic Resonance Imaging Downstages Breast Cancer in &lt;i&gt;BRCA1&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361816841 | DOI: 10.1158/1078-0432.c.6528339
+- 2023: Data from Common Breast Cancer Susceptibility Alleles and the Risk of Breast Cancer for &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers: Implications for Risk Prediction | https://openalex.org/W4392724311 | DOI: 10.1158/0008-5472.c.6501077.v1
+- 2023: Data from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4392687511 | DOI: 10.1158/0008-5472.c.6506888.v1
+- 2023: Data from Common Breast Cancer Susceptibility Alleles and the Risk of Breast Cancer for &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers: Implications for Risk Prediction | https://openalex.org/W4392684373 | DOI: 10.1158/0008-5472.c.6501077
+- 2023: Data from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4392679828 | DOI: 10.1158/0008-5472.c.6506888
+- 2023: Data from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4392678714 | DOI: 10.1158/0008-5472.c.6499160
+- 2023: Supplementary Table 2: Revised 7-14-09 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4362418373 | DOI: 10.1158/0008-5472.22379165.v1
+- 2023: Supplementary Table 3 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4362417437 | DOI: 10.1158/0008-5472.22379162.v1
+- 2023: Supplementary Table 2 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4362417065 | DOI: 10.1158/0008-5472.22379168.v1
+- 2023: Supplementary Table 1 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4362416625 | DOI: 10.1158/0008-5472.22379171.v1
+- 2023: Supplementary Table 4 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4362416195 | DOI: 10.1158/0008-5472.22379159.v1
+- 2023: Suppl Table S3 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361973863 | DOI: 10.1158/0008-5472.22405625
+- 2023: Supplementary Table S2 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361973763 | DOI: 10.1158/0008-5472.22405607
+- 2023: Suppl Table S5 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361973416 | DOI: 10.1158/0008-5472.22405619
+- 2023: Suppl Table S4 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361973091 | DOI: 10.1158/0008-5472.22405622
+- 2023: Supplementary Table S1 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361875309 | DOI: 10.1158/0008-5472.22405610
+- 2023: Supplementary Figures S1-S6 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361874798 | DOI: 10.1158/0008-5472.22405613
+- 2023: Suppl Legends and Methods from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361874676 | DOI: 10.1158/0008-5472.22405628
+- 2023: Suppl Table S6 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361874481 | DOI: 10.1158/0008-5472.22405616
+- 2023: Supplementary Methods, Tables 1-3, Figure 1 from Common Breast Cancer Susceptibility Alleles and the Risk of Breast Cancer for &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers: Implications for Risk Prediction | https://openalex.org/W4361870860 | DOI: 10.1158/0008-5472.22385012
+- 2023: Supplementary Table 4 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361870241 | DOI: 10.1158/0008-5472.22379159
+- 2023: Supplementary Table 2 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361870133 | DOI: 10.1158/0008-5472.22379168
+- 2023: Supplementary Table 1 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361870024 | DOI: 10.1158/0008-5472.22379171
+- 2023: Supplementary Table 2: Revised 7-14-09 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361869985 | DOI: 10.1158/0008-5472.22379165
+- 2023: Supplementary Table 3 from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361869858 | DOI: 10.1158/0008-5472.22379162
+- 2023: Supplementary Table S1 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848848 | DOI: 10.1158/0008-5472.22405610.v1
+- 2023: Supplementary Table S2 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848838 | DOI: 10.1158/0008-5472.22405607.v1
+- 2023: Supplementary Figures S1-S6 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848798 | DOI: 10.1158/0008-5472.22405613.v1
+- 2023: Suppl Table S6 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848791 | DOI: 10.1158/0008-5472.22405616.v1
+- 2023: Suppl Table S4 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848733 | DOI: 10.1158/0008-5472.22405622.v1
+- 2023: Suppl Table S3 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848732 | DOI: 10.1158/0008-5472.22405625.v1
+- 2023: Suppl Table S5 from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848730 | DOI: 10.1158/0008-5472.22405619.v1
+- 2023: Suppl Legends and Methods from Differentiation and Loss of Malignant Character of Spontaneous Pulmonary Metastases in Patient-Derived Breast Cancer Models | https://openalex.org/W4361848726 | DOI: 10.1158/0008-5472.22405628.v1
+- 2023: Supplementary Methods, Tables 1-3, Figure 1 from Common Breast Cancer Susceptibility Alleles and the Risk of Breast Cancer for &lt;i&gt;BRCA1&lt;/i&gt; and &lt;i&gt;BRCA2&lt;/i&gt; Mutation Carriers: Implications for Risk Prediction | https://openalex.org/W4361843096 | DOI: 10.1158/0008-5472.22385012.v1
+- 2023: Data from Modification of Ovarian Cancer Risk by &lt;i&gt;BRCA1/2&lt;/i&gt;-Interacting Genes in a Multicenter Cohort of &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361822139 | DOI: 10.1158/0008-5472.c.6499160.v1
+- 2023: Racial Disparities in Pathological Complete Response Among Patients Receiving Neoadjuvant Chemotherapy for Early-Stage Breast Cancer | https://openalex.org/W4361278979 | DOI: 10.1001/jamanetworkopen.2023.3329
+- 2023: Response to Treatment, Racial and Ethnic Disparity, and Survival in Patients With Breast Cancer Undergoing Neoadjuvant Chemotherapy in the US | https://openalex.org/W4361270177 | DOI: 10.1001/jamanetworkopen.2023.5834
+- 2023: Supplementary Figure 1 from &lt;i&gt;RASSF1A&lt;/i&gt; Polymorphism A133S Is Associated with Early Onset Breast Cancer in &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361264128 | DOI: 10.1158/0008-5472.22370679.v1
+- 2023: Data from &lt;i&gt;RASSF1A&lt;/i&gt; Polymorphism A133S Is Associated with Early Onset Breast Cancer in &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361247054 | DOI: 10.1158/0008-5472.c.6496488.v1
+- 2023: Data from &lt;i&gt;RASSF1A&lt;/i&gt; Polymorphism A133S Is Associated with Early Onset Breast Cancer in &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361247048 | DOI: 10.1158/0008-5472.c.6496488
+- 2023: Supplementary Figure 1 from &lt;i&gt;RASSF1A&lt;/i&gt; Polymorphism A133S Is Associated with Early Onset Breast Cancer in &lt;i&gt;BRCA1/2&lt;/i&gt; Mutation Carriers | https://openalex.org/W4361246993 | DOI: 10.1158/0008-5472.22370679
+- 2023: Abstract P3-09-01: Characterization of residual disease after neoadjuvant selective estrogen receptor degrader (SERD) therapy using tumor organoids in the I-SPY Endocrine Optimization Protocol (EOP) | https://openalex.org/W4322775010 | DOI: 10.1158/1538-7445.sabcs22-p3-09-01
+- 2023: Abstract P6-05-19: Racial Disparities in the Quality of Life and Vaccination of Breast Cancer Survivors during COVID-19: A Longitudinal Study | https://openalex.org/W4322774463 | DOI: 10.1158/1538-7445.sabcs22-p6-05-19
+- 2023: Abstract P2-11-08: Multimodal Prediction of Breast Cancer Recurrence Assays and Risk of Recurrence | https://openalex.org/W4322774310 | DOI: 10.1158/1538-7445.sabcs22-p2-11-08
+- 2023: Abstract HER2-11: HER2-11 Epidemiology and Prognosis of HER2-Low Breast Cancer (BC) in the National Cancer Data Base (NCDB) | https://openalex.org/W4322774110 | DOI: 10.1158/1538-7445.sabcs22-her2-11
+- 2023: Abstract OT3-15-03: The ARETTA Trial Experience: Radiotherapy Quality Assurance in an International Breast Cancer Trial | https://openalex.org/W4322774026 | DOI: 10.1158/1538-7445.sabcs22-ot3-15-03
+- 2023: Abstract OT2-21-01: Assessing Response to neoadjuvant Taxotere and TrAstuzumab in Nigerian women with HER2-positive breast cancer (ARETTA) | https://openalex.org/W4322772022 | DOI: 10.1158/1538-7445.sabcs22-ot2-21-01
+- 2023: Abstract P5-03-13: Circular RNAs express heterogeneously across different breast cancer subtypes and correlate with invasive disease-free survival | https://openalex.org/W4322769601 | DOI: 10.1158/1538-7445.sabcs22-p5-03-13
+- 2023: Abstract P6-08-09: Self-identified race and Area Deprivation Index in patients with invasive lobular carcinoma of the breast: associations with tumor characteristics and event free survival | https://openalex.org/W4322769475 | DOI: 10.1158/1538-7445.sabcs22-p6-08-09
+- 2023: Abstract PD14-05: PD14-05 Prospective longitudinal validation of a breast cancer risk prediction model in a cohort of 130,058 women | https://openalex.org/W4322769312 | DOI: 10.1158/1538-7445.sabcs22-pd14-05
+- 2023: Clinicopathologic Characteristics and Prognosis of ERBB2-Low Breast Cancer Among Patients in the National Cancer Database | https://openalex.org/W4321612614 | DOI: 10.1001/jamaoncol.2022.7476
+- 2023: A metabolome-wide case-control study of african american breast cancer patients | https://openalex.org/W4321597321 | DOI: 10.1186/s12885-023-10656-1
+- 2023: The optimization of postoperative radiotherapy in de novo stage IV breast cancer: evidence from real-world data to personalize treatment decisions | https://openalex.org/W4321329750 | DOI: 10.1038/s41598-023-29888-z
+
+### Deduplicated Institutional-Domain Conflict List
+3m.com; agakhanhospitals.org; aku.edu; allianceforclinicaltrialsinoncology.org; amgen.ca; amgen.com; ao-pisa.toscana.it; arizona.edu; asiasociety.org; astrazeneca.com; bayer.de; bayer.us; bcm.edu; bcrfcure.org; beaumont.org; bidmc.org; bjcancer.org; bloomberg.com; bu.edu; buffalo.edu; cam.ac.uk; campack-cm.com; cancer.dk; cancer.gov; cancerclinic.com; cancergenetics.com; cancerresearch.org; case.edu; ccc.ac.at; cdc.gov; centerforclinicalresearch.com; cepon.org.br; chennaicorporation.gov.in; chicago.gov; cincinnatichildrens.org; cing.ac.cy; cinj.org; cityofhope.org; clevelandclinic.org; cmu.edu.tw; cmzh.com.mx; cnuh.com; cnuhh.com; columbia.edu; cornell.edu; crab.org; createivf.com; creighton.edu; cuanschutz.edu; cuh.org.uk; cuny.edu; dal.ca; dana-farber.org; dna-diagnostic.com; ed.ac.uk; emory.edu; enherts-tr.nhs.uk; fchampalimaud.org; fda.gov; ficmac.org; foxchase.org; fredhutch.org; gdghospital.org.cn; geminicomputersinc.com; genome.gov; georgetown.edu; gmu.edu; gustaveroussy.fr; gwhospital.com; gwu.edu; gzcancer.com; gzhmc.edu.cn; hadassah-med.com; hanyang.ac.kr; harvard.edu; hereditarycancer.net; hhmi.org; hhsc.ca; hopitalcentral.cm; hrs.com.cn; hsc.mb.ca; hsgerardo.org; ias.edu; ic.edu; icesp.org.br; icr.ac.uk; idibaps.org; idor.org; iei.us; illinois.edu; illinois.gov; indianacancer.org; ingalls.org; inova.org; ioveneto.it; islandhospital.org; iu.edu; iuhealth.org; iupui.edu; janssen.com; jhu.edu; jnj.com; jnu.ac.kr; kaiserpermanente.org; kathhsp.org; kcl.ac.uk; keckmedicine.org; kettering.edu; ki.se; knust.edu.gh; komen.org; kreftforeningen.no; ku.dk; kucancercenter.org; kumc.edu; lander.ac.il; lasu.edu.ng; lasuth.org.ng; lifebridgehealth.org; ljbi.org; loyolamedicine.org; lunenfeld.ca; luthnigeria.org; manchester.ac.uk; mayoclinic.org; mcgill.ca; mckinsey.com; mcmaster.ca; mcw.edu; mdanderson.org; medstargeorgetown.org; meduniwien.ac.at; memorialcare.org; mendelics.com; mendelu.cz; merck.com; miami.edu; milkeninstitute.org; mmc.edu; mnovarian.org; moe.gov.et; moffitt.org; mountsinai.on.ca; mskcc.org; msm.edu; mssm.edu; mulago.or.ug; myriad.com; nagoya-u.ac.jp; nationalcancercenter.org; nauth.org.ng; ncc.re.kr; ncri.org.uk; ncssm.edu; nguc.edu.et; nih.gov; nm.org; nnuh.nhs.uk; northshore.org; northwestern.edu; novartis.com; nygh.on.ca; nyhq.org; nyp.org; nyu.edu; nyulangone.org; oakland.edu; oauife.edu.ng; oouagoiwoye.edu.ng; oouth.com; oslo-universitetssykehus.no; osu.edu; ouh.nhs.uk; patients-association.org.uk; pennmedicine.org; petermac.org; phs.org; pku.edu.cn; pref.aichi.jp; providence.edu; providence.org; publichealthontario.ca; pucrs.br; pum.edu.pl; qimrberghofer.edu.au; quantumleaphealth.org; qub.ac.uk; rbc.gov.rw; rdehospital.nhs.uk; realpages.com; relaytx.com; renji.com; rigshospitalet.dk; riken.jp; rmff.org; roswellpark.org; rutgers.edu; saiu.ac.ug; salk.edu; salute.gov.it; sanfordhealth.org; santpau.cat; saskatoonhealthregion.ca; sbs.org; scdc.sh.cn; shsci.org; sinica.edu.tw; sjtu.edu.cn; snu.ac.kr; snuh.org; stanford.edu; stanfordhealthcare.org; stonybrook.edu; stonybrookmedicine.edu; sunnybrook.ca; sunpharma.com; swedish.org; tec.mx; temple.edu; tempus.com; texasoncology.com; tohoku.ac.jp; trcc.org; triangle-inc.org; tufts.edu; u-tokyo.ac.jp; u-toyama.ac.jp; uab.edu; ub.edu; ucdavis.edu; ucdenver.edu; uch-ibadan.org.ng; uchicago.edu; uchicagomedicine.org; uci.edu; ucl.ac.uk; ucla.edu; ucsd.edu; ucsf.edu; ucsf.edu.ar; ufl.edu; uhealthsystem.com; uhn.ca; ui.edu.ng; uic.edu; uiowa.edu; umiamihealth.org; umich.edu; umn.edu; unaab.edu.ng; unc.edu; unclineberger.org; uni-bonn.de; unilag.edu.ng; unimelb.edu.au; unimib.it; uninet.cm; univ-douala.cm; universityofcalifornia.edu; uofmmedicalcenter.org; upenn.edu; ur.ac.rw; usask.ca; usc.edu; usoncology.com; usp.br; utah.edu; uthsc.edu; uthscsa.edu; utk.edu; utoronto.ca; utsouthwestern.edu; uwi.edu; va.gov; vanderbilt.edu; vanderbilthealth.com; vicc.org; virginia.edu; washington.edu; wfu.edu; winnmed.org; wisc.edu; wits.ac.za; womenscollegehospital.ca; yale.edu; yalecancercenter.org; zjtcm.net
+
+## Aggregated Deduplicated Domain List (All Authors)
+3m.com; 6thhosp.com; adas.uk; advimg.com; af.mil; agakhanhospitals.org; agh.edu.pl; agnostiqlabs.com; agu.org; aku.edu; alexslemonade.org; allianceforclinicaltrialsinoncology.org; almazovcentre.ru; amd.com; amgen.ca; amgen.com; anl.gov; ansys.com; ao-pisa.toscana.it; arizona.edu; asiasociety.org; astrazeneca.com; asu.edu; atlanticgeneral.org; au.dk; bam.de; baxter.de; bayer.de; bayer.us; bcm.edu; bcrfcure.org; beaumont.org; berkeley.edu; bidmc.org; biocom.org; bjcancer.org; bloomberg.com; blueplanet.no; bnl.gov; bronxdefenders.org; bsc.es; bu.edu; buffalo.edu; caltech.edu; cam.ac.uk; cambridgequantum.com; campack-cm.com; cancer.dk; cancer.gov; cancerclinic.com; cancergenetics.com; cancerresearch.org; canterbury.ac.nz; cardiff.ac.uk; case.edu; ccc.ac.at; cdac.in; cdc.gov; ceh.ac.uk; cens.de; centerforclinicalresearch.com; cepon.org.br; certh.gr; cft.edu.pl; charlotte.edu; chennaicorporation.gov.in; chicago.gov; chulabhornhospital.com; cincinnatichildrens.org; cing.ac.cy; cinj.org; cinvestav.mx; cityofhope.org; clevelandclinic.org; cmu.edu; cmu.edu.tw; cmzh.com.mx; cnam.fr; cnrs.fr; cnuh.com; cnuhh.com; columbia.edu; cornell.edu; crab.org; createivf.com; creighton.edu; crs4.it; cscs.ch; csic.es; cuanschutz.edu; cuh.org.uk; cuhk.edu.cn; cuny.edu; dal.ca; dana-farber.org; depaul.edu; dkfz.de; dna-diagnostic.com; doe.gov; dtu.dk; duke.edu; ecnu.edu.cn; ed.ac.uk; ejust.edu.eg; emory.edu; enherts-tr.nhs.uk; eoneo.co.kr; epfl.ch; espol.edu.ec; ethz.ch; fandm.edu; fau.de; fchampalimaud.org; fda.gov; fernuni-hagen.de; ficmac.org; fnal.gov; fordham.edu; foxchase.org; fraunhofer.de; fredhutch.org; fsu.edu; futureearth.org; fz-juelich.de; gatech.edu; gdghospital.org.cn; ge.com; geminicomputersinc.com; genome.gov; georgetown.edu; gla.ac.uk; gmu.edu; gov.ru; gsu.edu; gszy.edu.cn; gustaveroussy.fr; gwhospital.com; gwu.edu; gzcancer.com; gzhmc.edu.cn; hadassah-med.com; hanyang.ac.kr; harvard.edu; hawaii.edu; hbeu.cn; hec.ca; helmholtz-berlin.de; helmholtz-muenchen.de; helsinki.fi; hereditarycancer.net; hereon.de; hhmi.org; hhsc.ca; hi-jena.de; himax.com.tw; hingehealth.com; hip.fi; hopitalcentral.cm; hp.com; hpe.com; hrbu.edu.cn; hrs.com.cn; hsc.mb.ca; hsgerardo.org; hu-berlin.de; huashan.org.cn; huat.edu.cn; humboldt.edu; hw.ac.uk; ias.edu; ic.edu; icesp.org.br; icr.ac.uk; idibaps.org; idiv.de; idor.org; iei.us; iit.edu; illinois.edu; illinois.gov; indianacancer.org; ingalls.org; inova.org; inria.fr; insa-rennes.fr; intel.co.uk; intel.com; ioveneto.it; irisa.fr; islandhospital.org; ista.ac.at; iu.edu; iuc2.edu.jm; iuhealth.org; iupui.edu; janssen.com; jhu.edu; jnj.com; jnu.ac.kr; kaiserpermanente.org; kathhsp.org; kaust.edu.sa; kcl.ac.uk; keckmedicine.org; kettering.edu; ki.se; knoxvillecollege.edu; knust.edu.gh; komen.org; kreftforeningen.no; kth.se; ku.dk; ku.edu.tr; kucancercenter.org; kuleuven.be; kumc.edu; landcareresearch.co.nz; lander.ac.il; lanl.gov; lasu.edu.ng; lasuth.org.ng; lbl.gov; lifebridgehealth.org; liu.edu; liv.ac.uk; ljbi.org; llnl.gov; llnsllc.com; lmu.de; lmu.edu; loyolamedicine.org; lrz.de; lsbu.ac.uk; lu.se; luc.edu; lunenfeld.ca; luthnigeria.org; mak.ac.ug; manchester.ac.uk; mayoclinic.org; mcgill.ca; mckinsey.com; mcmaster.ca; mcw.edu; mdanderson.org; mdu.se; medstargeorgetown.org; meduniwien.ac.at; memorialcare.org; mendelics.com; mendelu.cz; merck.com; miami.edu; michaeljfox.org; microsoft.com; milkeninstitute.org; mines.edu; missouri.edu; mit.edu; mmc.edu; mnovarian.org; moe.gov.et; moffitt.org; monash.edu; montana.edu; montclair.edu; mountsinai.on.ca; mpie.de; mskcc.org; msm.edu; mssm.edu; mulago.or.ug; museum.ie; myriad.com; nagoya-u.ac.jp; nasa.gov; nasb.gov.by; nationalcancercenter.org; nauth.org.ng; navy.mil; ncc.re.kr; ncri.org.uk; ncssm.edu; ncsu.edu; nd.edu; ndu.edu.ph; nersc.gov; nesi.org.nz; newcastle.edu.au; newhaven.edu; nguc.edu.et; nih.gov; nims.go.jp; nist.gov; niu.edu; niwa.co.nz; njit.edu; nm.org; nnuh.nhs.uk; noaa.gov; northeastern.edu; northshore.org; northwestern.edu; novartis.com; nrel.gov; nvidia.co.uk; nvidia.com; nygh.on.ca; nyhq.org; nyp.org; nyu.edu; nyulangone.org; oakland.edu; oauife.edu.ng; oouagoiwoye.edu.ng; oouth.com; ornl.gov; oslo-universitetssykehus.no; osu.edu; ouh.nhs.uk; ox.ac.uk; pacb.com; paloaltou.edu; patients-association.org.uk; pawsey.org.au; pcf.org; pennmedicine.org; petermac.org; philips.co.uk; philips.nl; phs.org; pitt.edu; pku.edu.cn; pnnl.gov; polito.it; polyu.edu.hk; pppl.gov; pref.aichi.jp; princeton.edu; providence.edu; providence.org; psi.ch; psicorp.com; psl.eu; psnc.pl; publichealthontario.ca; pucrs.br; pum.edu.pl; purdue.edu; qimrberghofer.edu.au; quantumleaphealth.org; qub.ac.uk; queensu.ca; rbc.gov.rw; rdehospital.nhs.uk; realpages.com; relaytx.com; renci.org; renji.com; rigaku.com; rigshospitalet.dk; riken.jp; rmff.org; roswellpark.org; rush.edu; rutgers.edu; rutgers.international; saiu.ac.ug; salk.edu; salute.gov.it; sandia.gov; sandiego.edu; sanfordhealth.org; santpau.cat; saskatoonhealthregion.ca; sbs.org; sc.edu; scdc.sh.cn; scs.ch; scu.edu; scups.net; sdjzu.edu.cn; sdsc.edu; sdu.edu.cn; seattleu.edu; seikagaku.co.jp; sheba.co.il; shiga-med.ac.jp; shinstitute.org; shsci.org; shxkyy.net; simula.no; sinica.edu.tw; sintef.no; sjtu.edu.cn; snu.ac.kr; snuh.org; st-andrews.ac.uk; stanford.edu; stanfordhealthcare.org; statestreet.com; stats.govt.nz; stonybrook.edu; stonybrookmedicine.edu; su.se; sunnybrook.ca; sunpharma.com; sustech.edu.cn; swedish.org; swisscom.ch; sydney.edu.au; tau.ac.il; tec.mx; technion.ac.il; technovacorp.com; temple.edu; tempus.com; tennessee.edu; texasoncology.com; titech.ac.jp; tntech.edu; tohoku.ac.jp; trcc.org; triangle-inc.org; ttic.edu; tu.berlin; tufts.edu; tum.de; tuwien.at; txst.edu; u-tokyo.ac.jp; u-toyama.ac.jp; ua.edu; uab.edu; uacm.edu.mx; uah.edu; ub.edu; uc3m.es; ucar.edu; ucdavis.edu; ucdenver.edu; uch-ibadan.org.ng; uchicago.edu; uchicagomedicine.org; uci.edu; uci.or.ug; ucl.ac.uk; ucla.edu; uclouvain.be; ucr.edu; ucsb.edu; ucsd.edu; ucsf.edu; ucsf.edu.ar; udelosandes.edu.bo; uff.br; ufl.edu; ufpa.br; ufrj.br; ufsc.br; uga.edu; ugent.be; uh.edu; uhealthsystem.com; uhn.ca; ui.edu.ng; uibk.ac.at; uic.edu; uio.no; uiowa.edu; uj.edu.pl; ukri.org; uky.edu; um.si; uma.ac.ir; umass.edu; umd.edu; umiamihealth.org; umich.edu; uml.edu; umn.edu; unaab.edu.ng; unam.mx; unc.edu; unclineberger.org; une.edu.mx; uni-bielefeld.de; uni-bonn.de; uni-due.de; uni-freiburg.de; uni-heidelberg.de; uni-hohenheim.de; uni-jena.de; uni-ulm.de; uni-wuerzburg.de; uniandes.edu.co; unibas.ch; unibo.it; unical.it; unicamp.br; unilag.edu.ng; unimelb.edu.au; unimib.it; uninet.cm; unipi.it; unirio.br; unitn.it; unito.it; univ-douala.cm; univ-rennes.fr; universityofcalifornia.edu; unr.edu; unt.edu; uofmmedicalcenter.org; upc.edu; upenn.edu; upm.es; upr.edu; uq.edu.au; ur.ac.rw; usa.gov; usask.ca; usc.edu; usda.gov; usoncology.com; usp.br; ustc.edu.cn; ut.ac.ir; utah.edu; utexas.edu; uthsc.edu; uthscsa.edu; utk.edu; utoronto.ca; utsouthwestern.edu; uu.nl; uu.se; uva.nl; uw.edu.pl; uwa.edu.au; uwaterloo.ca; uwi.edu; uwtsd.ac.uk; uzgent.be; va.gov; vanderbilt.edu; vanderbilthealth.com; vib.be; vicc.org; virginia.edu; vliz.be; vu.nl; waikato.ac.nz; wales.nhs.uk; washington.edu; weizmann.ac.il; wfu.edu; whcm.edu.cn; winnmed.org; wisc.edu; wits.ac.za; womenscollegehospital.ca; wur.nl; wustl.edu; yale.edu; yalecancercenter.org; york.ac.uk; zbmed.de; zhaw.ch; zjtcm.net

@@ -80,11 +80,6 @@ def _build_mamba_model(config: dict[str, Any], device: torch.device):
     )
 
     model_cfg = config["model"]
-    if model_cfg.get("encode_acceleration", False) or model_cfg.get("encode_time_index", False):
-        raise ValueError(
-            "MambaRecon currently does not support acceleration/time-index encoding. "
-            "Set `model.encode_acceleration: false` and `model.encode_time_index: false`."
-        )
 
     mamba_cfg = model_cfg.get("mamba", {})
     variant = str(mamba_cfg.get("variant", "radial_2d")).strip().lower()
@@ -145,6 +140,11 @@ def _build_mamba_model(config: dict[str, Any], device: torch.device):
         backbone,
         predict_residual=bool(mamba_cfg.get("predict_residual", False)),
         residual_scale=float(mamba_cfg.get("residual_scale", 1.0)),
+        encode_acceleration=bool(model_cfg.get("encode_acceleration", False)),
+        encode_time_index=bool(model_cfg.get("encode_time_index", False)),
+        conditioning_style_dim=int(mamba_cfg.get("conditioning_style_dim", 64)),
+        conditioning_layers=int(mamba_cfg.get("conditioning_layers", 2)),
+        conditioning_gain=float(mamba_cfg.get("conditioning_gain", 0.1)),
     ).to(device)
 
 

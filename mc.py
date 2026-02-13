@@ -7,6 +7,32 @@ from deepinv.transform.base import Transform
 from radial_lsfp import to_torch_complex
 
 
+class WeightedMAEMSELoss(torch.nn.Module):
+    """Weighted combination of L1 and L2 losses."""
+
+    def __init__(self, mae_weight: float = 1.0, mse_weight: float = 0.02):
+        super().__init__()
+        self.mae_weight = float(mae_weight)
+        self.mse_weight = float(mse_weight)
+        if self.mae_weight < 0.0 or self.mse_weight < 0.0:
+            raise ValueError(
+                f"mae_weight and mse_weight must be >= 0, got "
+                f"{self.mae_weight} and {self.mse_weight}."
+            )
+        if self.mae_weight == 0.0 and self.mse_weight == 0.0:
+            raise ValueError("At least one of mae_weight or mse_weight must be > 0.")
+        self._l1 = torch.nn.L1Loss()
+        self._l2 = torch.nn.MSELoss()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        out = 0.0
+        if self.mae_weight > 0.0:
+            out = out + self.mae_weight * self._l1(pred, target)
+        if self.mse_weight > 0.0:
+            out = out + self.mse_weight * self._l2(pred, target)
+        return out
+
+
 class MCLoss(Loss):
     r"""
     Measurement consistency loss

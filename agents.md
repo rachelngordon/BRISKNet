@@ -76,14 +76,18 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 
 ## Submitting Jobs (SLURM via submit.py)
 - Use `submit.py` for distributed launches with `torchrun` + `submitit`.
-- Run `submit.py` from an environment that has `submitit` installed (e.g., `brisknet`).
+- Environment default: run project Python commands from `brisknet`.
+  - Preferred Python executable: `/net/projects/annawoodard/micromamba/envs/brisknet/bin/python`.
+  - Preferred micromamba init script: `/net/projects/annawoodard/micromamba/etc/profile.d/micromamba.sh`.
+- Run `submit.py` from `brisknet` and pass `--env-name brisknet` unless explicitly overridden.
 - Required flags: `--config`, `--exp-name`, `--nodes`, `--gpus-per-node`, `--micromamba-path`, `--env-name`.
+- Naming invariant: `--exp-name` must equal `--job-name` and must match the run output directory name. Keep all three identical for every submission.
 - Slot policy:
   - Standard slots: assume 8 non-burst SLURM job slots are available; keep them utilized with the highest-value active experiments unless explicitly directed otherwise.
   - Burst slots: assume 2 additional `qos=burst` slots are available; treat burst as preemptible and use it for debugging/probes/sanity checks rather than long critical runs.
   - When proposing experiment plans, default to filling all standard slots first, then optionally use burst for short-turnaround diagnostics.
 - Typical 1 node / 4 GPU submission:
-  - `micromamba run -n brisknet python submit.py --config configs/config_sampling_2spf_rebin_v3_mamba_debug.yaml --exp-name mamba_2spf_rebin_v3_debug_1n4g --job-name mamba_2spf_dbg_1n4g --nodes 1 --gpus-per-node 4 --cpus-per-task 8 --partition general --timeout-min 240 --micromamba-path /net/projects/annawoodard/micromamba/etc/profile.d/micromamba.sh --env-name brisknet`
+  - `micromamba run -n brisknet python submit.py --config configs/config_sampling_2spf_rebin_v3_mamba_debug.yaml --exp-name mamba_2spf_rebin_v3_debug_1n4g --job-name mamba_2spf_rebin_v3_debug_1n4g --nodes 1 --gpus-per-node 4 --cpus-per-task 8 --partition general --timeout-min 240 --micromamba-path /net/projects/annawoodard/micromamba/etc/profile.d/micromamba.sh --env-name brisknet`
 - Dry-run (print resolved settings only):
   - append `--dry-run` to the command above.
 - Monitor and control:

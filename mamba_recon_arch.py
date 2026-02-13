@@ -919,11 +919,35 @@ class ArtifactRemovalMambaRecon(nn.Module):
         backbone_net: nn.Module,
         predict_residual: bool = False,
         residual_scale: float = 1.0,
+        encode_acceleration: bool = False,
+        encode_time_index: bool = False,
+        conditioning_style_dim: int = 64,
+        conditioning_layers: int = 2,
+        conditioning_gain: float = 0.1,
     ):
         super().__init__()
         self.backbone_net = backbone_net
         self.predict_residual = bool(predict_residual)
         self.residual_scale = float(residual_scale)
+        self.encode_acceleration = bool(encode_acceleration)
+        self.encode_time_index = bool(encode_time_index)
+        self.conditioning_gain = float(conditioning_gain)
+
+        conditioning_channels = int(self.encode_acceleration) + int(self.encode_time_index)
+        if conditioning_channels > 0:
+            style_dim = int(conditioning_style_dim)
+            num_layers = max(1, int(conditioning_layers))
+            layers = [nn.Linear(conditioning_channels, style_dim), nn.ReLU(inplace=True)]
+            for _ in range(num_layers - 1):
+                layers.extend([nn.Linear(style_dim, style_dim), nn.ReLU(inplace=True)])
+            self.mapping_network = nn.Sequential(*layers)
+            # x_init_btchw has 2 channels (real/imag). Predict FiLM scale+bias per channel.
+            self.condition_to_film = nn.Linear(style_dim, 4)
+            nn.init.zeros_(self.condition_to_film.weight)
+            nn.init.zeros_(self.condition_to_film.bias)
+        else:
+            self.mapping_network = None
+            self.condition_to_film = None
 
     @staticmethod
     def _normalise_both(zf: torch.Tensor, data: torch.Tensor):
@@ -942,6 +966,44 @@ class ArtifactRemovalMambaRecon(nn.Module):
             scale = torch.tensor(1.0, device=x.device, dtype=x.real.dtype)
         return x / scale, scale
 
+    def _build_condition_input(
+        self,
+        x_init_norm: torch.Tensor,
+        acceleration: torch.Tensor | None,
+        start_timepoint_index: torch.Tensor | None,
+        total_frames: int | None,
+    ) -> torch.Tensor | None:
+        features = []
+
+        if self.encode_acceleration:
+            if acceleration is None:
+                raise ValueError(
+                    "model.encode_acceleration=true but acceleration was not provided to Mamba forward."
+                )
+            inv_af = (1.0 / acceleration.clamp_min(1e-6)).view(-1, 1).float()
+            features.append(inv_af)
+
+        if self.encode_time_index:
+            if start_timepoint_index is None:
+                raise ValueError(
+                    "model.encode_time_index=true but start_timepoint_index was not provided."
+                )
+            start_idx = start_timepoint_index.view(-1, 1).float()
+            if total_frames is not None:
+                denom = float(max(int(total_frames) - 1, 1))
+                start_frac = start_idx / denom
+            else:
+                # Keep feature bounded in [0,1) when total frame count is unavailable.
+                t_window = float(max(int(x_init_norm.shape[-1]) - 1, 1))
+                start_frac = start_idx / (start_idx + t_window)
+            features.append(start_frac)
+
+        if not features:
+            return None
+
+        combined = torch.cat(features, dim=1)
+        return combined.to(x_init_norm.device)
+
     def forward(
         self,
         y,
@@ -957,22 +1019,40 @@ class ArtifactRemovalMambaRecon(nn.Module):
         x_init = E(inv=True, data=y, smaps=csmap)
 
         if norm == "both":
-            x_init_norm, y_norm, scale = self._normalise_both(x_init, y)
+            x_init_norm, y_norm, norm_scale = self._normalise_both(x_init, y)
         elif norm == "independent":
-            x_init_norm, scale = self._normalise_indep(x_init)
+            x_init_norm, norm_scale = self._normalise_indep(x_init)
             y_norm, _ = self._normalise_indep(y)
         elif norm == "baseline":
-            x_init_norm, y_norm, scale = self._normalise_baseline(x_init, y)
+            x_init_norm, y_norm, norm_scale = self._normalise_baseline(x_init, y)
         elif norm == "none":
             x_init_norm = x_init
             y_norm = y
-            scale = torch.tensor(1.0, device=x_init.device, dtype=x_init.real.dtype)
+            norm_scale = torch.tensor(1.0, device=x_init.device, dtype=x_init.real.dtype)
         else:
             raise ValueError(
                 f"Unsupported normalization mode '{norm}'. Expected one of: both, independent, baseline, none."
             )
 
         x_init_btchw = from_torch_complex(rearrange(x_init_norm, "h w t -> t h w"))
+        if self.mapping_network is not None and self.condition_to_film is not None:
+            total_frames = kwargs.get("total_frames", None)
+            cond_input = self._build_condition_input(
+                x_init_norm=x_init_norm,
+                acceleration=acceleration,
+                start_timepoint_index=start_timepoint_index,
+                total_frames=total_frames,
+            )
+            style_embedding = self.mapping_network(cond_input.float())
+            film = self.condition_to_film(style_embedding)  # (B,4) where B=1 in current training
+            film_scale, film_bias = film[:, :2], film[:, 2:]
+            film_scale = torch.tanh(film_scale) * self.conditioning_gain + 1.0
+            film_bias = torch.tanh(film_bias) * self.conditioning_gain
+            x_init_btchw = (
+                x_init_btchw * film_scale.to(x_init_btchw.dtype).view(1, 2, 1, 1)
+                + film_bias.to(x_init_btchw.dtype).view(1, 2, 1, 1)
+            )
+
         x_recon_btchw = self.backbone_net(
             x_init_btchw,
             y_norm,
@@ -984,7 +1064,7 @@ class ArtifactRemovalMambaRecon(nn.Module):
             x_recon_btchw = x_init_btchw + self.residual_scale * x_recon_btchw
 
         recon = to_torch_complex(x_recon_btchw)
-        recon = rearrange(recon, "t h w -> h w t") * scale
+        recon = rearrange(recon, "t h w -> h w t") * norm_scale
         x_hat = torch.stack((recon.real, recon.imag), dim=0).unsqueeze(0).to(torch.float32)
 
         # Keep output tuple compatible with LSFP callers.

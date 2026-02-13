@@ -238,6 +238,141 @@ def calc_dc(input, reference, device):
     return mse.item(), mae.item()
 
 
+def _infer_kspace_readout_axis(
+    ref_abs: torch.Tensor,
+    expected_readout_samples: Optional[int] = None,
+) -> Optional[int]:
+    if ref_abs.ndim == 0:
+        return None
+
+    candidate_axes = [ax for ax, size in enumerate(ref_abs.shape) if int(size) > 1]
+    if not candidate_axes:
+        return None
+
+    if expected_readout_samples is not None:
+        try:
+            expected_n = int(expected_readout_samples)
+        except (TypeError, ValueError):
+            expected_n = -1
+        if expected_n > 1:
+            matching = [ax for ax in candidate_axes if int(ref_abs.shape[ax]) == expected_n]
+            if len(matching) == 1:
+                return matching[0]
+            if matching:
+                candidate_axes = matching
+
+    best_axis = None
+    best_score = -float("inf")
+    for ax in candidate_axes:
+        n = int(ref_abs.shape[ax])
+        if n < 8:
+            continue
+        reduce_dims = tuple(i for i in range(ref_abs.ndim) if i != ax)
+        profile = ref_abs.mean(dim=reduce_dims) if reduce_dims else ref_abs
+        if profile.numel() == 0:
+            continue
+        profile = profile.detach().float()
+
+        center = (n - 1) / 2.0
+        peak_idx = int(torch.argmax(profile).item())
+        dist_norm = abs(peak_idx - center) / max(center, 1.0)
+
+        center_idx = int(round(center))
+        lo = max(0, center_idx - 1)
+        hi = min(n, center_idx + 2)
+        center_mean = float(profile[lo:hi].mean().item()) if hi > lo else 0.0
+        edge_k = max(1, n // 10)
+        edge_vals = torch.cat([profile[:edge_k], profile[-edge_k:]], dim=0)
+        edge_mean = float(edge_vals.mean().item()) if edge_vals.numel() > 0 else 0.0
+
+        contrast = center_mean / (edge_mean + 1e-12)
+        score = contrast - 2.0 * dist_norm
+        if score > best_score:
+            best_score = score
+            best_axis = ax
+
+    if best_axis is None:
+        # Fall back to largest axis if heuristic fails.
+        best_axis = max(candidate_axes, key=lambda ax: int(ref_abs.shape[ax]))
+    return int(best_axis)
+
+
+def compute_kspace_residual_metrics(
+    pred_kspace: torch.Tensor,
+    ref_kspace: torch.Tensor,
+    expected_readout_samples: Optional[int] = None,
+) -> Dict[str, float]:
+    """Compute normalized k-space residual metrics on full, low/mid/high radial bands."""
+    if (not torch.is_complex(pred_kspace)) or (not torch.is_complex(ref_kspace)):
+        return {}
+    if pred_kspace.shape != ref_kspace.shape:
+        return {}
+
+    pred = pred_kspace
+    ref = ref_kspace
+    finite_mask = (
+        torch.isfinite(pred.real)
+        & torch.isfinite(pred.imag)
+        & torch.isfinite(ref.real)
+        & torch.isfinite(ref.imag)
+    )
+    if not bool(torch.any(finite_mask)):
+        return {}
+
+    diff = pred - ref
+    diff_sq = torch.abs(diff) ** 2
+    ref_sq = torch.abs(ref) ** 2
+
+    finite_f = finite_mask.to(diff_sq.dtype)
+    diff_sq = diff_sq * finite_f
+    ref_sq = ref_sq * finite_f
+
+    total_diff = float(diff_sq.sum().item())
+    total_ref = float(ref_sq.sum().item())
+    rel_l2 = float(np.sqrt(total_diff / (total_ref + 1e-12)))
+
+    metrics: Dict[str, float] = {"rel_l2": rel_l2}
+
+    readout_axis = _infer_kspace_readout_axis(
+        ref_abs=torch.sqrt(ref_sq + 1e-12),
+        expected_readout_samples=expected_readout_samples,
+    )
+    if readout_axis is None:
+        return metrics
+
+    n = int(ref.shape[readout_axis])
+    if n <= 1:
+        return metrics
+
+    idx = torch.arange(n, device=ref.device, dtype=diff_sq.dtype)
+    center = (n - 1) / 2.0
+    denom = center if center > 0 else 1.0
+    radius = torch.abs(idx - center) / denom
+    radius = torch.clamp(radius, 0.0, 1.0)
+
+    shape = [1] * ref.ndim
+    shape[readout_axis] = n
+    radius = radius.view(shape)
+
+    bands = (
+        ("low", 0.0, 1.0 / 3.0),
+        ("mid", 1.0 / 3.0, 2.0 / 3.0),
+        ("high", 2.0 / 3.0, 1.000001),
+    )
+    for band_name, lo, hi in bands:
+        band_mask = (radius >= lo) & (radius < hi)
+        band_mask = band_mask.to(diff_sq.dtype) * finite_f
+        band_diff = float((diff_sq * band_mask).sum().item())
+        band_ref = float((ref_sq * band_mask).sum().item())
+        if band_ref <= 0:
+            metrics[f"rel_l2_{band_name}"] = float("nan")
+        else:
+            metrics[f"rel_l2_{band_name}"] = float(np.sqrt(band_diff / (band_ref + 1e-12)))
+
+    metrics["readout_axis"] = int(readout_axis)
+    return metrics
+
+
 def _best_fit_complex_scale(pred: torch.Tensor, ref: torch.Tensor) -> complex | None:
     """Least-squares complex scalar c minimizing ||c*pred - ref||_2.
 
@@ -1715,6 +1850,94 @@ def compute_temporal_metrics(
     return metrics
 
 
+def compute_dynamic_weighted_dce_error(
+    reference_mag_np: np.ndarray,
+    recon_mag_np: np.ndarray,
+    time_points: np.ndarray,
+    roi_mask: Optional[np.ndarray] = None,
+    baseline_mode: str = "fraction",
+    baseline_seconds: float = 20.0,
+    baseline_fraction: float = 0.1,
+    baseline_min_frames: int = 4,
+    baseline_max_frames: Optional[int] = 10,
+    top_fraction: float = 0.02,
+    weight_power: float = 1.0,
+) -> Dict[str, float]:
+    """Dynamic-weighted DCE error for non-DRO comparisons."""
+    ref = np.asarray(reference_mag_np, dtype=np.float64)
+    rec = np.asarray(recon_mag_np, dtype=np.float64)
+    if ref.shape != rec.shape or ref.ndim != 3:
+        return {}
+
+    h, w, t = ref.shape
+    if t <= 0:
+        return {}
+
+    if roi_mask is None:
+        mask = np.ones((h, w), dtype=bool)
+    else:
+        mask = np.asarray(roi_mask).squeeze().astype(bool)
+        if mask.shape != (h, w):
+            return {}
+    if not mask.any():
+        return {}
+
+    n_baseline = _resolve_baseline_frames(
+        num_frames=t,
+        time_points=time_points,
+        baseline_mode=baseline_mode,
+        baseline_seconds=baseline_seconds,
+        baseline_fraction=baseline_fraction,
+        baseline_min_frames=baseline_min_frames,
+        baseline_max_frames=baseline_max_frames,
+    )
+
+    ref_curves = ref[mask].reshape(-1, t)
+    rec_curves = rec[mask].reshape(-1, t)
+    if ref_curves.size == 0:
+        return {}
+
+    ref_base = ref_curves[:, :n_baseline].mean(axis=1, keepdims=True)
+    rec_base = rec_curves[:, :n_baseline].mean(axis=1, keepdims=True)
+    ref_dce = ref_curves - ref_base
+    rec_dce = rec_curves - rec_base
+
+    dyn_scores = np.std(ref_dce, axis=1)
+    n_pixels = int(dyn_scores.shape[0])
+    frac = float(top_fraction)
+    if not np.isfinite(frac):
+        frac = 0.02
+    frac = min(max(frac, 0.0), 1.0)
+    k = max(1, int(np.ceil(frac * n_pixels)))
+    k = min(k, n_pixels)
+
+    if k == n_pixels:
+        keep = np.arange(n_pixels, dtype=np.int64)
+    else:
+        keep = np.argpartition(dyn_scores, -k)[-k:]
+
+    err = rec_dce[keep] - ref_dce[keep]
+    per_pixel_mae = np.mean(np.abs(err), axis=1)
+    per_pixel_mse = np.mean(err ** 2, axis=1)
+
+    weights = dyn_scores[keep].astype(np.float64)
+    power = float(weight_power)
+    if not np.isfinite(power) or power <= 0.0:
+        power = 1.0
+    weights = np.power(np.clip(weights, a_min=0.0, a_max=None), power)
+    if not np.any(weights > 0):
+        weights = np.ones_like(weights)
+    weights = weights / (weights.sum() + 1e-12)
+
+    return {
+        "weighted_mae": float(np.sum(weights * per_pixel_mae)),
+        "weighted_mse": float(np.sum(weights * per_pixel_mse)),
+        "topk_mae": float(np.mean(per_pixel_mae)),
+        "topk_mse": float(np.mean(per_pixel_mse)),
+        "selected_pixels": int(k),
+        "selected_fraction": float(k / max(1, n_pixels)),
+    }
+
 
 def plot_time_series(
     recon_img_stack: np.ndarray,
@@ -2028,6 +2251,11 @@ def eval_sample(
     arrival_pre_contrast_baseline: str = "n_frames",
     arrival_baseline_seconds: float = 20.0,
     arrival_total_seconds: float = 150.0,
+    dynamic_dce_enabled: bool = True,
+    dynamic_dce_top_fraction: float = 0.02,
+    dynamic_dce_weight_power: float = 1.0,
+    dynamic_dce_reference: str = "grasp",
+    kspace_readout_samples: Optional[int] = None,
 ):
 
     acceleration = round(acceleration.item(), 1)
@@ -2061,6 +2289,38 @@ def eval_sample(
                 "dl_dc_scale_phase": float(np.angle(dc_scale)),
             }
         )
+    if not dro_eval:
+        dl_kspace_metrics = compute_kspace_residual_metrics(
+            pred_kspace=recon_kspace,
+            ref_kspace=kspace,
+            expected_readout_samples=kspace_readout_samples,
+        )
+        if dl_kspace_metrics:
+            extra_metrics.update(
+                {
+                    "dl_raw_dc_rel_l2": dl_kspace_metrics.get("rel_l2"),
+                    "dl_raw_dc_rel_l2_low": dl_kspace_metrics.get("rel_l2_low"),
+                    "dl_raw_dc_rel_l2_mid": dl_kspace_metrics.get("rel_l2_mid"),
+                    "dl_raw_dc_rel_l2_high": dl_kspace_metrics.get("rel_l2_high"),
+                }
+            )
+
+        grasp_recon_complex_dc = rearrange(to_torch_complex(grasp_img).squeeze(), 'h t w -> h w t')
+        grasp_kspace_dc = physics(False, grasp_recon_complex_dc.to(csmap.dtype), csmap)
+        grasp_kspace_metrics = compute_kspace_residual_metrics(
+            pred_kspace=grasp_kspace_dc,
+            ref_kspace=kspace,
+            expected_readout_samples=kspace_readout_samples,
+        )
+        if grasp_kspace_metrics:
+            extra_metrics.update(
+                {
+                    "grasp_raw_dc_rel_l2": grasp_kspace_metrics.get("rel_l2"),
+                    "grasp_raw_dc_rel_l2_low": grasp_kspace_metrics.get("rel_l2_low"),
+                    "grasp_raw_dc_rel_l2_mid": grasp_kspace_metrics.get("rel_l2_mid"),
+                    "grasp_raw_dc_rel_l2_high": grasp_kspace_metrics.get("rel_l2_high"),
+                }
+            )
 
     # RESCALE
 
@@ -2327,6 +2587,56 @@ def eval_sample(
         elif "full" in masks_np and masks_np["full"].any():
             primary_region = "full"
 
+        if dynamic_dce_enabled:
+            ref_mode = str(dynamic_dce_reference or "grasp").strip().lower()
+            if ref_mode == "grasp":
+                ref_mag_np = grasp_mag_np
+            elif ref_mode in {"gt", "ground_truth", "dro"}:
+                ref_mag_np = gt_mag_np
+            else:
+                raise ValueError(
+                    f"Unsupported dynamic_dce_reference='{dynamic_dce_reference}'. "
+                    "Use one of: grasp, gt."
+                )
+            dynamic_roi = masks_np.get(primary_region) if primary_region in masks_np else None
+            dyn_metrics = compute_dynamic_weighted_dce_error(
+                reference_mag_np=ref_mag_np,
+                recon_mag_np=recon_mag_np,
+                time_points=aif_time_points,
+                roi_mask=dynamic_roi,
+                baseline_mode=baseline_mode,
+                baseline_seconds=baseline_seconds,
+                baseline_fraction=baseline_fraction,
+                baseline_min_frames=baseline_min_frames,
+                baseline_max_frames=baseline_max_frames,
+                top_fraction=dynamic_dce_top_fraction,
+                weight_power=dynamic_dce_weight_power,
+            )
+            if dyn_metrics:
+                temporal_metrics["dl_raw_dyn_dce_mae"] = dyn_metrics["weighted_mae"]
+                temporal_metrics["dl_raw_dyn_dce_mse"] = dyn_metrics["weighted_mse"]
+                temporal_metrics["dl_raw_dyn_dce_topk_mae"] = dyn_metrics["topk_mae"]
+                temporal_metrics["dl_raw_dyn_dce_topk_mse"] = dyn_metrics["topk_mse"]
+                temporal_metrics["dl_raw_dyn_dce_selected_pixels"] = dyn_metrics["selected_pixels"]
+                temporal_metrics["dl_raw_dyn_dce_selected_fraction"] = dyn_metrics["selected_fraction"]
+
+                grasp_dyn_metrics = compute_dynamic_weighted_dce_error(
+                    reference_mag_np=ref_mag_np,
+                    recon_mag_np=grasp_mag_np,
+                    time_points=aif_time_points,
+                    roi_mask=dynamic_roi,
+                    baseline_mode=baseline_mode,
+                    baseline_seconds=baseline_seconds,
+                    baseline_fraction=baseline_fraction,
+                    baseline_min_frames=baseline_min_frames,
+                    baseline_max_frames=baseline_max_frames,
+                    top_fraction=dynamic_dce_top_fraction,
+                    weight_power=dynamic_dce_weight_power,
+                )
+                if grasp_dyn_metrics:
+                    temporal_metrics["grasp_raw_dyn_dce_mae"] = grasp_dyn_metrics["weighted_mae"]
+                    temporal_metrics["grasp_raw_dyn_dce_mse"] = grasp_dyn_metrics["weighted_mse"]
+
         tumor_mask_for_plot = (
             None if primary_region in (None, "full", "foreground") else masks_np.get(primary_region)
         )
@@ -2563,6 +2873,8 @@ def eval_sample(
             )
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
+        if extra_metrics:
+            temporal_metrics.update(extra_metrics)
 
         primary_region = None
         if "malignant" in masks_np and masks_np["malignant"].any():

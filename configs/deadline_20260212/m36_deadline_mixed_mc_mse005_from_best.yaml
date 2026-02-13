@@ -2,8 +2,8 @@ data:
   coils: 16
   dataset_key: kspace
   eval_frequency: 5
-  eval_spokes: 2
-  eval_timeframes: 144
+  eval_spokes: 36
+  eval_timeframes: 8
   flip_kspace: false
   fpg: 36
   height: 320
@@ -13,9 +13,9 @@ data:
   slices_to_eval: 1
   spf_aug: false
   split_file: /home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json
-  timeframes: 144
+  timeframes: 8
   total_spokes: 288
-  train_spokes_per_frame: 2
+  train_spokes_per_frame: 36
   traj_method: get_traj
   val_split_ratio: 0.2
   weight_accelerations: false
@@ -51,8 +51,8 @@ debugging:
     start_time_index: middle
     time_index_mode: none
 evaluation:
-  chunk_overlap: 18
-  chunk_size: 36
+  chunk_overlap: 4
+  chunk_size: 8
   deterministic_val_ei: true
   deterministic_val_ei_seed: 1234
   distributed_eval: true
@@ -63,7 +63,7 @@ evaluation:
 experiment:
   cluster: DSI
   output_dir: /net/projects2/annawoodard/experiments
-  init_checkpoint: /net/projects2/annawoodard/experiments/mamba_36spf_sweepB_early_ei_archfix_lr5em4_minlf6_wu5_ep160_archtune_dconv4_2n4g/mamba_36spf_sweepB_early_ei_archfix_lr5em4_minlf6_wu5_ep160_archtune_dconv4_2n4g_best_model.pth
+  init_checkpoint: /net/projects2/annawoodard/experiments/m36_deadline_late_ei_rebin_frombest_2n4g/m36_deadline_late_ei_rebin_frombest_2n4g_best_model.pth
 model:
   encode_acceleration: false
   encode_time_index: true
@@ -75,7 +75,7 @@ model:
       arrival_shift_max_shift: 1
       arrival_shift_percentile: 0.95
       baseline_seconds: 20.0
-      duration: 40
+      duration: 30
       enh_scale_max: 1.15
       enh_scale_min: 0.85
       enh_scale_start: arrival
@@ -88,16 +88,18 @@ model:
       subsample_ratio_min: 0.7
       temporal_transform: arrival_shift_enh_scale
       total_seconds: 150.0
-      warmup: 24
+      warmup: 20
       warp_ratio_max: 0.95
       warp_ratio_min: 0.6
-      weight: 5000
+      weight: 8000
     mc_loss:
-      metric: MAE
+      mae_weight: 1.0
+      metric: MIXED
+      mse_weight: 0.05
       weight: 1
     rebin_loss:
       baseline_frames: 4
-      duration: 40
+      duration: 30
       dynamic_mask:
         clip_max: 1.0
         clip_min: 0.0
@@ -105,7 +107,7 @@ model:
         fraction: 0.01
         smooth_kernel: 5
         stop_grad: true
-        warmup_epochs: 10
+        warmup_epochs: 4
       enable: true
       factor: 4
       metric: MAE
@@ -114,8 +116,8 @@ model:
       teacher_stopgrad: true
       temporal_mode: temporal_difference
       time_index_mode: none
-      warmup: 60
-      weight: 300
+      warmup: 70
+      weight: 200
     use_ei_loss: true
   mamba:
     attn_drop_rate: 0.0
@@ -142,7 +144,7 @@ model:
     temporal_bidirectional: true
     temporal_d_conv: 4
     temporal_expand: 2
-    token_chunk_size: 4096
+    token_chunk_size: full
     use_checkpoint: false
     use_fast_path: true
     use_relative_temporal_pos: true
@@ -154,7 +156,7 @@ model:
     b1: 0.9
     b2: 0.999
     eps: 1.0e-09
-    lr: 2.0e-05
+    lr: 0.0002
     name: Adam
     weight_decay: 0.0
 training:
@@ -165,40 +167,18 @@ training:
   curriculum_learning:
     enabled: false
     phases:
-    - eval_num_frames: 18
-      eval_spokes_per_frame: 16
-      name: 'Phase 1: Moderate Accelerations'
+    - eval_num_frames: 8
+      eval_spokes_per_frame: 36
+      name: 'Phase 1: 36 SPF Sweep'
       start_epoch: 1
       train_spokes_range:
-      - 16
-      - 24
-      - 36
-    - eval_num_frames: 36
-      eval_spokes_per_frame: 8
-      name: 'Phase 2: Higher Accelerations'
-      start_epoch: 2
-      train_spokes_range:
-      - 8
-      - 16
-      - 24
-      - 36
-    - eval_num_frames: 144
-      eval_spokes_per_frame: 2
-      name: 'Phase 3: Ultra-High Accelerations'
-      start_epoch: 3
-      train_spokes_range:
-      - 2
-      - 4
-      - 8
-      - 16
-      - 24
       - 36
   ddp_find_unused_parameters: false
   device: cuda
-  edge_time_index_sampling: true
+  edge_time_index_sampling: false
   epochs: 120
   lr_schedule:
-    min_lr_factor: 0.3
+    min_lr_factor: 0.5
     warmup_epochs: 2
     warmup_mode: cosine
   multigpu: true

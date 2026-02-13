@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import torch
 import warnings
 import yaml
+from copy import deepcopy
 from dataloader import ZFSliceDataset, SimulatedDataset, SimulatedSPFDataset, log_slice_sampling_startup_report
 from einops import rearrange
 from torch.utils.data import DataLoader, Subset
@@ -22,7 +23,7 @@ from transform import (
     BaselineEnhancementScale,
 )
 from ei import EILoss
-from mc import MCLoss
+from mc import MCLoss, WeightedMAEMSELoss
 from model_factory import build_recon_model, is_lsfp_model
 from radial_lsfp import MCNUFFT
 from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
@@ -270,6 +271,228 @@ def _normalize_optional_checkpoint_path(value, field_name: str):
     return path
 
 
+def _latest_finite(values):
+    if not values:
+        return None
+    for val in reversed(values):
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(v):
+            return v
+    return None
+
+
+def _parse_optional_int(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"", "none", "null"}:
+            return None
+    return int(value)
+
+
+def _build_pointwise_metric(metric_name: str, field_name: str):
+    name = str(metric_name).strip().upper()
+    if name == "MAE":
+        return torch.nn.L1Loss(), name
+    if name == "MSE":
+        return torch.nn.MSELoss(), name
+    raise ValueError(f"Unsupported {field_name} metric '{metric_name}'. Expected one of: MAE, MSE.")
+
+
+def _temporal_loss_representation(
+    x: torch.Tensor,
+    mode: str,
+    baseline_frames: int = 4,
+    percent_enhancement_eps: float = 1e-4,
+) -> torch.Tensor:
+    mode_norm = str(mode).strip().lower()
+    if mode_norm == "absolute":
+        return x
+
+    x_mag = torch.sqrt(x[:, :1] ** 2 + x[:, 1:2] ** 2 + 1e-12)
+    T = int(x_mag.shape[-1])
+    if T == 0:
+        return x_mag
+
+    if mode_norm == "temporal_difference":
+        if T < 2:
+            return x_mag[..., :0]
+        return x_mag[..., 1:] - x_mag[..., :-1]
+
+    baseline_n = min(max(int(baseline_frames), 1), T)
+    baseline = x_mag[..., :baseline_n].mean(dim=-1, keepdim=True)
+    baseline_sub = x_mag - baseline
+
+    if mode_norm == "baseline_subtracted":
+        return baseline_sub
+    if mode_norm == "percent_enhancement":
+        denom = baseline.abs().clamp_min(float(percent_enhancement_eps))
+        return baseline_sub / denom
+
+    raise ValueError(
+        f"Unsupported temporal loss mode '{mode}'. Expected one of: "
+        "absolute, baseline_subtracted, percent_enhancement, temporal_difference."
+    )
+
+
+def _param_name_matches(name: str, patterns):
+    return any(str(pat) in name for pat in patterns)
+
+
+def _logical_trainability_by_patterns(model, trainable_patterns):
+    total_params = 0
+    trainable_params = 0
+    trainable_names = []
+    frozen_names = []
+    trainable_param_refs = []
+    frozen_param_refs = []
+    for name, param in model.named_parameters():
+        n = int(param.numel())
+        total_params += n
+        trainable = _param_name_matches(name, trainable_patterns)
+        if trainable:
+            trainable_params += n
+            trainable_names.append(name)
+            trainable_param_refs.append(param)
+        else:
+            frozen_names.append(name)
+            frozen_param_refs.append(param)
+    return {
+        "total_params": int(total_params),
+        "trainable_params": int(trainable_params),
+        "trainable_names": trainable_names,
+        "frozen_names": frozen_names,
+        "trainable_param_refs": trainable_param_refs,
+        "frozen_param_refs": frozen_param_refs,
+    }
+
+
+def _logical_all_trainable(model):
+    total_params = 0
+    trainable_param_refs = []
+    for _, param in model.named_parameters():
+        n = int(param.numel())
+        total_params += n
+        trainable_param_refs.append(param)
+    return {
+        "total_params": int(total_params),
+        "trainable_params": int(total_params),
+        "trainable_param_refs": trainable_param_refs,
+        "frozen_param_refs": [],
+    }
+
+
+def _parse_loss_gate(gate_cfg, gate_name: str):
+    if gate_cfg is None:
+        gate_cfg = {}
+    if not isinstance(gate_cfg, dict):
+        raise TypeError(f"model.losses.activation_gate.{gate_name} must be a mapping.")
+
+    enable = bool(gate_cfg.get("enable", False))
+    mode = str(gate_cfg.get("mode", "<=")).strip().lower()
+    if mode in {"le", "<="}:
+        mode = "<="
+    elif mode in {"lt", "<"}:
+        mode = "<"
+    elif mode in {"ge", ">="}:
+        mode = ">="
+    elif mode in {"gt", ">"}:
+        mode = ">"
+    else:
+        raise ValueError(
+            f"Unsupported activation_gate mode '{mode}' for {gate_name}. "
+            "Expected one of: <=, <, >=, >."
+        )
+
+    threshold = gate_cfg.get("threshold", None)
+    if enable and threshold is None:
+        raise ValueError(f"model.losses.activation_gate.{gate_name}.threshold is required when enabled.")
+    threshold_val = float(threshold) if threshold is not None else float("nan")
+    min_epoch = int(gate_cfg.get("min_epoch", 1))
+    patience = int(gate_cfg.get("patience", 1))
+    if min_epoch < 1:
+        raise ValueError(f"model.losses.activation_gate.{gate_name}.min_epoch must be >= 1.")
+    if patience < 1:
+        raise ValueError(f"model.losses.activation_gate.{gate_name}.patience must be >= 1.")
+
+    return {
+        "enable": enable,
+        "metric": str(gate_cfg.get("metric", "train_mc_loss")).strip().lower(),
+        "mode": mode,
+        "threshold": threshold_val,
+        "min_epoch": min_epoch,
+        "patience": patience,
+        "satisfied_streak": 0,
+        "triggered": False,
+        "trigger_epoch": None,
+    }
+
+
+def _gate_compare(metric_value: float, threshold: float, mode: str) -> bool:
+    if mode == "<=":
+        return metric_value <= threshold
+    if mode == "<":
+        return metric_value < threshold
+    if mode == ">=":
+        return metric_value >= threshold
+    if mode == ">":
+        return metric_value > threshold
+    raise ValueError(f"Unsupported gate mode '{mode}'.")
+
+
+def _resolve_gate_metric_value(
+    metric_name: str,
+    train_mc_losses,
+    val_mc_losses,
+    train_ei_losses,
+    val_ei_losses,
+    eval_ssims,
+    eval_psnrs,
+    eval_curve_corrs,
+):
+    name = str(metric_name).strip().lower()
+    if name == "train_mc_loss":
+        return _latest_finite(train_mc_losses)
+    if name == "val_mc_loss":
+        return _latest_finite(val_mc_losses)
+    if name == "train_ei_loss":
+        return _latest_finite(train_ei_losses)
+    if name == "val_ei_loss":
+        return _latest_finite(val_ei_losses)
+    if name == "eval_ssim":
+        return _latest_finite(eval_ssims)
+    if name == "eval_psnr":
+        return _latest_finite(eval_psnrs)
+    if name in {"eval_curve_corr", "eval_curve_correlation"}:
+        return _latest_finite(eval_curve_corrs)
+    raise ValueError(
+        f"Unsupported activation_gate metric '{metric_name}'. "
+        "Expected one of: train_mc_loss, val_mc_loss, train_ei_loss, val_ei_loss, eval_ssim, eval_psnr, eval_curve_corr."
+    )
+
+
+def _infer_gate_state_from_history(weight_history, weight_epochs):
+    if not weight_history:
+        return False, None
+    for idx, weight in enumerate(weight_history):
+        try:
+            if float(weight) > 0.0:
+                epoch_val = None
+                if idx < len(weight_epochs):
+                    try:
+                        epoch_val = int(weight_epochs[idx])
+                    except (TypeError, ValueError):
+                        epoch_val = None
+                return True, epoch_val
+        except (TypeError, ValueError):
+            continue
+    return False, None
+
+
 def main():
 
     set_seed(12)
@@ -355,6 +578,23 @@ def main():
         config = new_config
         epochs = config['training']["epochs"]
 
+    model_cfg = config.setdefault("model", {})
+    model_name_norm = str(model_cfg.get("name", "")).strip().lower()
+    mamba_variant_norm = str(model_cfg.get("mamba", {}).get("variant", "")).strip().lower()
+    config_is_temporal_mamba = model_name_norm in {
+        "mambatemporal",
+        "mamba_temporal",
+        "temporalmamba",
+    } or (
+        model_name_norm in {"mambarecon", "mamba_recon", "mamba"}
+        and mamba_variant_norm in {"temporal", "temporal_1d", "radial_temporal"}
+    )
+    forced_time_encoding = False
+    if config_is_temporal_mamba and not resume_from_checkpoint:
+        if not bool(model_cfg.get("encode_time_index", False)):
+            model_cfg["encode_time_index"] = True
+            forced_time_encoding = True
+
     # Keep output_dir aligned with the resolved checkpoint location.
     config.setdefault("experiment", {})["output_dir"] = os.path.dirname(output_dir)
 
@@ -419,6 +659,9 @@ def main():
     else:
         global_rank = 0
         device = torch.device(config["training"]["device"])
+
+    if forced_time_encoding and (global_rank == 0 or not config['training']['multigpu']):
+        print("[Config] Forced model.encode_time_index=true for temporal Mamba run.")
 
     # AMP/mixed precision config (optional)
     amp_cfg = config.get("training", {}).get("amp", {})
@@ -726,6 +969,44 @@ def main():
         rebin_dynamic_mask_clip_max = float(rebin_cfg.get("dynamic_mask_clip_max", 1.0))
         rebin_dynamic_mask_stop_grad = bool(rebin_cfg.get("dynamic_mask_stop_grad", True))
 
+    teacher_distill_cfg = losses_cfg.get("teacher_distill", {})
+    if teacher_distill_cfg is None:
+        teacher_distill_cfg = {}
+    if not isinstance(teacher_distill_cfg, dict):
+        raise TypeError("model.losses.teacher_distill must be a mapping.")
+
+    use_teacher_distill = bool(teacher_distill_cfg.get("enable", False))
+    teacher_distill_target_w = float(teacher_distill_cfg.get("weight", 0.0))
+    teacher_distill_warmup = int(teacher_distill_cfg.get("warmup", 0))
+    teacher_distill_duration = int(teacher_distill_cfg.get("duration", 0))
+    teacher_distill_metric_name = str(teacher_distill_cfg.get("metric", "MAE"))
+    teacher_distill_temporal_mode = str(teacher_distill_cfg.get("temporal_mode", "absolute"))
+    teacher_distill_baseline_frames = int(teacher_distill_cfg.get("baseline_frames", 4))
+    teacher_distill_percent_eps = float(teacher_distill_cfg.get("percent_enhancement_eps", 1e-4))
+    teacher_distill_stop_epoch = _parse_optional_int(teacher_distill_cfg.get("stop_epoch", None))
+    teacher_distill_detach_teacher = bool(teacher_distill_cfg.get("detach_teacher", True))
+    teacher_distill_checkpoint = _normalize_optional_checkpoint_path(
+        teacher_distill_cfg.get("checkpoint", None),
+        "model.losses.teacher_distill.checkpoint",
+    )
+
+    if teacher_distill_warmup < 0:
+        raise ValueError("model.losses.teacher_distill.warmup must be >= 0.")
+    if teacher_distill_duration < 0:
+        raise ValueError("model.losses.teacher_distill.duration must be >= 0.")
+    if teacher_distill_stop_epoch is not None and teacher_distill_stop_epoch < 1:
+        raise ValueError("model.losses.teacher_distill.stop_epoch must be >= 1 when set.")
+    if teacher_distill_target_w < 0:
+        raise ValueError("model.losses.teacher_distill.weight must be >= 0.")
+
+    activation_gate_cfg = losses_cfg.get("activation_gate", {})
+    if activation_gate_cfg is None:
+        activation_gate_cfg = {}
+    if not isinstance(activation_gate_cfg, dict):
+        raise TypeError("model.losses.activation_gate must be a mapping.")
+    ei_gate = _parse_loss_gate(activation_gate_cfg.get("ei", {}), "ei")
+    rebin_gate = _parse_loss_gate(activation_gate_cfg.get("rebin", {}), "rebin")
+
     save_interval = config["training"]["save_interval"]
     plot_interval = config["training"]["plot_interval"]
 
@@ -750,6 +1031,38 @@ def main():
         # For non-LSFP architectures (e.g., Mamba), adjoint loss is disabled by design.
         # This is architecture-driven and not configurable.
         adj_loss_weight = 0.0
+
+    progressive_unfreeze_cfg = config.get("training", {}).get("progressive_unfreezing", {})
+    if progressive_unfreeze_cfg is None:
+        progressive_unfreeze_cfg = {}
+    if not isinstance(progressive_unfreeze_cfg, dict):
+        raise TypeError("training.progressive_unfreezing must be a mapping.")
+    progressive_unfreeze_enable = bool(progressive_unfreeze_cfg.get("enable", False))
+    progressive_freeze_epochs = int(progressive_unfreeze_cfg.get("freeze_epochs", 0))
+    if progressive_freeze_epochs < 0:
+        raise ValueError("training.progressive_unfreezing.freeze_epochs must be >= 0.")
+    progressive_patterns_raw = progressive_unfreeze_cfg.get("keep_trainable_patterns", None)
+    if progressive_patterns_raw is None:
+        progressive_patterns = []
+    elif isinstance(progressive_patterns_raw, (list, tuple)):
+        progressive_patterns = [str(v) for v in progressive_patterns_raw if str(v).strip()]
+    else:
+        raise TypeError("training.progressive_unfreezing.keep_trainable_patterns must be a list of strings.")
+    if progressive_unfreeze_enable and not progressive_patterns:
+        if model_type_is_temporal_mamba:
+            progressive_patterns = [
+                "mapping_network",
+                "condition_to_film",
+                "backbone_net.recon_net.patch_embed",
+                "backbone_net.recon_net.norm",
+                "backbone_net.recon_net.dc_layers",
+                "backbone_net.recon_net.last_dc",
+            ]
+        else:
+            raise ValueError(
+                "training.progressive_unfreezing.keep_trainable_patterns is required when "
+                "training.progressive_unfreezing.enable=true for non-temporal-mamba models."
+            )
 
     H, W = config["data"]["height"], config["data"]["width"]
     N_time, N_samples, N_coils = (
@@ -796,6 +1109,28 @@ def main():
         deterministic_val_ei_seed = int(deterministic_val_ei_seed)
     except (TypeError, ValueError):
         deterministic_val_ei_seed = 0
+    raw_dyn_dce_cfg = eval_cfg.get("non_dro_dynamic_dce", {})
+    if not isinstance(raw_dyn_dce_cfg, dict):
+        raw_dyn_dce_cfg = {}
+    raw_dyn_dce_enabled = bool(raw_dyn_dce_cfg.get("enable", True))
+    raw_dyn_dce_reference = str(raw_dyn_dce_cfg.get("reference", "grasp"))
+    try:
+        raw_dyn_dce_top_fraction = float(raw_dyn_dce_cfg.get("top_fraction", 0.02))
+    except (TypeError, ValueError):
+        raw_dyn_dce_top_fraction = 0.02
+    raw_dyn_dce_top_fraction = min(max(raw_dyn_dce_top_fraction, 0.0), 1.0)
+    try:
+        raw_dyn_dce_weight_power = float(raw_dyn_dce_cfg.get("weight_power", 1.0))
+    except (TypeError, ValueError):
+        raw_dyn_dce_weight_power = 1.0
+    if not np.isfinite(raw_dyn_dce_weight_power) or raw_dyn_dce_weight_power <= 0.0:
+        raw_dyn_dce_weight_power = 1.0
+    try:
+        raw_dc_psnr_peak = float(eval_cfg.get("raw_dc_psnr_peak", 1.0))
+    except (TypeError, ValueError):
+        raw_dc_psnr_peak = 1.0
+    if not np.isfinite(raw_dc_psnr_peak) or raw_dc_psnr_peak <= 0.0:
+        raw_dc_psnr_peak = 1.0
 
     cluster = config["experiment"].get("cluster", "Randi")
 
@@ -1152,6 +1487,20 @@ def main():
         model_for_ei = model.module
         if global_rank == 0:
             print("[EI] Using model.module for temporal Mamba EI forward under DDP.")
+    model_for_trainability = model.module if isinstance(model, DDP) else model
+    progressive_unfreeze_phase = "full"
+    logically_frozen_param_refs = []
+    logical_trainable_param_refs_for_gradnorm = []
+    if progressive_unfreeze_enable and (global_rank == 0 or not config['training']['multigpu']):
+        print(
+            "[Unfreeze] Progressive unfreezing enabled: "
+            f"freeze_epochs={progressive_freeze_epochs}, "
+            f"trainable_pattern_count={len(progressive_patterns)} "
+            "(logical freeze: gradients masked before optimizer step)"
+        )
+        preview_patterns = ", ".join(progressive_patterns[:6])
+        if preview_patterns:
+            print(f"[Unfreeze] Trainable patterns during freeze: {preview_patterns}")
     ei_gradnorm_params = []
     if use_ei_loss and ei_gradnorm_transition_enable:
         ei_gradnorm_params = [p for p in model_for_ei.parameters() if p.requires_grad]
@@ -1258,12 +1607,29 @@ def main():
 
 
     # select metric for loss functions
-    if config['model']['losses']['mc_loss']['metric'] == "MSE":
+    mc_cfg = config["model"]["losses"]["mc_loss"]
+    mc_metric_name = str(mc_cfg.get("metric", "MSE")).strip().upper()
+    if mc_metric_name == "MSE":
         mc_loss_fn = MCLoss(model_type=model_type)
-    elif config['model']['losses']['mc_loss']['metric'] == "MAE":
+    elif mc_metric_name == "MAE":
         mc_loss_fn = MCLoss(model_type=model_type, metric=torch.nn.L1Loss())
+    elif mc_metric_name in {"MIXED", "MAE_MSE_MIX", "MIXED_MAE_MSE"}:
+        mae_weight = float(mc_cfg.get("mae_weight", 1.0))
+        mse_weight = float(mc_cfg.get("mse_weight", 0.02))
+        mc_loss_fn = MCLoss(
+            model_type=model_type,
+            metric=WeightedMAEMSELoss(mae_weight=mae_weight, mse_weight=mse_weight),
+        )
+        if global_rank == 0 or not config['training']['multigpu']:
+            print(
+                "[MC] Using mixed MAE+MSE metric with "
+                f"mae_weight={mae_weight}, mse_weight={mse_weight}."
+            )
     else:
-        raise(ValueError, "Unsupported MC Loss Metric.")
+        raise ValueError(
+            f"Unsupported MC Loss Metric '{mc_metric_name}'. "
+            "Expected one of: MSE, MAE, MIXED."
+        )
 
 
     ei_metric_name = str(ei_cfg.get("metric", "MSE")).strip().upper()
@@ -1328,6 +1694,65 @@ def main():
             )
     else:
         rebin_loss_fn = None
+
+    if use_teacher_distill:
+        teacher_distill_metric, teacher_distill_metric_name = _build_pointwise_metric(
+            teacher_distill_metric_name,
+            "model.losses.teacher_distill",
+        )
+        teacher_checkpoint_path = teacher_distill_checkpoint or init_checkpoint
+        if teacher_checkpoint_path is None:
+            raise ValueError(
+                "Teacher distillation is enabled but no checkpoint was provided. "
+                "Set model.losses.teacher_distill.checkpoint or experiment.init_checkpoint."
+            )
+        if not os.path.isfile(teacher_checkpoint_path):
+            raise FileNotFoundError(
+                f"Teacher distillation checkpoint not found: {teacher_checkpoint_path}"
+            )
+
+        teacher_model_cfg = deepcopy(config)
+        teacher_model = build_recon_model(teacher_model_cfg, device=device, block_dir=block_dir)
+        teacher_model, teacher_preload_info = load_pretrained_weights(
+            teacher_model,
+            teacher_checkpoint_path,
+        )
+        if int(teacher_preload_info.get("loaded_keys", 0)) <= 0:
+            raise RuntimeError(
+                "Teacher distillation checkpoint loaded zero parameters. "
+                f"checkpoint={teacher_checkpoint_path}"
+            )
+        teacher_model.eval()
+        for teacher_param in teacher_model.parameters():
+            teacher_param.requires_grad_(False)
+        if global_rank == 0 or not config['training']['multigpu']:
+            print(
+                "[TeacherDistill] "
+                f"checkpoint={teacher_checkpoint_path}, metric={teacher_distill_metric_name}, "
+                f"temporal_mode={teacher_distill_temporal_mode}, target_weight={teacher_distill_target_w}, "
+                f"warmup={teacher_distill_warmup}, duration={teacher_distill_duration}, "
+                f"stop_epoch={teacher_distill_stop_epoch}"
+            )
+            print(
+                "[TeacherDistill] Preload summary: "
+                f"loaded={teacher_preload_info.get('loaded_keys')}, "
+                f"skipped={teacher_preload_info.get('skipped_keys')}, "
+                f"missing={teacher_preload_info.get('missing_keys')}, "
+                f"unexpected={teacher_preload_info.get('unexpected_keys')}"
+            )
+    else:
+        teacher_model = None
+        teacher_distill_metric = None
+        teacher_distill_metric_name = None
+        teacher_checkpoint_path = None
+
+    if use_ei_loss and ei_gate.get("enable", False) and ei_gradnorm_transition_enable:
+        ei_gradnorm_transition_enable = False
+        if global_rank == 0 or not config['training']['multigpu']:
+            print(
+                "[EI] GradNorm transition disabled because activation_gate.ei is enabled. "
+                "Gate-delayed schedules require post-trigger calibration, which is not yet implemented."
+            )
 
     if not use_ei_loss:
         ei_gradnorm_transition_enable = False
@@ -1640,14 +2065,28 @@ def main():
         weighted_train_adj_losses = train_curves["weighted_train_adj_losses"]
         train_rebin_losses = train_curves.get("train_rebin_losses", [])
         weighted_train_rebin_losses = train_curves.get("weighted_train_rebin_losses", [])
+        train_teacher_distill_losses = train_curves.get("train_teacher_distill_losses", [])
+        weighted_train_teacher_distill_losses = train_curves.get("weighted_train_teacher_distill_losses", [])
         lr_history = train_curves.get("lr_history", [])
         lr_epochs = train_curves.get("lr_epochs", [])
         ei_weight_history = train_curves.get("ei_weight_history", [])
         ei_weight_epochs = train_curves.get("ei_weight_epochs", [])
+        teacher_distill_weight_history = train_curves.get("teacher_distill_weight_history", [])
+        teacher_distill_weight_epochs = train_curves.get("teacher_distill_weight_epochs", [])
         ei_gradnorm_ratio_history = train_curves.get("ei_gradnorm_ratio_history", [])
         ei_gradnorm_ratio_epochs = train_curves.get("ei_gradnorm_ratio_epochs", [])
         rebin_weight_history = train_curves.get("rebin_weight_history", [])
         rebin_weight_epochs = train_curves.get("rebin_weight_epochs", [])
+        saved_ei_gate = train_curves.get("ei_gate_state", None)
+        if isinstance(saved_ei_gate, dict):
+            ei_gate["triggered"] = bool(saved_ei_gate.get("triggered", ei_gate.get("triggered", False)))
+            ei_gate["trigger_epoch"] = saved_ei_gate.get("trigger_epoch", ei_gate.get("trigger_epoch", None))
+            ei_gate["satisfied_streak"] = int(saved_ei_gate.get("satisfied_streak", ei_gate.get("satisfied_streak", 0)))
+        saved_rebin_gate = train_curves.get("rebin_gate_state", None)
+        if isinstance(saved_rebin_gate, dict):
+            rebin_gate["triggered"] = bool(saved_rebin_gate.get("triggered", rebin_gate.get("triggered", False)))
+            rebin_gate["trigger_epoch"] = saved_rebin_gate.get("trigger_epoch", rebin_gate.get("trigger_epoch", None))
+            rebin_gate["satisfied_streak"] = int(saved_rebin_gate.get("satisfied_streak", rebin_gate.get("satisfied_streak", 0)))
         ei_gradnorm_ratio_ema = train_curves.get("ei_gradnorm_ratio_ema", None)
         if ei_gradnorm_ratio_ema is not None:
             ei_gradnorm_ratio_ema = float(ei_gradnorm_ratio_ema)
@@ -1663,20 +2102,42 @@ def main():
         eval_dc_maes = eval_curves["eval_dc_maes"]
         eval_raw_dc_mses = eval_curves.get("eval_raw_dc_mses", [])
         eval_raw_dc_maes = eval_curves.get("eval_raw_dc_maes", [])
+        eval_raw_dc_rel_l2s = eval_curves.get("eval_raw_dc_rel_l2s", [])
+        eval_raw_dc_rel_l2_lows = eval_curves.get("eval_raw_dc_rel_l2_lows", [])
+        eval_raw_dc_rel_l2_mids = eval_curves.get("eval_raw_dc_rel_l2_mids", [])
+        eval_raw_dc_rel_l2_highs = eval_curves.get("eval_raw_dc_rel_l2_highs", [])
+        eval_raw_dyn_dce_maes = eval_curves.get("eval_raw_dyn_dce_maes", [])
+        eval_raw_dyn_dce_mses = eval_curves.get("eval_raw_dyn_dce_mses", [])
         eval_curve_corrs = eval_curves["eval_curve_corrs"]
         eval_temporal_epochs = eval_curves.get("eval_temporal_epochs", [])
+        eval_rho_fulls = eval_curves.get("eval_rho_fulls", [])
         eval_curve_maes = eval_curves.get("eval_curve_maes", [])
+        eval_early_corrs = eval_curves.get("eval_early_corrs", [])
+        eval_early_maes = eval_curves.get("eval_early_maes", [])
         eval_ttae_secs = eval_curves.get("eval_ttae_secs", [])
+        eval_washin_maes = eval_curves.get("eval_washin_maes", [])
         eval_iauc10_errs = eval_curves.get("eval_iauc10_errs", [])
         eval_peak_errs = eval_curves.get("eval_peak_errs", [])
+        eval_ttpeak_err_secs = eval_curves.get("eval_ttpeak_err_secs", [])
         eval_dl_dc_mae_bestfits = eval_curves.get("eval_dl_dc_mae_bestfits", [])
         eval_raw_ssdu_nmses = eval_curves.get("eval_raw_ssdu_nmses", [])
+        avg_grasp_rho_full = eval_curves.get("avg_grasp_rho_full", float("nan"))
         avg_grasp_curve_mae = eval_curves.get("avg_grasp_curve_mae", float("nan"))
+        avg_grasp_early_corr = eval_curves.get("avg_grasp_early_corr", float("nan"))
+        avg_grasp_early_mae = eval_curves.get("avg_grasp_early_mae", float("nan"))
         avg_grasp_ttae_sec = eval_curves.get("avg_grasp_ttae_sec", float("nan"))
+        avg_grasp_washin_mae = eval_curves.get("avg_grasp_washin_mae", float("nan"))
         avg_grasp_iauc10_err = eval_curves.get("avg_grasp_iauc10_err", float("nan"))
         avg_grasp_peak_err = eval_curves.get("avg_grasp_peak_err", float("nan"))
+        avg_grasp_ttpeak_err_sec = eval_curves.get("avg_grasp_ttpeak_err_sec", float("nan"))
         avg_grasp_dc_mae_bestfit = eval_curves.get("avg_grasp_dc_mae_bestfit", float("nan"))
         avg_grasp_raw_ssdu_nmse = eval_curves.get("avg_grasp_raw_ssdu_nmse", float("nan"))
+        avg_grasp_raw_dc_rel_l2 = eval_curves.get("avg_grasp_raw_dc_rel_l2", float("nan"))
+        avg_grasp_raw_dc_rel_l2_low = eval_curves.get("avg_grasp_raw_dc_rel_l2_low", float("nan"))
+        avg_grasp_raw_dc_rel_l2_mid = eval_curves.get("avg_grasp_raw_dc_rel_l2_mid", float("nan"))
+        avg_grasp_raw_dc_rel_l2_high = eval_curves.get("avg_grasp_raw_dc_rel_l2_high", float("nan"))
+        avg_grasp_raw_dyn_dce_mae = eval_curves.get("avg_grasp_raw_dyn_dce_mae", float("nan"))
+        avg_grasp_raw_dyn_dce_mse = eval_curves.get("avg_grasp_raw_dyn_dce_mse", float("nan"))
     else:
         train_mc_losses = []
         val_mc_losses = []
@@ -1689,10 +2150,14 @@ def main():
         weighted_train_adj_losses = []
         train_rebin_losses = []
         weighted_train_rebin_losses = []
+        train_teacher_distill_losses = []
+        weighted_train_teacher_distill_losses = []
         lr_history = []
         lr_epochs = []
         ei_weight_history = []
         ei_weight_epochs = []
+        teacher_distill_weight_history = []
+        teacher_distill_weight_epochs = []
         ei_gradnorm_ratio_history = []
         ei_gradnorm_ratio_epochs = []
         rebin_weight_history = []
@@ -1710,36 +2175,91 @@ def main():
         eval_dc_maes = []
         eval_raw_dc_mses = []
         eval_raw_dc_maes = []
+        eval_raw_dc_rel_l2s = []
+        eval_raw_dc_rel_l2_lows = []
+        eval_raw_dc_rel_l2_mids = []
+        eval_raw_dc_rel_l2_highs = []
+        eval_raw_dyn_dce_maes = []
+        eval_raw_dyn_dce_mses = []
         eval_curve_corrs = []
         eval_temporal_epochs = []
+        eval_rho_fulls = []
         eval_curve_maes = []
+        eval_early_corrs = []
+        eval_early_maes = []
         eval_ttae_secs = []
+        eval_washin_maes = []
         eval_iauc10_errs = []
         eval_peak_errs = []
+        eval_ttpeak_err_secs = []
         eval_dl_dc_mae_bestfits = []
         eval_raw_ssdu_nmses = []
+        avg_grasp_rho_full = float("nan")
         avg_grasp_curve_mae = float("nan")
+        avg_grasp_early_corr = float("nan")
+        avg_grasp_early_mae = float("nan")
         avg_grasp_ttae_sec = float("nan")
+        avg_grasp_washin_mae = float("nan")
         avg_grasp_iauc10_err = float("nan")
         avg_grasp_peak_err = float("nan")
+        avg_grasp_ttpeak_err_sec = float("nan")
         avg_grasp_dc_mae_bestfit = float("nan")
         avg_grasp_raw_ssdu_nmse = float("nan")
+        avg_grasp_raw_dc_rel_l2 = float("nan")
+        avg_grasp_raw_dc_rel_l2_low = float("nan")
+        avg_grasp_raw_dc_rel_l2_mid = float("nan")
+        avg_grasp_raw_dc_rel_l2_high = float("nan")
+        avg_grasp_raw_dyn_dce_mae = float("nan")
+        avg_grasp_raw_dyn_dce_mse = float("nan")
+
+    if ei_gate.get("enable", False):
+        was_triggered, trigger_epoch = _infer_gate_state_from_history(ei_weight_history, ei_weight_epochs)
+        if was_triggered:
+            ei_gate["triggered"] = True
+            if ei_gate.get("trigger_epoch") is None:
+                ei_gate["trigger_epoch"] = trigger_epoch
+    if rebin_gate.get("enable", False):
+        was_triggered, trigger_epoch = _infer_gate_state_from_history(rebin_weight_history, rebin_weight_epochs)
+        if was_triggered:
+            rebin_gate["triggered"] = True
+            if rebin_gate.get("trigger_epoch") is None:
+                rebin_gate["trigger_epoch"] = trigger_epoch
+
+    if global_rank == 0 or not config['training']['multigpu']:
+        if ei_gate.get("enable", False):
+            print(
+                "[Gate][EI] "
+                f"metric={ei_gate['metric']} {ei_gate['mode']} {ei_gate['threshold']}, "
+                f"min_epoch={ei_gate['min_epoch']}, patience={ei_gate['patience']}, "
+                f"triggered={ei_gate['triggered']}, trigger_epoch={ei_gate['trigger_epoch']}"
+            )
+        if rebin_gate.get("enable", False):
+            print(
+                "[Gate][Rebin] "
+                f"metric={rebin_gate['metric']} {rebin_gate['mode']} {rebin_gate['threshold']}, "
+                f"min_epoch={rebin_gate['min_epoch']}, patience={rebin_gate['patience']}, "
+                f"triggered={rebin_gate['triggered']}, trigger_epoch={rebin_gate['trigger_epoch']}"
+            )
 
 
     eval_spf_curves = {}
     if resume_from_checkpoint:
         eval_spf_curves = eval_curves.get("eval_spf_curves", {})
+    spf_curve_keys = (
+        "epochs",
+        "eval_ssims",
+        "eval_psnrs",
+        "eval_mses",
+        "eval_lpipses",
+        "eval_raw_dc_mses",
+        "eval_raw_dc_maes",
+        "eval_curve_corrs",
+    )
     for spf in low_spf_eval_targets:
-        if spf not in eval_spf_curves:
-            eval_spf_curves[spf] = dict(
-                epochs=[],
-                eval_ssims=[],
-                eval_psnrs=[],
-                eval_mses=[],
-                eval_lpipses=[],
-                eval_raw_dc_maes=[],
-                eval_curve_corrs=[],
-            )
+        if spf not in eval_spf_curves or not isinstance(eval_spf_curves[spf], dict):
+            eval_spf_curves[spf] = {}
+        for key in spf_curve_keys:
+            eval_spf_curves[spf].setdefault(key, [])
 
     best_checkpoint_path = os.path.join(output_dir, f'{exp_name}_best_model.pth')
     best_psnr = -np.inf
@@ -1767,10 +2287,14 @@ def main():
             weighted_train_adj_losses=weighted_train_adj_losses,
             train_rebin_losses=train_rebin_losses,
             weighted_train_rebin_losses=weighted_train_rebin_losses,
+            train_teacher_distill_losses=train_teacher_distill_losses,
+            weighted_train_teacher_distill_losses=weighted_train_teacher_distill_losses,
             lr_history=lr_history,
             lr_epochs=lr_epochs,
             ei_weight_history=ei_weight_history,
             ei_weight_epochs=ei_weight_epochs,
+            teacher_distill_weight_history=teacher_distill_weight_history,
+            teacher_distill_weight_epochs=teacher_distill_weight_epochs,
             ei_gradnorm_ratio_history=ei_gradnorm_ratio_history,
             ei_gradnorm_ratio_epochs=ei_gradnorm_ratio_epochs,
             ei_gradnorm_ratio_ema=ei_gradnorm_ratio_ema,
@@ -1780,6 +2304,8 @@ def main():
             ei_target_weight_effective=ei_target_weight_effective,
             rebin_weight_history=rebin_weight_history,
             rebin_weight_epochs=rebin_weight_epochs,
+            ei_gate_state=ei_gate,
+            rebin_gate_state=rebin_gate,
         )
         val_curves = dict(
             val_mc_losses=val_mc_losses,
@@ -1795,20 +2321,42 @@ def main():
             eval_dc_maes=eval_dc_maes,
             eval_raw_dc_mses=eval_raw_dc_mses,
             eval_raw_dc_maes=eval_raw_dc_maes,
+            eval_raw_dc_rel_l2s=eval_raw_dc_rel_l2s,
+            eval_raw_dc_rel_l2_lows=eval_raw_dc_rel_l2_lows,
+            eval_raw_dc_rel_l2_mids=eval_raw_dc_rel_l2_mids,
+            eval_raw_dc_rel_l2_highs=eval_raw_dc_rel_l2_highs,
+            eval_raw_dyn_dce_maes=eval_raw_dyn_dce_maes,
+            eval_raw_dyn_dce_mses=eval_raw_dyn_dce_mses,
             eval_curve_corrs=eval_curve_corrs,
             eval_temporal_epochs=eval_temporal_epochs,
+            eval_rho_fulls=eval_rho_fulls,
             eval_curve_maes=eval_curve_maes,
+            eval_early_corrs=eval_early_corrs,
+            eval_early_maes=eval_early_maes,
             eval_ttae_secs=eval_ttae_secs,
+            eval_washin_maes=eval_washin_maes,
             eval_iauc10_errs=eval_iauc10_errs,
             eval_peak_errs=eval_peak_errs,
+            eval_ttpeak_err_secs=eval_ttpeak_err_secs,
             eval_dl_dc_mae_bestfits=eval_dl_dc_mae_bestfits,
             eval_raw_ssdu_nmses=eval_raw_ssdu_nmses,
+            avg_grasp_rho_full=avg_grasp_rho_full,
             avg_grasp_curve_mae=avg_grasp_curve_mae,
+            avg_grasp_early_corr=avg_grasp_early_corr,
+            avg_grasp_early_mae=avg_grasp_early_mae,
             avg_grasp_ttae_sec=avg_grasp_ttae_sec,
+            avg_grasp_washin_mae=avg_grasp_washin_mae,
             avg_grasp_iauc10_err=avg_grasp_iauc10_err,
             avg_grasp_peak_err=avg_grasp_peak_err,
+            avg_grasp_ttpeak_err_sec=avg_grasp_ttpeak_err_sec,
             avg_grasp_dc_mae_bestfit=avg_grasp_dc_mae_bestfit,
             avg_grasp_raw_ssdu_nmse=avg_grasp_raw_ssdu_nmse,
+            avg_grasp_raw_dc_rel_l2=avg_grasp_raw_dc_rel_l2,
+            avg_grasp_raw_dc_rel_l2_low=avg_grasp_raw_dc_rel_l2_low,
+            avg_grasp_raw_dc_rel_l2_mid=avg_grasp_raw_dc_rel_l2_mid,
+            avg_grasp_raw_dc_rel_l2_high=avg_grasp_raw_dc_rel_l2_high,
+            avg_grasp_raw_dyn_dce_mae=avg_grasp_raw_dyn_dce_mae,
+            avg_grasp_raw_dyn_dce_mse=avg_grasp_raw_dyn_dce_mse,
             eval_spf_curves=eval_spf_curves,
             best_psnr=best_psnr,
             best_epoch=best_epoch,
@@ -1843,6 +2391,8 @@ def main():
             _register_transition_checkpoint(warmup, "pre_ei_loss")
         if use_rebin_loss and rebin_warmup > 0:
             _register_transition_checkpoint(rebin_warmup, "pre_rebin_loss")
+        if use_teacher_distill and teacher_distill_warmup > 0:
+            _register_transition_checkpoint(teacher_distill_warmup, "pre_teacher_distill")
 
         if global_rank == 0 or not config['training']['multigpu']:
             if loss_transition_checkpoints:
@@ -1870,10 +2420,21 @@ def main():
     grasp_curve_corrs = []
     raw_grasp_dc_mses = []
     raw_grasp_dc_maes = []
+    raw_grasp_dc_rel_l2s = []
+    raw_grasp_dc_rel_l2_lows = []
+    raw_grasp_dc_rel_l2_mids = []
+    raw_grasp_dc_rel_l2_highs = []
+    raw_grasp_dyn_dce_maes = []
+    raw_grasp_dyn_dce_mses = []
     grasp_curve_maes = []
+    grasp_rho_fulls = []
+    grasp_early_corrs = []
+    grasp_early_maes = []
     grasp_ttae_secs = []
+    grasp_washin_maes = []
     grasp_iauc10_errs = []
     grasp_peak_errs = []
+    grasp_ttpeak_err_secs = []
 
     # Defaults so checkpointing works even if Step-0 validation is skipped
     if not resume_from_checkpoint:
@@ -1887,17 +2448,38 @@ def main():
         avg_grasp_raw_dc_mae = 0.0
         avg_grasp_raw_dc_mse = 0.0
         avg_grasp_curve_mae = float("nan")
+        avg_grasp_rho_full = float("nan")
+        avg_grasp_early_corr = float("nan")
+        avg_grasp_early_mae = float("nan")
         avg_grasp_ttae_sec = float("nan")
+        avg_grasp_washin_mae = float("nan")
         avg_grasp_iauc10_err = float("nan")
         avg_grasp_peak_err = float("nan")
+        avg_grasp_ttpeak_err_sec = float("nan")
         avg_grasp_dc_mae_bestfit = float("nan")
         avg_grasp_raw_ssdu_nmse = float("nan")
+        avg_grasp_raw_dc_rel_l2 = float("nan")
+        avg_grasp_raw_dc_rel_l2_low = float("nan")
+        avg_grasp_raw_dc_rel_l2_mid = float("nan")
+        avg_grasp_raw_dc_rel_l2_high = float("nan")
 
     def _mean_or_nan(values):
         return float(np.mean(values)) if values else float("nan")
 
     def _std_or_zero(values):
         return float(np.std(values)) if values else 0.0
+
+    def _mse_to_psnr(mse_value, peak=1.0):
+        try:
+            mse_f = float(mse_value)
+            peak_f = float(peak)
+        except (TypeError, ValueError):
+            return float("nan")
+        if not np.isfinite(mse_f) or not np.isfinite(peak_f):
+            return float("nan")
+        if mse_f <= 0.0 or peak_f <= 0.0:
+            return float("nan")
+        return float(20.0 * np.log10(peak_f) - 10.0 * np.log10(mse_f))
 
     def _grasp_baseline_ready():
         required = (
@@ -1951,10 +2533,21 @@ def main():
         initial_eval_curve_corrs = []
         initial_eval_raw_dc_mses = []
         initial_eval_raw_dc_maes = []
+        initial_eval_raw_dc_rel_l2s = []
+        initial_eval_raw_dc_rel_l2_lows = []
+        initial_eval_raw_dc_rel_l2_mids = []
+        initial_eval_raw_dc_rel_l2_highs = []
+        initial_eval_raw_dyn_dce_maes = []
+        initial_eval_raw_dyn_dce_mses = []
+        initial_eval_rho_fulls = []
         initial_eval_curve_maes = []
+        initial_eval_early_corrs = []
+        initial_eval_early_maes = []
         initial_eval_ttae_secs = []
+        initial_eval_washin_maes = []
         initial_eval_iauc10_errs = []
         initial_eval_peak_errs = []
+        initial_eval_ttpeak_err_secs = []
         initial_eval_dl_dc_mae_bestfits = []
         initial_eval_raw_ssdu_nmses = []
 
@@ -2210,38 +2803,78 @@ def main():
                             initial_eval_curve_corrs.append(recon_corr)
                             grasp_curve_corrs.append(grasp_corr)
                         if temporal_metrics:
+                            rho_full = temporal_metrics.get("dl_all_curve_corr")
                             curve_mae = temporal_metrics.get("dl_all_curve_mae")
+                            early_corr = temporal_metrics.get("dl_all_early_corr")
+                            early_mae = temporal_metrics.get("dl_all_early_mae")
                             ttae_sec = temporal_metrics.get("dl_all_ttae_sec")
+                            washin_mae = temporal_metrics.get("dl_all_wash_in_slope_err")
                             iauc10_err = temporal_metrics.get("dl_all_iauc10_err")
                             peak_err = temporal_metrics.get("dl_all_peak_err")
+                            ttpeak_err_sec = temporal_metrics.get("dl_all_ttpeak_err_sec")
+                            grasp_rho_full = temporal_metrics.get("grasp_all_curve_corr")
                             grasp_curve_mae = temporal_metrics.get("grasp_all_curve_mae")
+                            grasp_early_corr = temporal_metrics.get("grasp_all_early_corr")
+                            grasp_early_mae = temporal_metrics.get("grasp_all_early_mae")
                             grasp_ttae_sec = temporal_metrics.get("grasp_all_ttae_sec")
+                            grasp_washin_mae = temporal_metrics.get("grasp_all_wash_in_slope_err")
                             grasp_iauc10_err = temporal_metrics.get("grasp_all_iauc10_err")
                             grasp_peak_err = temporal_metrics.get("grasp_all_peak_err")
+                            grasp_ttpeak_err_sec = temporal_metrics.get("grasp_all_ttpeak_err_sec")
                             dl_dc_mae_bestfit = temporal_metrics.get("dl_dc_mae_bestfit")
+                            if rho_full is not None and np.isfinite(rho_full):
+                                initial_eval_rho_fulls.append(rho_full)
                             if curve_mae is not None and np.isfinite(curve_mae):
                                 initial_eval_curve_maes.append(curve_mae)
+                            if early_corr is not None and np.isfinite(early_corr):
+                                initial_eval_early_corrs.append(early_corr)
+                            if early_mae is not None and np.isfinite(early_mae):
+                                initial_eval_early_maes.append(early_mae)
                             if ttae_sec is not None and np.isfinite(ttae_sec):
                                 initial_eval_ttae_secs.append(ttae_sec)
+                            if washin_mae is not None and np.isfinite(washin_mae):
+                                initial_eval_washin_maes.append(washin_mae)
                             if iauc10_err is not None and np.isfinite(iauc10_err):
                                 initial_eval_iauc10_errs.append(iauc10_err)
                             if peak_err is not None and np.isfinite(peak_err):
                                 initial_eval_peak_errs.append(peak_err)
+                            if ttpeak_err_sec is not None and np.isfinite(ttpeak_err_sec):
+                                initial_eval_ttpeak_err_secs.append(ttpeak_err_sec)
+                            if grasp_rho_full is not None and np.isfinite(grasp_rho_full):
+                                grasp_rho_fulls.append(float(grasp_rho_full))
                             if grasp_curve_mae is not None and np.isfinite(grasp_curve_mae):
                                 grasp_curve_maes.append(float(grasp_curve_mae))
+                            if grasp_early_corr is not None and np.isfinite(grasp_early_corr):
+                                grasp_early_corrs.append(float(grasp_early_corr))
+                            if grasp_early_mae is not None and np.isfinite(grasp_early_mae):
+                                grasp_early_maes.append(float(grasp_early_mae))
                             if grasp_ttae_sec is not None and np.isfinite(grasp_ttae_sec):
                                 grasp_ttae_secs.append(float(grasp_ttae_sec))
+                            if grasp_washin_mae is not None and np.isfinite(grasp_washin_mae):
+                                grasp_washin_maes.append(float(grasp_washin_mae))
                             if grasp_iauc10_err is not None and np.isfinite(grasp_iauc10_err):
                                 grasp_iauc10_errs.append(float(grasp_iauc10_err))
                             if grasp_peak_err is not None and np.isfinite(grasp_peak_err):
                                 grasp_peak_errs.append(float(grasp_peak_err))
+                            if grasp_ttpeak_err_sec is not None and np.isfinite(grasp_ttpeak_err_sec):
+                                grasp_ttpeak_err_secs.append(float(grasp_ttpeak_err_sec))
                             if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit):
                                 initial_eval_dl_dc_mae_bestfits.append(float(dl_dc_mae_bestfit))
     
                         # raw k-space eval
                         print("performing non-DRO eval...")
-                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, rescale=config['evaluation']['rescale'], dro_eval=False)
-                        dc_mse_raw, dc_mae_raw, _ = eval_sample(
+                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(
+                            raw_kspace,
+                            raw_csmaps,
+                            ground_truth,
+                            raw_grasp_img,
+                            eval_physics,
+                            device,
+                            eval_dir,
+                            rescale=config['evaluation']['rescale'],
+                            dro_eval=False,
+                        )
+                        dc_mse_raw, dc_mae_raw, raw_temporal_metrics = eval_sample(
                             raw_kspace,
                             raw_csmaps,
                             ground_truth,
@@ -2268,12 +2901,54 @@ def main():
                             arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
                             arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
                             arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
+                            dynamic_dce_enabled=raw_dyn_dce_enabled,
+                            dynamic_dce_top_fraction=raw_dyn_dce_top_fraction,
+                            dynamic_dce_weight_power=raw_dyn_dce_weight_power,
+                            dynamic_dce_reference=raw_dyn_dce_reference,
+                            kspace_readout_samples=_as_int_scalar(N_samples),
                         )
     
                         raw_grasp_dc_mses.append(dc_mse_raw_grasp)
                         raw_grasp_dc_maes.append(dc_mae_raw_grasp)
                         initial_eval_raw_dc_mses.append(dc_mse_raw)
                         initial_eval_raw_dc_maes.append(dc_mae_raw)
+                        if raw_temporal_metrics:
+                            raw_dc_rel_l2 = raw_temporal_metrics.get("dl_raw_dc_rel_l2")
+                            raw_dc_rel_l2_low = raw_temporal_metrics.get("dl_raw_dc_rel_l2_low")
+                            raw_dc_rel_l2_mid = raw_temporal_metrics.get("dl_raw_dc_rel_l2_mid")
+                            raw_dc_rel_l2_high = raw_temporal_metrics.get("dl_raw_dc_rel_l2_high")
+                            raw_grasp_dc_rel_l2 = raw_temporal_metrics.get("grasp_raw_dc_rel_l2")
+                            raw_grasp_dc_rel_l2_low = raw_temporal_metrics.get("grasp_raw_dc_rel_l2_low")
+                            raw_grasp_dc_rel_l2_mid = raw_temporal_metrics.get("grasp_raw_dc_rel_l2_mid")
+                            raw_grasp_dc_rel_l2_high = raw_temporal_metrics.get("grasp_raw_dc_rel_l2_high")
+                            raw_dyn_dce_mae = raw_temporal_metrics.get("dl_raw_dyn_dce_mae")
+                            raw_dyn_dce_mse = raw_temporal_metrics.get("dl_raw_dyn_dce_mse")
+                            raw_grasp_dyn_dce_mae = raw_temporal_metrics.get("grasp_raw_dyn_dce_mae")
+                            raw_grasp_dyn_dce_mse = raw_temporal_metrics.get("grasp_raw_dyn_dce_mse")
+                            if raw_dc_rel_l2 is not None and np.isfinite(raw_dc_rel_l2):
+                                initial_eval_raw_dc_rel_l2s.append(float(raw_dc_rel_l2))
+                            if raw_dc_rel_l2_low is not None and np.isfinite(raw_dc_rel_l2_low):
+                                initial_eval_raw_dc_rel_l2_lows.append(float(raw_dc_rel_l2_low))
+                            if raw_dc_rel_l2_mid is not None and np.isfinite(raw_dc_rel_l2_mid):
+                                initial_eval_raw_dc_rel_l2_mids.append(float(raw_dc_rel_l2_mid))
+                            if raw_dc_rel_l2_high is not None and np.isfinite(raw_dc_rel_l2_high):
+                                initial_eval_raw_dc_rel_l2_highs.append(float(raw_dc_rel_l2_high))
+                            if raw_grasp_dc_rel_l2 is not None and np.isfinite(raw_grasp_dc_rel_l2):
+                                raw_grasp_dc_rel_l2s.append(float(raw_grasp_dc_rel_l2))
+                            if raw_grasp_dc_rel_l2_low is not None and np.isfinite(raw_grasp_dc_rel_l2_low):
+                                raw_grasp_dc_rel_l2_lows.append(float(raw_grasp_dc_rel_l2_low))
+                            if raw_grasp_dc_rel_l2_mid is not None and np.isfinite(raw_grasp_dc_rel_l2_mid):
+                                raw_grasp_dc_rel_l2_mids.append(float(raw_grasp_dc_rel_l2_mid))
+                            if raw_grasp_dc_rel_l2_high is not None and np.isfinite(raw_grasp_dc_rel_l2_high):
+                                raw_grasp_dc_rel_l2_highs.append(float(raw_grasp_dc_rel_l2_high))
+                            if raw_dyn_dce_mae is not None and np.isfinite(raw_dyn_dce_mae):
+                                initial_eval_raw_dyn_dce_maes.append(float(raw_dyn_dce_mae))
+                            if raw_dyn_dce_mse is not None and np.isfinite(raw_dyn_dce_mse):
+                                initial_eval_raw_dyn_dce_mses.append(float(raw_dyn_dce_mse))
+                            if raw_grasp_dyn_dce_mae is not None and np.isfinite(raw_grasp_dyn_dce_mae):
+                                raw_grasp_dyn_dce_maes.append(float(raw_grasp_dyn_dce_mae))
+                            if raw_grasp_dyn_dce_mse is not None and np.isfinite(raw_grasp_dyn_dce_mse):
+                                raw_grasp_dyn_dce_mses.append(float(raw_grasp_dyn_dce_mse))
                         if compute_ssdu_eval:
                             ssdu_chunk_size = eval_chunk_size if step0_use_sliding_window else None
                             ssdu_result = compute_ssdu_kspace_nmse(
@@ -2335,10 +3010,39 @@ def main():
                 initial_eval_curve_corr = np.mean(initial_eval_curve_corrs)
                 initial_eval_raw_dc_mse = np.mean(initial_eval_raw_dc_mses)
                 initial_eval_raw_dc_mae = np.mean(initial_eval_raw_dc_maes)
+                initial_eval_raw_dc_psnr = _mse_to_psnr(
+                    initial_eval_raw_dc_mse,
+                    peak=raw_dc_psnr_peak,
+                )
+                initial_eval_raw_dc_rel_l2 = (
+                    np.mean(initial_eval_raw_dc_rel_l2s) if initial_eval_raw_dc_rel_l2s else np.nan
+                )
+                initial_eval_raw_dc_rel_l2_low = (
+                    np.mean(initial_eval_raw_dc_rel_l2_lows) if initial_eval_raw_dc_rel_l2_lows else np.nan
+                )
+                initial_eval_raw_dc_rel_l2_mid = (
+                    np.mean(initial_eval_raw_dc_rel_l2_mids) if initial_eval_raw_dc_rel_l2_mids else np.nan
+                )
+                initial_eval_raw_dc_rel_l2_high = (
+                    np.mean(initial_eval_raw_dc_rel_l2_highs) if initial_eval_raw_dc_rel_l2_highs else np.nan
+                )
+                initial_eval_raw_dyn_dce_mae = (
+                    np.mean(initial_eval_raw_dyn_dce_maes) if initial_eval_raw_dyn_dce_maes else np.nan
+                )
+                initial_eval_raw_dyn_dce_mse = (
+                    np.mean(initial_eval_raw_dyn_dce_mses) if initial_eval_raw_dyn_dce_mses else np.nan
+                )
+                initial_eval_rho_full = np.mean(initial_eval_rho_fulls) if initial_eval_rho_fulls else np.nan
                 initial_eval_curve_mae = np.mean(initial_eval_curve_maes) if initial_eval_curve_maes else np.nan
+                initial_eval_early_corr = np.mean(initial_eval_early_corrs) if initial_eval_early_corrs else np.nan
+                initial_eval_early_mae = np.mean(initial_eval_early_maes) if initial_eval_early_maes else np.nan
                 initial_eval_ttae_sec = np.mean(initial_eval_ttae_secs) if initial_eval_ttae_secs else np.nan
+                initial_eval_washin_mae = np.mean(initial_eval_washin_maes) if initial_eval_washin_maes else np.nan
                 initial_eval_iauc10_err = np.mean(initial_eval_iauc10_errs) if initial_eval_iauc10_errs else np.nan
                 initial_eval_peak_err = np.mean(initial_eval_peak_errs) if initial_eval_peak_errs else np.nan
+                initial_eval_ttpeak_err_sec = (
+                    np.mean(initial_eval_ttpeak_err_secs) if initial_eval_ttpeak_err_secs else np.nan
+                )
                 initial_eval_dl_dc_mae_bestfit = (
                     np.mean(initial_eval_dl_dc_mae_bestfits) if initial_eval_dl_dc_mae_bestfits else np.nan
                 )
@@ -2354,12 +3058,23 @@ def main():
                 eval_dc_maes.append(initial_eval_dc_mae) 
                 eval_raw_dc_mses.append(initial_eval_raw_dc_mse) 
                 eval_raw_dc_maes.append(initial_eval_raw_dc_mae) 
+                eval_raw_dc_rel_l2s.append(initial_eval_raw_dc_rel_l2)
+                eval_raw_dc_rel_l2_lows.append(initial_eval_raw_dc_rel_l2_low)
+                eval_raw_dc_rel_l2_mids.append(initial_eval_raw_dc_rel_l2_mid)
+                eval_raw_dc_rel_l2_highs.append(initial_eval_raw_dc_rel_l2_high)
+                eval_raw_dyn_dce_maes.append(initial_eval_raw_dyn_dce_mae)
+                eval_raw_dyn_dce_mses.append(initial_eval_raw_dyn_dce_mse)
                 eval_curve_corrs.append(initial_eval_curve_corr)
                 eval_temporal_epochs.append(0)
+                eval_rho_fulls.append(initial_eval_rho_full)
                 eval_curve_maes.append(initial_eval_curve_mae)
+                eval_early_corrs.append(initial_eval_early_corr)
+                eval_early_maes.append(initial_eval_early_mae)
                 eval_ttae_secs.append(initial_eval_ttae_sec)
+                eval_washin_maes.append(initial_eval_washin_mae)
                 eval_iauc10_errs.append(initial_eval_iauc10_err)
                 eval_peak_errs.append(initial_eval_peak_err)
+                eval_ttpeak_err_secs.append(initial_eval_ttpeak_err_sec)
                 eval_dl_dc_mae_bestfits.append(initial_eval_dl_dc_mae_bestfit)
                 eval_raw_ssdu_nmses.append(initial_eval_raw_ssdu_nmse)
 
@@ -2370,6 +3085,7 @@ def main():
                     eval_spf_curves[spf_key]["eval_psnrs"].append(initial_eval_psnr)
                     eval_spf_curves[spf_key]["eval_mses"].append(initial_eval_mse)
                     eval_spf_curves[spf_key]["eval_lpipses"].append(initial_eval_lpips)
+                    eval_spf_curves[spf_key]["eval_raw_dc_mses"].append(initial_eval_raw_dc_mse)
                     eval_spf_curves[spf_key]["eval_raw_dc_maes"].append(initial_eval_raw_dc_mae)
                     eval_spf_curves[spf_key]["eval_curve_corrs"].append(initial_eval_curve_corr)
 
@@ -2382,15 +3098,39 @@ def main():
                     writer.add_scalar('Metric/DC_MAE', initial_eval_dc_mae, 0)
                     writer.add_scalar('Metric/RAW_DC_MSE', initial_eval_raw_dc_mse, 0)
                     writer.add_scalar('Metric/RAW_DC_MAE', initial_eval_raw_dc_mae, 0)
+                    if np.isfinite(initial_eval_raw_dc_psnr):
+                        writer.add_scalar('Metric/RAW_DC_PSNR', initial_eval_raw_dc_psnr, 0)
+                    if np.isfinite(initial_eval_raw_dc_rel_l2):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2', initial_eval_raw_dc_rel_l2, 0)
+                    if np.isfinite(initial_eval_raw_dc_rel_l2_low):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2_LOW', initial_eval_raw_dc_rel_l2_low, 0)
+                    if np.isfinite(initial_eval_raw_dc_rel_l2_mid):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2_MID', initial_eval_raw_dc_rel_l2_mid, 0)
+                    if np.isfinite(initial_eval_raw_dc_rel_l2_high):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2_HIGH', initial_eval_raw_dc_rel_l2_high, 0)
+                    if np.isfinite(initial_eval_raw_dyn_dce_mae):
+                        writer.add_scalar('Metric/RAW_DYN_DCE_MAE', initial_eval_raw_dyn_dce_mae, 0)
+                    if np.isfinite(initial_eval_raw_dyn_dce_mse):
+                        writer.add_scalar('Metric/RAW_DYN_DCE_MSE', initial_eval_raw_dyn_dce_mse, 0)
                     writer.add_scalar('Metric/EC_Corr', initial_eval_curve_corr, 0)
+                    if np.isfinite(initial_eval_rho_full):
+                        writer.add_scalar('Metric/Temporal_Rho_full', initial_eval_rho_full, 0)
                     if np.isfinite(initial_eval_curve_mae):
                         writer.add_scalar('Metric/Temporal_Curve_MAE', initial_eval_curve_mae, 0)
+                    if np.isfinite(initial_eval_early_corr):
+                        writer.add_scalar('Metric/Temporal_Rho_early', initial_eval_early_corr, 0)
+                    if np.isfinite(initial_eval_early_mae):
+                        writer.add_scalar('Metric/Temporal_Early_MAE', initial_eval_early_mae, 0)
                     if np.isfinite(initial_eval_ttae_sec):
                         writer.add_scalar('Metric/Temporal_TTAE_sec', initial_eval_ttae_sec, 0)
+                    if np.isfinite(initial_eval_washin_mae):
+                        writer.add_scalar('Metric/Temporal_Washin_MAE', initial_eval_washin_mae, 0)
                     if np.isfinite(initial_eval_iauc10_err):
                         writer.add_scalar('Metric/Temporal_IAUC10_err', initial_eval_iauc10_err, 0)
                     if np.isfinite(initial_eval_peak_err):
                         writer.add_scalar('Metric/Temporal_Peak_err', initial_eval_peak_err, 0)
+                    if np.isfinite(initial_eval_ttpeak_err_sec):
+                        writer.add_scalar('Metric/Temporal_TTPeak_err_sec', initial_eval_ttpeak_err_sec, 0)
                     if np.isfinite(initial_eval_dl_dc_mae_bestfit):
                         writer.add_scalar('Metric/DL_DC_MAE_BESTFIT', initial_eval_dl_dc_mae_bestfit, 0)
                     if np.isfinite(initial_eval_raw_ssdu_nmse):
@@ -2423,14 +3163,25 @@ def main():
             avg_grasp_curve_corr = np.mean(grasp_curve_corrs)
             avg_grasp_raw_dc_mae = np.mean(raw_grasp_dc_maes)
             avg_grasp_raw_dc_mse = np.mean(raw_grasp_dc_mses)
+            avg_grasp_raw_dc_rel_l2 = _mean_or_nan(raw_grasp_dc_rel_l2s)
+            avg_grasp_raw_dc_rel_l2_low = _mean_or_nan(raw_grasp_dc_rel_l2_lows)
+            avg_grasp_raw_dc_rel_l2_mid = _mean_or_nan(raw_grasp_dc_rel_l2_mids)
+            avg_grasp_raw_dc_rel_l2_high = _mean_or_nan(raw_grasp_dc_rel_l2_highs)
+            avg_grasp_rho_full = _mean_or_nan(grasp_rho_fulls)
             avg_grasp_curve_mae = _mean_or_nan(grasp_curve_maes)
+            avg_grasp_early_corr = _mean_or_nan(grasp_early_corrs)
+            avg_grasp_early_mae = _mean_or_nan(grasp_early_maes)
             avg_grasp_ttae_sec = _mean_or_nan(grasp_ttae_secs)
+            avg_grasp_washin_mae = _mean_or_nan(grasp_washin_maes)
             avg_grasp_iauc10_err = _mean_or_nan(grasp_iauc10_errs)
             avg_grasp_peak_err = _mean_or_nan(grasp_peak_errs)
+            avg_grasp_ttpeak_err_sec = _mean_or_nan(grasp_ttpeak_err_secs)
             avg_grasp_dc_mae_bestfit = (
                 np.mean(grasp_dc_mae_bestfits) if grasp_dc_mae_bestfits else float("nan")
             )
             avg_grasp_raw_ssdu_nmse = float("nan")
+            avg_grasp_raw_dyn_dce_mae = _mean_or_nan(raw_grasp_dyn_dce_maes)
+            avg_grasp_raw_dyn_dce_mse = _mean_or_nan(raw_grasp_dyn_dce_mses)
 
             if global_rank == 0 or not config['training']['multigpu']:
                 if np.isfinite(initial_eval_psnr) and initial_eval_psnr > best_psnr:
@@ -2495,6 +3246,7 @@ def main():
             running_ei_loss = 0.0
             running_adj_loss = 0.0
             running_rebin_loss = 0.0
+            running_teacher_distill_loss = 0.0
             epoch_eval_ssims = []
             epoch_eval_psnrs = []
             epoch_eval_mses = []
@@ -2504,10 +3256,21 @@ def main():
             epoch_eval_curve_corrs = []
             epoch_eval_raw_dc_mses = []
             epoch_eval_raw_dc_maes = []
+            epoch_eval_raw_dc_rel_l2s = []
+            epoch_eval_raw_dc_rel_l2_lows = []
+            epoch_eval_raw_dc_rel_l2_mids = []
+            epoch_eval_raw_dc_rel_l2_highs = []
+            epoch_eval_raw_dyn_dce_maes = []
+            epoch_eval_raw_dyn_dce_mses = []
+            epoch_eval_rho_fulls = []
             epoch_eval_curve_maes = []
+            epoch_eval_early_corrs = []
+            epoch_eval_early_maes = []
             epoch_eval_ttae_secs = []
+            epoch_eval_washin_maes = []
             epoch_eval_iauc10_errs = []
             epoch_eval_peak_errs = []
+            epoch_eval_ttpeak_err_secs = []
             epoch_eval_dl_dc_mae_bestfits = []
             epoch_eval_raw_ssdu_nmses = []
 
@@ -2536,6 +3299,53 @@ def main():
             lr_epochs.append(epoch)
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('LR', current_lr, epoch)
+
+            if progressive_unfreeze_enable:
+                phase = "frozen" if epoch <= progressive_freeze_epochs else "full"
+                if phase != progressive_unfreeze_phase:
+                    if phase == "frozen":
+                        trainability_info = _logical_trainability_by_patterns(
+                            model_for_trainability,
+                            progressive_patterns,
+                        )
+                        if int(trainability_info["trainable_params"]) <= 0:
+                            raise RuntimeError(
+                                "Progressive unfreezing froze all parameters. "
+                                "Adjust training.progressive_unfreezing.keep_trainable_patterns."
+                            )
+                        if global_rank == 0 or not config['training']['multigpu']:
+                            print(
+                                "[Unfreeze] Entered frozen phase at epoch "
+                                f"{epoch}: trainable_params={trainability_info['trainable_params']:,}/"
+                                f"{trainability_info['total_params']:,}"
+                            )
+                        logically_frozen_param_refs = list(trainability_info["frozen_param_refs"])
+                        logical_trainable_param_refs_for_gradnorm = list(trainability_info["trainable_param_refs"])
+                    else:
+                        trainability_info = _logical_all_trainable(model_for_trainability)
+                        if global_rank == 0 or not config['training']['multigpu']:
+                            print(
+                                "[Unfreeze] Entered full-trainable phase at epoch "
+                                f"{epoch}: trainable_params={trainability_info['trainable_params']:,}/"
+                                f"{trainability_info['total_params']:,}"
+                            )
+                        logically_frozen_param_refs = []
+                        logical_trainable_param_refs_for_gradnorm = list(trainability_info["trainable_param_refs"])
+                    if run_state is not None:
+                        with state_lock:
+                            run_state["trainable_params"] = int(trainability_info["trainable_params"])
+                            run_state["total_params"] = int(trainability_info["total_params"])
+                            _save_run_state(run_state_path, run_state)
+                    progressive_unfreeze_phase = phase
+                if use_ei_loss and ei_gradnorm_transition_enable:
+                    if logical_trainable_param_refs_for_gradnorm:
+                        ei_gradnorm_params = logical_trainable_param_refs_for_gradnorm
+                    else:
+                        ei_gradnorm_params = [p for p in model_for_ei.parameters() if p.requires_grad]
+                    if not ei_gradnorm_params and (global_rank == 0 or not config['training']['multigpu']):
+                        print("[EI] GradNorm transition calibration disabled: no trainable parameters in current phase.")
+                    if not ei_gradnorm_params:
+                        ei_gradnorm_transition_enable = False
 
             train_loader_tqdm = tqdm(
                 train_loader, desc=f"Epoch {epoch}/{epochs}  Training", unit="batch"
@@ -2633,16 +3443,57 @@ def main():
                         )
                 ei_gradnorm_locked = True
 
+            ei_gate_metric_val = None
+            if use_ei_loss and ei_gate.get("enable", False) and not ei_gate.get("triggered", False):
+                if epoch >= int(ei_gate.get("min_epoch", 1)):
+                    ei_gate_metric_val = _resolve_gate_metric_value(
+                        ei_gate.get("metric", "train_mc_loss"),
+                        train_mc_losses=train_mc_losses,
+                        val_mc_losses=val_mc_losses,
+                        train_ei_losses=train_ei_losses,
+                        val_ei_losses=val_ei_losses,
+                        eval_ssims=eval_ssims,
+                        eval_psnrs=eval_psnrs,
+                        eval_curve_corrs=eval_curve_corrs,
+                    )
+                    if ei_gate_metric_val is not None and np.isfinite(ei_gate_metric_val):
+                        if _gate_compare(
+                            float(ei_gate_metric_val),
+                            float(ei_gate["threshold"]),
+                            str(ei_gate["mode"]),
+                        ):
+                            ei_gate["satisfied_streak"] = int(ei_gate.get("satisfied_streak", 0)) + 1
+                        else:
+                            ei_gate["satisfied_streak"] = 0
+                    else:
+                        ei_gate["satisfied_streak"] = 0
+                    if int(ei_gate.get("satisfied_streak", 0)) >= int(ei_gate.get("patience", 1)):
+                        ei_gate["triggered"] = True
+                        ei_gate["trigger_epoch"] = int(epoch)
+                        if global_rank == 0 or not config['training']['multigpu']:
+                            print(
+                                "[Gate][EI] Triggered at epoch "
+                                f"{epoch} using metric={ei_gate['metric']} value={ei_gate_metric_val} "
+                                f"({ei_gate['mode']} {ei_gate['threshold']})."
+                            )
+
             # EI schedule is epoch-wise; compute once per epoch to avoid per-iteration overhead.
             ei_loss_weight = 0.0
             compute_ei_this_epoch = False
             if use_ei_loss:
-                ei_loss_weight = get_cosine_ei_weight(
-                    current_epoch=epoch,
-                    warmup_epochs=warmup,
-                    schedule_duration=duration,
-                    target_weight=ei_target_weight_effective,
-                )
+                if ei_gate.get("enable", False) and not ei_gate.get("triggered", False):
+                    ei_loss_weight = 0.0
+                else:
+                    ei_schedule_epoch = int(epoch)
+                    if ei_gate.get("enable", False):
+                        trigger_epoch = int(ei_gate.get("trigger_epoch") or epoch)
+                        ei_schedule_epoch = int(epoch - trigger_epoch + 1)
+                    ei_loss_weight = get_cosine_ei_weight(
+                        current_epoch=ei_schedule_epoch,
+                        warmup_epochs=warmup,
+                        schedule_duration=duration,
+                        target_weight=ei_target_weight_effective,
+                    )
                 compute_ei_this_epoch = ei_loss_weight > 0.0
             ei_transition_active_epoch = bool(
                 use_ei_loss
@@ -2654,6 +3505,9 @@ def main():
             ei_weight_epochs.append(epoch)
             if (global_rank == 0 or not config['training']['multigpu']) and use_ei_loss:
                 writer.add_scalar("Loss/EI_Target_Weight_Effective", ei_target_weight_effective, epoch)
+                if ei_gate.get("enable", False) and ei_gate_metric_val is not None and np.isfinite(ei_gate_metric_val):
+                    writer.add_scalar("Loss/EI_Gate_Metric", float(ei_gate_metric_val), epoch)
+                writer.add_scalar("Loss/EI_Gate_Triggered", 1.0 if ei_gate.get("triggered", False) else 0.0, epoch)
                 if ei_gradnorm_ratio_ema is not None:
                     writer.add_scalar("Loss/EI_GradNorm_Ratio_EMA_Epoch", ei_gradnorm_ratio_ema, epoch)
 
@@ -2661,16 +3515,76 @@ def main():
             rebin_loss_weight = 0.0
             compute_rebin_this_epoch = False
             if use_rebin_loss:
-                scheduled_rebin_w = get_cosine_ei_weight(
-                    current_epoch=epoch,
-                    warmup_epochs=rebin_warmup,
-                    schedule_duration=rebin_duration,
-                    target_weight=rebin_target_w,
-                )
+                rebin_gate_metric_val = None
+                if rebin_gate.get("enable", False) and not rebin_gate.get("triggered", False):
+                    if epoch >= int(rebin_gate.get("min_epoch", 1)):
+                        rebin_gate_metric_val = _resolve_gate_metric_value(
+                            rebin_gate.get("metric", "train_mc_loss"),
+                            train_mc_losses=train_mc_losses,
+                            val_mc_losses=val_mc_losses,
+                            train_ei_losses=train_ei_losses,
+                            val_ei_losses=val_ei_losses,
+                            eval_ssims=eval_ssims,
+                            eval_psnrs=eval_psnrs,
+                            eval_curve_corrs=eval_curve_corrs,
+                        )
+                        if rebin_gate_metric_val is not None and np.isfinite(rebin_gate_metric_val):
+                            if _gate_compare(
+                                float(rebin_gate_metric_val),
+                                float(rebin_gate["threshold"]),
+                                str(rebin_gate["mode"]),
+                            ):
+                                rebin_gate["satisfied_streak"] = int(rebin_gate.get("satisfied_streak", 0)) + 1
+                            else:
+                                rebin_gate["satisfied_streak"] = 0
+                        else:
+                            rebin_gate["satisfied_streak"] = 0
+                        if int(rebin_gate.get("satisfied_streak", 0)) >= int(rebin_gate.get("patience", 1)):
+                            rebin_gate["triggered"] = True
+                            rebin_gate["trigger_epoch"] = int(epoch)
+                            if global_rank == 0 or not config['training']['multigpu']:
+                                print(
+                                    "[Gate][Rebin] Triggered at epoch "
+                                    f"{epoch} using metric={rebin_gate['metric']} value={rebin_gate_metric_val} "
+                                    f"({rebin_gate['mode']} {rebin_gate['threshold']})."
+                                )
+                if rebin_gate.get("enable", False) and not rebin_gate.get("triggered", False):
+                    scheduled_rebin_w = 0.0
+                else:
+                    rebin_schedule_epoch = int(epoch)
+                    if rebin_gate.get("enable", False):
+                        trigger_epoch = int(rebin_gate.get("trigger_epoch") or epoch)
+                        rebin_schedule_epoch = int(epoch - trigger_epoch + 1)
+                    scheduled_rebin_w = get_cosine_ei_weight(
+                        current_epoch=rebin_schedule_epoch,
+                        warmup_epochs=rebin_warmup,
+                        schedule_duration=rebin_duration,
+                        target_weight=rebin_target_w,
+                    )
                 rebin_loss_weight = scheduled_rebin_w
                 compute_rebin_this_epoch = rebin_loss_weight > 0.0
+                if global_rank == 0 or not config['training']['multigpu']:
+                    if rebin_gate.get("enable", False) and rebin_gate_metric_val is not None and np.isfinite(rebin_gate_metric_val):
+                        writer.add_scalar("Loss/Rebin_Gate_Metric", float(rebin_gate_metric_val), epoch)
+                    writer.add_scalar("Loss/Rebin_Gate_Triggered", 1.0 if rebin_gate.get("triggered", False) else 0.0, epoch)
             rebin_weight_history.append(rebin_loss_weight)
             rebin_weight_epochs.append(epoch)
+
+            teacher_distill_loss_weight = 0.0
+            compute_teacher_distill_this_epoch = False
+            if use_teacher_distill:
+                if teacher_distill_stop_epoch is not None and epoch > int(teacher_distill_stop_epoch):
+                    teacher_distill_loss_weight = 0.0
+                else:
+                    teacher_distill_loss_weight = get_cosine_ei_weight(
+                        current_epoch=epoch,
+                        warmup_epochs=teacher_distill_warmup,
+                        schedule_duration=teacher_distill_duration,
+                        target_weight=teacher_distill_target_w,
+                    )
+                compute_teacher_distill_this_epoch = teacher_distill_loss_weight > 0.0
+            teacher_distill_weight_history.append(teacher_distill_loss_weight)
+            teacher_distill_weight_epochs.append(epoch)
 
             # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
             t_img = None
@@ -2776,6 +3690,57 @@ def main():
                         else:
                             rebin_loss = None
 
+                        teacher_distill_loss = None
+                        if use_teacher_distill and compute_teacher_distill_this_epoch:
+                            teacher_model.eval()
+                            if teacher_distill_detach_teacher:
+                                with torch.no_grad():
+                                    x_teacher, *_ = teacher_model(
+                                        measured_kspace,
+                                        physics,
+                                        csmap,
+                                        acceleration_encoding,
+                                        start_timepoint_index,
+                                        epoch=None,
+                                        norm=config['model']['norm'],
+                                    )
+                            else:
+                                x_teacher, *_ = teacher_model(
+                                    measured_kspace,
+                                    physics,
+                                    csmap,
+                                    acceleration_encoding,
+                                    start_timepoint_index,
+                                    epoch=None,
+                                    norm=config['model']['norm'],
+                                )
+                            distill_pred = _temporal_loss_representation(
+                                x_recon,
+                                teacher_distill_temporal_mode,
+                                baseline_frames=teacher_distill_baseline_frames,
+                                percent_enhancement_eps=teacher_distill_percent_eps,
+                            )
+                            distill_target = _temporal_loss_representation(
+                                x_teacher,
+                                teacher_distill_temporal_mode,
+                                baseline_frames=teacher_distill_baseline_frames,
+                                percent_enhancement_eps=teacher_distill_percent_eps,
+                            )
+                            if teacher_distill_detach_teacher:
+                                distill_target = distill_target.detach()
+                            if distill_pred.shape[-1] == 0:
+                                teacher_distill_loss = torch.zeros(
+                                    (),
+                                    device=x_recon.device,
+                                    dtype=x_recon.dtype,
+                                )
+                            else:
+                                teacher_distill_loss = teacher_distill_metric(
+                                    distill_pred,
+                                    distill_target,
+                                )
+                            running_teacher_distill_loss += teacher_distill_loss.item()
+
                         ei_loss = None
                         if use_ei_loss and compute_ei_this_epoch:
                             ei_loss, t_img = ei_loss_fn(
@@ -2846,12 +3811,14 @@ def main():
                                 mc_loss=mc_loss.item(),
                                 ei_loss=ei_loss.item(),
                                 rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
+                                distill_loss=(teacher_distill_loss.item() if teacher_distill_loss is not None else None),
                             )
 
                         else:
                             train_loader_tqdm.set_postfix(
                                 mc_loss=mc_loss.item(),
                                 rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
+                                distill_loss=(teacher_distill_loss.item() if teacher_distill_loss is not None else None),
                             )
 
                         total_loss = mc_loss * mc_loss_weight
@@ -2861,6 +3828,8 @@ def main():
                             total_loss = total_loss + torch.mul(adj_loss_weight, adj_loss)
                         if rebin_loss is not None and rebin_loss_weight > 0:
                             total_loss = total_loss + rebin_loss * rebin_loss_weight
+                        if teacher_distill_loss is not None and teacher_distill_loss_weight > 0:
+                            total_loss = total_loss + teacher_distill_loss * teacher_distill_loss_weight
 
                     if torch.isnan(total_loss):
                         print(
@@ -2881,6 +3850,10 @@ def main():
                                 total_loss.backward()
                         else:
                             total_loss.backward()
+
+                    if logically_frozen_param_refs:
+                        for frozen_param in logically_frozen_param_refs:
+                            frozen_param.grad = None
 
 
                     debug_cfg = config.get("debugging", {})
@@ -2997,6 +3970,16 @@ def main():
                 train_rebin_losses.append(epoch_train_rebin_loss)
                 weighted_train_rebin_losses.append(epoch_train_rebin_loss * rebin_loss_weight)
 
+            if use_teacher_distill and compute_teacher_distill_this_epoch:
+                epoch_train_teacher_distill_loss = running_teacher_distill_loss / len(train_loader)
+            else:
+                epoch_train_teacher_distill_loss = 0.0
+            if use_teacher_distill:
+                train_teacher_distill_losses.append(epoch_train_teacher_distill_loss)
+                weighted_train_teacher_distill_losses.append(
+                    epoch_train_teacher_distill_loss * teacher_distill_loss_weight
+                )
+
 
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('Loss/Train_MC', epoch_train_mc_loss, epoch)
@@ -3006,6 +3989,14 @@ def main():
                     writer.add_scalar('Loss/Rebin_Weight', rebin_loss_weight, epoch)
                     writer.add_scalar('Loss/Train_Rebin', epoch_train_rebin_loss, epoch)
                     writer.add_scalar('Loss/Train_Weighted_Rebin', epoch_train_rebin_loss * rebin_loss_weight, epoch)
+                if use_teacher_distill:
+                    writer.add_scalar('Loss/Teacher_Distill_Weight', teacher_distill_loss_weight, epoch)
+                    writer.add_scalar('Loss/Train_Teacher_Distill', epoch_train_teacher_distill_loss, epoch)
+                    writer.add_scalar(
+                        'Loss/Train_Weighted_Teacher_Distill',
+                        epoch_train_teacher_distill_loss * teacher_distill_loss_weight,
+                        epoch,
+                    )
 
 
             lambda_Ls.append(lambda_L.item())
@@ -3055,10 +4046,17 @@ def main():
                     grasp_curve_corrs.clear()
                     raw_grasp_dc_mses.clear()
                     raw_grasp_dc_maes.clear()
+                    raw_grasp_dyn_dce_maes.clear()
+                    raw_grasp_dyn_dce_mses.clear()
+                    grasp_rho_fulls.clear()
                     grasp_curve_maes.clear()
+                    grasp_early_corrs.clear()
+                    grasp_early_maes.clear()
                     grasp_ttae_secs.clear()
+                    grasp_washin_maes.clear()
                     grasp_iauc10_errs.clear()
                     grasp_peak_errs.clear()
+                    grasp_ttpeak_err_secs.clear()
                     print(f"[Eval] Epoch {epoch}: collecting GRASP baseline metrics from validation set.")
                 local_eval_records = []
                 val_infer_times_local = []
@@ -3224,27 +4222,47 @@ def main():
                                     if grasp_aux is not None:
                                         grasp_dc_mae_bestfit = grasp_aux.get("grasp_dc_mae_bestfit")
                                 curve_mae = None
+                                rho_full = None
+                                early_corr = None
+                                early_mae = None
                                 ttae_sec = None
+                                washin_mae = None
                                 iauc10_err = None
                                 peak_err = None
+                                ttpeak_err_sec = None
+                                grasp_rho_full = None
                                 grasp_curve_mae = None
+                                grasp_early_corr = None
+                                grasp_early_mae = None
                                 grasp_ttae_sec = None
+                                grasp_washin_mae = None
                                 grasp_iauc10_err = None
                                 grasp_peak_err = None
+                                grasp_ttpeak_err_sec = None
                                 dl_dc_mae_bestfit = None
                                 if temporal_metrics:
+                                    rho_full = temporal_metrics.get("dl_all_curve_corr")
                                     curve_mae = temporal_metrics.get("dl_all_curve_mae")
+                                    early_corr = temporal_metrics.get("dl_all_early_corr")
+                                    early_mae = temporal_metrics.get("dl_all_early_mae")
                                     ttae_sec = temporal_metrics.get("dl_all_ttae_sec")
+                                    washin_mae = temporal_metrics.get("dl_all_wash_in_slope_err")
                                     iauc10_err = temporal_metrics.get("dl_all_iauc10_err")
                                     peak_err = temporal_metrics.get("dl_all_peak_err")
+                                    ttpeak_err_sec = temporal_metrics.get("dl_all_ttpeak_err_sec")
+                                    grasp_rho_full = temporal_metrics.get("grasp_all_curve_corr")
                                     grasp_curve_mae = temporal_metrics.get("grasp_all_curve_mae")
+                                    grasp_early_corr = temporal_metrics.get("grasp_all_early_corr")
+                                    grasp_early_mae = temporal_metrics.get("grasp_all_early_mae")
                                     grasp_ttae_sec = temporal_metrics.get("grasp_all_ttae_sec")
+                                    grasp_washin_mae = temporal_metrics.get("grasp_all_wash_in_slope_err")
                                     grasp_iauc10_err = temporal_metrics.get("grasp_all_iauc10_err")
                                     grasp_peak_err = temporal_metrics.get("grasp_all_peak_err")
+                                    grasp_ttpeak_err_sec = temporal_metrics.get("grasp_all_ttpeak_err_sec")
                                     dl_dc_mae_bestfit = temporal_metrics.get("dl_dc_mae_bestfit")
 
                                 # raw k-space eval
-                                dc_mse_raw, dc_mae_raw, _ = eval_sample(
+                                dc_mse_raw, dc_mae_raw, raw_temporal_metrics = eval_sample(
                                     val_raw_kspace,
                                     val_raw_csmaps,
                                     val_ground_truth,
@@ -3271,7 +4289,38 @@ def main():
                                     arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
                                     arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
                                     arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
+                                    dynamic_dce_enabled=raw_dyn_dce_enabled,
+                                    dynamic_dce_top_fraction=raw_dyn_dce_top_fraction,
+                                    dynamic_dce_weight_power=raw_dyn_dce_weight_power,
+                                    dynamic_dce_reference=raw_dyn_dce_reference,
+                                    kspace_readout_samples=_as_int_scalar(N_samples),
                                 )
+
+                                raw_dyn_dce_mae = None
+                                raw_dyn_dce_mse = None
+                                raw_grasp_dyn_dce_mae = None
+                                raw_grasp_dyn_dce_mse = None
+                                raw_dc_rel_l2 = None
+                                raw_dc_rel_l2_low = None
+                                raw_dc_rel_l2_mid = None
+                                raw_dc_rel_l2_high = None
+                                raw_grasp_dc_rel_l2 = None
+                                raw_grasp_dc_rel_l2_low = None
+                                raw_grasp_dc_rel_l2_mid = None
+                                raw_grasp_dc_rel_l2_high = None
+                                if raw_temporal_metrics:
+                                    raw_dc_rel_l2 = raw_temporal_metrics.get("dl_raw_dc_rel_l2")
+                                    raw_dc_rel_l2_low = raw_temporal_metrics.get("dl_raw_dc_rel_l2_low")
+                                    raw_dc_rel_l2_mid = raw_temporal_metrics.get("dl_raw_dc_rel_l2_mid")
+                                    raw_dc_rel_l2_high = raw_temporal_metrics.get("dl_raw_dc_rel_l2_high")
+                                    raw_grasp_dc_rel_l2 = raw_temporal_metrics.get("grasp_raw_dc_rel_l2")
+                                    raw_grasp_dc_rel_l2_low = raw_temporal_metrics.get("grasp_raw_dc_rel_l2_low")
+                                    raw_grasp_dc_rel_l2_mid = raw_temporal_metrics.get("grasp_raw_dc_rel_l2_mid")
+                                    raw_grasp_dc_rel_l2_high = raw_temporal_metrics.get("grasp_raw_dc_rel_l2_high")
+                                    raw_dyn_dce_mae = raw_temporal_metrics.get("dl_raw_dyn_dce_mae")
+                                    raw_dyn_dce_mse = raw_temporal_metrics.get("dl_raw_dyn_dce_mse")
+                                    raw_grasp_dyn_dce_mae = raw_temporal_metrics.get("grasp_raw_dyn_dce_mae")
+                                    raw_grasp_dyn_dce_mse = raw_temporal_metrics.get("grasp_raw_dyn_dce_mse")
 
                                 dc_mse_raw_grasp = None
                                 dc_mae_raw_grasp = None
@@ -3320,10 +4369,19 @@ def main():
                                             "dc_mse": float(dc_mse),
                                             "dc_mae": float(dc_mae),
                                             "recon_corr": (float(recon_corr) if recon_corr is not None else None),
+                                            "rho_full": (float(rho_full) if rho_full is not None and np.isfinite(rho_full) else None),
                                             "curve_mae": (float(curve_mae) if curve_mae is not None and np.isfinite(curve_mae) else None),
+                                            "early_corr": (float(early_corr) if early_corr is not None and np.isfinite(early_corr) else None),
+                                            "early_mae": (float(early_mae) if early_mae is not None and np.isfinite(early_mae) else None),
                                             "ttae_sec": (float(ttae_sec) if ttae_sec is not None and np.isfinite(ttae_sec) else None),
+                                            "washin_mae": (float(washin_mae) if washin_mae is not None and np.isfinite(washin_mae) else None),
                                             "iauc10_err": (float(iauc10_err) if iauc10_err is not None and np.isfinite(iauc10_err) else None),
                                             "peak_err": (float(peak_err) if peak_err is not None and np.isfinite(peak_err) else None),
+                                            "ttpeak_err_sec": (
+                                                float(ttpeak_err_sec)
+                                                if ttpeak_err_sec is not None and np.isfinite(ttpeak_err_sec)
+                                                else None
+                                            ),
                                             "dl_dc_mae_bestfit": (
                                                 float(dl_dc_mae_bestfit)
                                                 if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit)
@@ -3331,6 +4389,36 @@ def main():
                                             ),
                                             "raw_dc_mse": float(dc_mse_raw),
                                             "raw_dc_mae": float(dc_mae_raw),
+                                            "raw_dc_rel_l2": (
+                                                float(raw_dc_rel_l2)
+                                                if raw_dc_rel_l2 is not None and np.isfinite(raw_dc_rel_l2)
+                                                else None
+                                            ),
+                                            "raw_dc_rel_l2_low": (
+                                                float(raw_dc_rel_l2_low)
+                                                if raw_dc_rel_l2_low is not None and np.isfinite(raw_dc_rel_l2_low)
+                                                else None
+                                            ),
+                                            "raw_dc_rel_l2_mid": (
+                                                float(raw_dc_rel_l2_mid)
+                                                if raw_dc_rel_l2_mid is not None and np.isfinite(raw_dc_rel_l2_mid)
+                                                else None
+                                            ),
+                                            "raw_dc_rel_l2_high": (
+                                                float(raw_dc_rel_l2_high)
+                                                if raw_dc_rel_l2_high is not None and np.isfinite(raw_dc_rel_l2_high)
+                                                else None
+                                            ),
+                                            "raw_dyn_dce_mae": (
+                                                float(raw_dyn_dce_mae)
+                                                if raw_dyn_dce_mae is not None and np.isfinite(raw_dyn_dce_mae)
+                                                else None
+                                            ),
+                                            "raw_dyn_dce_mse": (
+                                                float(raw_dyn_dce_mse)
+                                                if raw_dyn_dce_mse is not None and np.isfinite(raw_dyn_dce_mse)
+                                                else None
+                                            ),
                                             "raw_ssdu_nmse": (
                                                 float(raw_ssdu_nmse)
                                                 if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse)
@@ -3348,14 +4436,34 @@ def main():
                                                 if grasp_dc_mae_bestfit is not None and np.isfinite(grasp_dc_mae_bestfit)
                                                 else None
                                             ),
+                                            "grasp_rho_full": (
+                                                float(grasp_rho_full)
+                                                if grasp_rho_full is not None and np.isfinite(grasp_rho_full)
+                                                else None
+                                            ),
                                             "grasp_curve_mae": (
                                                 float(grasp_curve_mae)
                                                 if grasp_curve_mae is not None and np.isfinite(grasp_curve_mae)
                                                 else None
                                             ),
+                                            "grasp_early_corr": (
+                                                float(grasp_early_corr)
+                                                if grasp_early_corr is not None and np.isfinite(grasp_early_corr)
+                                                else None
+                                            ),
+                                            "grasp_early_mae": (
+                                                float(grasp_early_mae)
+                                                if grasp_early_mae is not None and np.isfinite(grasp_early_mae)
+                                                else None
+                                            ),
                                             "grasp_ttae_sec": (
                                                 float(grasp_ttae_sec)
                                                 if grasp_ttae_sec is not None and np.isfinite(grasp_ttae_sec)
+                                                else None
+                                            ),
+                                            "grasp_washin_mae": (
+                                                float(grasp_washin_mae)
+                                                if grasp_washin_mae is not None and np.isfinite(grasp_washin_mae)
                                                 else None
                                             ),
                                             "grasp_iauc10_err": (
@@ -3368,8 +4476,43 @@ def main():
                                                 if grasp_peak_err is not None and np.isfinite(grasp_peak_err)
                                                 else None
                                             ),
+                                            "grasp_ttpeak_err_sec": (
+                                                float(grasp_ttpeak_err_sec)
+                                                if grasp_ttpeak_err_sec is not None and np.isfinite(grasp_ttpeak_err_sec)
+                                                else None
+                                            ),
                                             "raw_grasp_dc_mse": (float(dc_mse_raw_grasp) if dc_mse_raw_grasp is not None else None),
                                             "raw_grasp_dc_mae": (float(dc_mae_raw_grasp) if dc_mae_raw_grasp is not None else None),
+                                            "raw_grasp_dc_rel_l2": (
+                                                float(raw_grasp_dc_rel_l2)
+                                                if raw_grasp_dc_rel_l2 is not None and np.isfinite(raw_grasp_dc_rel_l2)
+                                                else None
+                                            ),
+                                            "raw_grasp_dc_rel_l2_low": (
+                                                float(raw_grasp_dc_rel_l2_low)
+                                                if raw_grasp_dc_rel_l2_low is not None and np.isfinite(raw_grasp_dc_rel_l2_low)
+                                                else None
+                                            ),
+                                            "raw_grasp_dc_rel_l2_mid": (
+                                                float(raw_grasp_dc_rel_l2_mid)
+                                                if raw_grasp_dc_rel_l2_mid is not None and np.isfinite(raw_grasp_dc_rel_l2_mid)
+                                                else None
+                                            ),
+                                            "raw_grasp_dc_rel_l2_high": (
+                                                float(raw_grasp_dc_rel_l2_high)
+                                                if raw_grasp_dc_rel_l2_high is not None and np.isfinite(raw_grasp_dc_rel_l2_high)
+                                                else None
+                                            ),
+                                            "raw_grasp_dyn_dce_mae": (
+                                                float(raw_grasp_dyn_dce_mae)
+                                                if raw_grasp_dyn_dce_mae is not None and np.isfinite(raw_grasp_dyn_dce_mae)
+                                                else None
+                                            ),
+                                            "raw_grasp_dyn_dce_mse": (
+                                                float(raw_grasp_dyn_dce_mse)
+                                                if raw_grasp_dyn_dce_mse is not None and np.isfinite(raw_grasp_dyn_dce_mse)
+                                                else None
+                                            ),
                                         }
                                     )
                                 else:
@@ -3386,14 +4529,36 @@ def main():
                                             raw_grasp_dc_mses.append(dc_mse_raw_grasp)
                                         if dc_mae_raw_grasp is not None:
                                             raw_grasp_dc_maes.append(dc_mae_raw_grasp)
+                                        if raw_grasp_dc_rel_l2 is not None and np.isfinite(raw_grasp_dc_rel_l2):
+                                            raw_grasp_dc_rel_l2s.append(float(raw_grasp_dc_rel_l2))
+                                        if raw_grasp_dc_rel_l2_low is not None and np.isfinite(raw_grasp_dc_rel_l2_low):
+                                            raw_grasp_dc_rel_l2_lows.append(float(raw_grasp_dc_rel_l2_low))
+                                        if raw_grasp_dc_rel_l2_mid is not None and np.isfinite(raw_grasp_dc_rel_l2_mid):
+                                            raw_grasp_dc_rel_l2_mids.append(float(raw_grasp_dc_rel_l2_mid))
+                                        if raw_grasp_dc_rel_l2_high is not None and np.isfinite(raw_grasp_dc_rel_l2_high):
+                                            raw_grasp_dc_rel_l2_highs.append(float(raw_grasp_dc_rel_l2_high))
+                                        if raw_grasp_dyn_dce_mae is not None and np.isfinite(raw_grasp_dyn_dce_mae):
+                                            raw_grasp_dyn_dce_maes.append(float(raw_grasp_dyn_dce_mae))
+                                        if raw_grasp_dyn_dce_mse is not None and np.isfinite(raw_grasp_dyn_dce_mse):
+                                            raw_grasp_dyn_dce_mses.append(float(raw_grasp_dyn_dce_mse))
+                                        if grasp_rho_full is not None and np.isfinite(grasp_rho_full):
+                                            grasp_rho_fulls.append(float(grasp_rho_full))
                                         if grasp_curve_mae is not None and np.isfinite(grasp_curve_mae):
                                             grasp_curve_maes.append(float(grasp_curve_mae))
+                                        if grasp_early_corr is not None and np.isfinite(grasp_early_corr):
+                                            grasp_early_corrs.append(float(grasp_early_corr))
+                                        if grasp_early_mae is not None and np.isfinite(grasp_early_mae):
+                                            grasp_early_maes.append(float(grasp_early_mae))
                                         if grasp_ttae_sec is not None and np.isfinite(grasp_ttae_sec):
                                             grasp_ttae_secs.append(float(grasp_ttae_sec))
+                                        if grasp_washin_mae is not None and np.isfinite(grasp_washin_mae):
+                                            grasp_washin_maes.append(float(grasp_washin_mae))
                                         if grasp_iauc10_err is not None and np.isfinite(grasp_iauc10_err):
                                             grasp_iauc10_errs.append(float(grasp_iauc10_err))
                                         if grasp_peak_err is not None and np.isfinite(grasp_peak_err):
                                             grasp_peak_errs.append(float(grasp_peak_err))
+                                        if grasp_ttpeak_err_sec is not None and np.isfinite(grasp_ttpeak_err_sec):
+                                            grasp_ttpeak_err_secs.append(float(grasp_ttpeak_err_sec))
                                     epoch_eval_ssims.append(ssim)
                                     epoch_eval_psnrs.append(psnr)
                                     epoch_eval_mses.append(mse)
@@ -3403,19 +4568,41 @@ def main():
 
                                     if recon_corr is not None:
                                         epoch_eval_curve_corrs.append(recon_corr)
+                                    if rho_full is not None and np.isfinite(rho_full):
+                                        epoch_eval_rho_fulls.append(rho_full)
                                     if curve_mae is not None and np.isfinite(curve_mae):
                                         epoch_eval_curve_maes.append(curve_mae)
+                                    if early_corr is not None and np.isfinite(early_corr):
+                                        epoch_eval_early_corrs.append(early_corr)
+                                    if early_mae is not None and np.isfinite(early_mae):
+                                        epoch_eval_early_maes.append(early_mae)
                                     if ttae_sec is not None and np.isfinite(ttae_sec):
                                         epoch_eval_ttae_secs.append(ttae_sec)
+                                    if washin_mae is not None and np.isfinite(washin_mae):
+                                        epoch_eval_washin_maes.append(washin_mae)
                                     if iauc10_err is not None and np.isfinite(iauc10_err):
                                         epoch_eval_iauc10_errs.append(iauc10_err)
                                     if peak_err is not None and np.isfinite(peak_err):
                                         epoch_eval_peak_errs.append(peak_err)
+                                    if ttpeak_err_sec is not None and np.isfinite(ttpeak_err_sec):
+                                        epoch_eval_ttpeak_err_secs.append(ttpeak_err_sec)
                                     if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit):
                                         epoch_eval_dl_dc_mae_bestfits.append(float(dl_dc_mae_bestfit))
 
                                     epoch_eval_raw_dc_mses.append(dc_mse_raw)
                                     epoch_eval_raw_dc_maes.append(dc_mae_raw)
+                                    if raw_dc_rel_l2 is not None and np.isfinite(raw_dc_rel_l2):
+                                        epoch_eval_raw_dc_rel_l2s.append(float(raw_dc_rel_l2))
+                                    if raw_dc_rel_l2_low is not None and np.isfinite(raw_dc_rel_l2_low):
+                                        epoch_eval_raw_dc_rel_l2_lows.append(float(raw_dc_rel_l2_low))
+                                    if raw_dc_rel_l2_mid is not None and np.isfinite(raw_dc_rel_l2_mid):
+                                        epoch_eval_raw_dc_rel_l2_mids.append(float(raw_dc_rel_l2_mid))
+                                    if raw_dc_rel_l2_high is not None and np.isfinite(raw_dc_rel_l2_high):
+                                        epoch_eval_raw_dc_rel_l2_highs.append(float(raw_dc_rel_l2_high))
+                                    if raw_dyn_dce_mae is not None and np.isfinite(raw_dyn_dce_mae):
+                                        epoch_eval_raw_dyn_dce_maes.append(float(raw_dyn_dce_mae))
+                                    if raw_dyn_dce_mse is not None and np.isfinite(raw_dyn_dce_mse):
+                                        epoch_eval_raw_dyn_dce_mses.append(float(raw_dyn_dce_mse))
                                     if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse):
                                         epoch_eval_raw_ssdu_nmses.append(float(raw_ssdu_nmse))
                                     if (
@@ -3475,11 +4662,36 @@ def main():
                         epoch_eval_dc_maes = [r["dc_mae"] for r in all_eval_records]
                         epoch_eval_raw_dc_mses = [r["raw_dc_mse"] for r in all_eval_records]
                         epoch_eval_raw_dc_maes = [r["raw_dc_mae"] for r in all_eval_records]
+                        epoch_eval_raw_dc_rel_l2s = [
+                            r["raw_dc_rel_l2"] for r in all_eval_records if r.get("raw_dc_rel_l2") is not None
+                        ]
+                        epoch_eval_raw_dc_rel_l2_lows = [
+                            r["raw_dc_rel_l2_low"] for r in all_eval_records if r.get("raw_dc_rel_l2_low") is not None
+                        ]
+                        epoch_eval_raw_dc_rel_l2_mids = [
+                            r["raw_dc_rel_l2_mid"] for r in all_eval_records if r.get("raw_dc_rel_l2_mid") is not None
+                        ]
+                        epoch_eval_raw_dc_rel_l2_highs = [
+                            r["raw_dc_rel_l2_high"] for r in all_eval_records if r.get("raw_dc_rel_l2_high") is not None
+                        ]
+                        epoch_eval_raw_dyn_dce_maes = [
+                            r["raw_dyn_dce_mae"] for r in all_eval_records if r.get("raw_dyn_dce_mae") is not None
+                        ]
+                        epoch_eval_raw_dyn_dce_mses = [
+                            r["raw_dyn_dce_mse"] for r in all_eval_records if r.get("raw_dyn_dce_mse") is not None
+                        ]
                         epoch_eval_curve_corrs = [r["recon_corr"] for r in all_eval_records if r.get("recon_corr") is not None]
+                        epoch_eval_rho_fulls = [r["rho_full"] for r in all_eval_records if r.get("rho_full") is not None]
                         epoch_eval_curve_maes = [r["curve_mae"] for r in all_eval_records if r.get("curve_mae") is not None]
+                        epoch_eval_early_corrs = [r["early_corr"] for r in all_eval_records if r.get("early_corr") is not None]
+                        epoch_eval_early_maes = [r["early_mae"] for r in all_eval_records if r.get("early_mae") is not None]
                         epoch_eval_ttae_secs = [r["ttae_sec"] for r in all_eval_records if r.get("ttae_sec") is not None]
+                        epoch_eval_washin_maes = [r["washin_mae"] for r in all_eval_records if r.get("washin_mae") is not None]
                         epoch_eval_iauc10_errs = [r["iauc10_err"] for r in all_eval_records if r.get("iauc10_err") is not None]
                         epoch_eval_peak_errs = [r["peak_err"] for r in all_eval_records if r.get("peak_err") is not None]
+                        epoch_eval_ttpeak_err_secs = [
+                            r["ttpeak_err_sec"] for r in all_eval_records if r.get("ttpeak_err_sec") is not None
+                        ]
                         epoch_eval_dl_dc_mae_bestfits = [
                             r["dl_dc_mae_bestfit"] for r in all_eval_records if r.get("dl_dc_mae_bestfit") is not None
                         ]
@@ -3502,17 +4714,64 @@ def main():
                             grasp_curve_corrs = [r["grasp_corr"] for r in all_eval_records if r.get("grasp_corr") is not None]
                             raw_grasp_dc_mses = [r["raw_grasp_dc_mse"] for r in all_eval_records if r.get("raw_grasp_dc_mse") is not None]
                             raw_grasp_dc_maes = [r["raw_grasp_dc_mae"] for r in all_eval_records if r.get("raw_grasp_dc_mae") is not None]
+                            raw_grasp_dc_rel_l2s = [
+                                r["raw_grasp_dc_rel_l2"]
+                                for r in all_eval_records
+                                if r.get("raw_grasp_dc_rel_l2") is not None
+                            ]
+                            raw_grasp_dc_rel_l2_lows = [
+                                r["raw_grasp_dc_rel_l2_low"]
+                                for r in all_eval_records
+                                if r.get("raw_grasp_dc_rel_l2_low") is not None
+                            ]
+                            raw_grasp_dc_rel_l2_mids = [
+                                r["raw_grasp_dc_rel_l2_mid"]
+                                for r in all_eval_records
+                                if r.get("raw_grasp_dc_rel_l2_mid") is not None
+                            ]
+                            raw_grasp_dc_rel_l2_highs = [
+                                r["raw_grasp_dc_rel_l2_high"]
+                                for r in all_eval_records
+                                if r.get("raw_grasp_dc_rel_l2_high") is not None
+                            ]
+                            raw_grasp_dyn_dce_maes = [
+                                r["raw_grasp_dyn_dce_mae"]
+                                for r in all_eval_records
+                                if r.get("raw_grasp_dyn_dce_mae") is not None
+                            ]
+                            raw_grasp_dyn_dce_mses = [
+                                r["raw_grasp_dyn_dce_mse"]
+                                for r in all_eval_records
+                                if r.get("raw_grasp_dyn_dce_mse") is not None
+                            ]
+                            grasp_rho_fulls = [
+                                r["grasp_rho_full"] for r in all_eval_records if r.get("grasp_rho_full") is not None
+                            ]
                             grasp_curve_maes = [
                                 r["grasp_curve_mae"] for r in all_eval_records if r.get("grasp_curve_mae") is not None
                             ]
+                            grasp_early_corrs = [
+                                r["grasp_early_corr"] for r in all_eval_records if r.get("grasp_early_corr") is not None
+                            ]
+                            grasp_early_maes = [
+                                r["grasp_early_mae"] for r in all_eval_records if r.get("grasp_early_mae") is not None
+                            ]
                             grasp_ttae_secs = [
                                 r["grasp_ttae_sec"] for r in all_eval_records if r.get("grasp_ttae_sec") is not None
+                            ]
+                            grasp_washin_maes = [
+                                r["grasp_washin_mae"] for r in all_eval_records if r.get("grasp_washin_mae") is not None
                             ]
                             grasp_iauc10_errs = [
                                 r["grasp_iauc10_err"] for r in all_eval_records if r.get("grasp_iauc10_err") is not None
                             ]
                             grasp_peak_errs = [
                                 r["grasp_peak_err"] for r in all_eval_records if r.get("grasp_peak_err") is not None
+                            ]
+                            grasp_ttpeak_err_secs = [
+                                r["grasp_ttpeak_err_sec"]
+                                for r in all_eval_records
+                                if r.get("grasp_ttpeak_err_sec") is not None
                             ]
                 elif global_rank == 0 or not config['training']['multigpu']:
                     epoch_eval_infer_times = [float(t) for t in val_infer_times_local]
@@ -3534,11 +4793,22 @@ def main():
                         avg_grasp_curve_corr = _mean_or_nan(grasp_curve_corrs)
                         avg_grasp_raw_dc_mae = _mean_or_nan(raw_grasp_dc_maes)
                         avg_grasp_raw_dc_mse = _mean_or_nan(raw_grasp_dc_mses)
+                        avg_grasp_raw_dc_rel_l2 = _mean_or_nan(raw_grasp_dc_rel_l2s)
+                        avg_grasp_raw_dc_rel_l2_low = _mean_or_nan(raw_grasp_dc_rel_l2_lows)
+                        avg_grasp_raw_dc_rel_l2_mid = _mean_or_nan(raw_grasp_dc_rel_l2_mids)
+                        avg_grasp_raw_dc_rel_l2_high = _mean_or_nan(raw_grasp_dc_rel_l2_highs)
+                        avg_grasp_rho_full = _mean_or_nan(grasp_rho_fulls)
                         avg_grasp_curve_mae = _mean_or_nan(grasp_curve_maes)
+                        avg_grasp_early_corr = _mean_or_nan(grasp_early_corrs)
+                        avg_grasp_early_mae = _mean_or_nan(grasp_early_maes)
                         avg_grasp_ttae_sec = _mean_or_nan(grasp_ttae_secs)
+                        avg_grasp_washin_mae = _mean_or_nan(grasp_washin_maes)
                         avg_grasp_iauc10_err = _mean_or_nan(grasp_iauc10_errs)
                         avg_grasp_peak_err = _mean_or_nan(grasp_peak_errs)
+                        avg_grasp_ttpeak_err_sec = _mean_or_nan(grasp_ttpeak_err_secs)
                         avg_grasp_raw_ssdu_nmse = float("nan")
+                        avg_grasp_raw_dyn_dce_mae = _mean_or_nan(raw_grasp_dyn_dce_maes)
+                        avg_grasp_raw_dyn_dce_mse = _mean_or_nan(raw_grasp_dyn_dce_mses)
                         if not _grasp_baseline_ready():
                             raise RuntimeError(
                                 f"Epoch {epoch}: GRASP baseline metrics are non-finite after collection."
@@ -3558,10 +4828,39 @@ def main():
                     epoch_eval_curve_corr = np.mean(epoch_eval_curve_corrs)
                     epoch_eval_raw_dc_mse = np.mean(epoch_eval_raw_dc_mses)
                     epoch_eval_raw_dc_mae = np.mean(epoch_eval_raw_dc_maes)
+                    epoch_eval_raw_dc_psnr = _mse_to_psnr(
+                        epoch_eval_raw_dc_mse,
+                        peak=raw_dc_psnr_peak,
+                    )
+                    epoch_eval_raw_dc_rel_l2 = (
+                        np.mean(epoch_eval_raw_dc_rel_l2s) if epoch_eval_raw_dc_rel_l2s else np.nan
+                    )
+                    epoch_eval_raw_dc_rel_l2_low = (
+                        np.mean(epoch_eval_raw_dc_rel_l2_lows) if epoch_eval_raw_dc_rel_l2_lows else np.nan
+                    )
+                    epoch_eval_raw_dc_rel_l2_mid = (
+                        np.mean(epoch_eval_raw_dc_rel_l2_mids) if epoch_eval_raw_dc_rel_l2_mids else np.nan
+                    )
+                    epoch_eval_raw_dc_rel_l2_high = (
+                        np.mean(epoch_eval_raw_dc_rel_l2_highs) if epoch_eval_raw_dc_rel_l2_highs else np.nan
+                    )
+                    epoch_eval_raw_dyn_dce_mae = (
+                        np.mean(epoch_eval_raw_dyn_dce_maes) if epoch_eval_raw_dyn_dce_maes else np.nan
+                    )
+                    epoch_eval_raw_dyn_dce_mse = (
+                        np.mean(epoch_eval_raw_dyn_dce_mses) if epoch_eval_raw_dyn_dce_mses else np.nan
+                    )
+                    epoch_eval_rho_full = np.mean(epoch_eval_rho_fulls) if epoch_eval_rho_fulls else np.nan
                     epoch_eval_curve_mae = np.mean(epoch_eval_curve_maes) if epoch_eval_curve_maes else np.nan
+                    epoch_eval_early_corr = np.mean(epoch_eval_early_corrs) if epoch_eval_early_corrs else np.nan
+                    epoch_eval_early_mae = np.mean(epoch_eval_early_maes) if epoch_eval_early_maes else np.nan
                     epoch_eval_ttae_sec = np.mean(epoch_eval_ttae_secs) if epoch_eval_ttae_secs else np.nan
+                    epoch_eval_washin_mae = np.mean(epoch_eval_washin_maes) if epoch_eval_washin_maes else np.nan
                     epoch_eval_iauc10_err = np.mean(epoch_eval_iauc10_errs) if epoch_eval_iauc10_errs else np.nan
                     epoch_eval_peak_err = np.mean(epoch_eval_peak_errs) if epoch_eval_peak_errs else np.nan
+                    epoch_eval_ttpeak_err_sec = (
+                        np.mean(epoch_eval_ttpeak_err_secs) if epoch_eval_ttpeak_err_secs else np.nan
+                    )
                     epoch_eval_dl_dc_mae_bestfit = (
                         np.mean(epoch_eval_dl_dc_mae_bestfits) if epoch_eval_dl_dc_mae_bestfits else np.nan
                     )
@@ -3588,12 +4887,23 @@ def main():
                     eval_dc_maes.append(epoch_eval_dc_mae) 
                     eval_raw_dc_mses.append(epoch_eval_raw_dc_mse) 
                     eval_raw_dc_maes.append(epoch_eval_raw_dc_mae)    
+                    eval_raw_dc_rel_l2s.append(epoch_eval_raw_dc_rel_l2)
+                    eval_raw_dc_rel_l2_lows.append(epoch_eval_raw_dc_rel_l2_low)
+                    eval_raw_dc_rel_l2_mids.append(epoch_eval_raw_dc_rel_l2_mid)
+                    eval_raw_dc_rel_l2_highs.append(epoch_eval_raw_dc_rel_l2_high)
+                    eval_raw_dyn_dce_maes.append(epoch_eval_raw_dyn_dce_mae)
+                    eval_raw_dyn_dce_mses.append(epoch_eval_raw_dyn_dce_mse)
                     eval_curve_corrs.append(epoch_eval_curve_corr)  
                     eval_temporal_epochs.append(epoch)
+                    eval_rho_fulls.append(epoch_eval_rho_full)
                     eval_curve_maes.append(epoch_eval_curve_mae)
+                    eval_early_corrs.append(epoch_eval_early_corr)
+                    eval_early_maes.append(epoch_eval_early_mae)
                     eval_ttae_secs.append(epoch_eval_ttae_sec)
+                    eval_washin_maes.append(epoch_eval_washin_mae)
                     eval_iauc10_errs.append(epoch_eval_iauc10_err)
                     eval_peak_errs.append(epoch_eval_peak_err)
+                    eval_ttpeak_err_secs.append(epoch_eval_ttpeak_err_sec)
                     eval_dl_dc_mae_bestfits.append(epoch_eval_dl_dc_mae_bestfit)
                     eval_raw_ssdu_nmses.append(epoch_eval_raw_ssdu_nmse)
 
@@ -3604,6 +4914,7 @@ def main():
                         eval_spf_curves[spf_key]["eval_psnrs"].append(epoch_eval_psnr)
                         eval_spf_curves[spf_key]["eval_mses"].append(epoch_eval_mse)
                         eval_spf_curves[spf_key]["eval_lpipses"].append(epoch_eval_lpips)
+                        eval_spf_curves[spf_key]["eval_raw_dc_mses"].append(epoch_eval_raw_dc_mse)
                         eval_spf_curves[spf_key]["eval_raw_dc_maes"].append(epoch_eval_raw_dc_mae)
                         eval_spf_curves[spf_key]["eval_curve_corrs"].append(epoch_eval_curve_corr)
 
@@ -3616,15 +4927,39 @@ def main():
                     writer.add_scalar('Metric/DC_MAE', epoch_eval_dc_mae, epoch)
                     writer.add_scalar('Metric/RAW_DC_MSE', epoch_eval_raw_dc_mse, epoch)
                     writer.add_scalar('Metric/RAW_DC_MAE', epoch_eval_raw_dc_mae, epoch)
+                    if np.isfinite(epoch_eval_raw_dc_psnr):
+                        writer.add_scalar('Metric/RAW_DC_PSNR', epoch_eval_raw_dc_psnr, epoch)
+                    if np.isfinite(epoch_eval_raw_dc_rel_l2):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2', epoch_eval_raw_dc_rel_l2, epoch)
+                    if np.isfinite(epoch_eval_raw_dc_rel_l2_low):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2_LOW', epoch_eval_raw_dc_rel_l2_low, epoch)
+                    if np.isfinite(epoch_eval_raw_dc_rel_l2_mid):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2_MID', epoch_eval_raw_dc_rel_l2_mid, epoch)
+                    if np.isfinite(epoch_eval_raw_dc_rel_l2_high):
+                        writer.add_scalar('Metric/RAW_DC_REL_L2_HIGH', epoch_eval_raw_dc_rel_l2_high, epoch)
+                    if np.isfinite(epoch_eval_raw_dyn_dce_mae):
+                        writer.add_scalar('Metric/RAW_DYN_DCE_MAE', epoch_eval_raw_dyn_dce_mae, epoch)
+                    if np.isfinite(epoch_eval_raw_dyn_dce_mse):
+                        writer.add_scalar('Metric/RAW_DYN_DCE_MSE', epoch_eval_raw_dyn_dce_mse, epoch)
                     writer.add_scalar('Metric/EC_Corr', epoch_eval_curve_corr, epoch)
+                    if np.isfinite(epoch_eval_rho_full):
+                        writer.add_scalar('Metric/Temporal_Rho_full', epoch_eval_rho_full, epoch)
                     if np.isfinite(epoch_eval_curve_mae):
                         writer.add_scalar('Metric/Temporal_Curve_MAE', epoch_eval_curve_mae, epoch)
+                    if np.isfinite(epoch_eval_early_corr):
+                        writer.add_scalar('Metric/Temporal_Rho_early', epoch_eval_early_corr, epoch)
+                    if np.isfinite(epoch_eval_early_mae):
+                        writer.add_scalar('Metric/Temporal_Early_MAE', epoch_eval_early_mae, epoch)
                     if np.isfinite(epoch_eval_ttae_sec):
                         writer.add_scalar('Metric/Temporal_TTAE_sec', epoch_eval_ttae_sec, epoch)
+                    if np.isfinite(epoch_eval_washin_mae):
+                        writer.add_scalar('Metric/Temporal_Washin_MAE', epoch_eval_washin_mae, epoch)
                     if np.isfinite(epoch_eval_iauc10_err):
                         writer.add_scalar('Metric/Temporal_IAUC10_err', epoch_eval_iauc10_err, epoch)
                     if np.isfinite(epoch_eval_peak_err):
                         writer.add_scalar('Metric/Temporal_Peak_err', epoch_eval_peak_err, epoch)
+                    if np.isfinite(epoch_eval_ttpeak_err_sec):
+                        writer.add_scalar('Metric/Temporal_TTPeak_err_sec', epoch_eval_ttpeak_err_sec, epoch)
                     if np.isfinite(epoch_eval_dl_dc_mae_bestfit):
                         writer.add_scalar('Metric/DL_DC_MAE_BESTFIT', epoch_eval_dl_dc_mae_bestfit, epoch)
                     if np.isfinite(epoch_eval_raw_ssdu_nmse):
@@ -3905,14 +5240,53 @@ def main():
 
                         # Set the seaborn style
                         sns.set_style("whitegrid")
+                        eval_raw_dc_psnrs = [
+                            _mse_to_psnr(v, peak=raw_dc_psnr_peak) for v in eval_raw_dc_mses
+                        ]
+                        avg_grasp_raw_dc_psnr = _mse_to_psnr(
+                            avg_grasp_raw_dc_mse,
+                            peak=raw_dc_psnr_peak,
+                        )
 
                         eval_plot_specs = [
                             ("DRO SSIM", "SSIM", eval_ssims, avg_grasp_ssim),
                             ("DRO PSNR", "PSNR", eval_psnrs, avg_grasp_psnr),
                             ("DRO Image MSE", "MSE", eval_mses, avg_grasp_mse),
+                            ("Non-DRO k-space MSE", "MSE", eval_raw_dc_mses, avg_grasp_raw_dc_mse),
                             ("DRO LPIPS", "LPIPS", eval_lpipses, avg_grasp_lpips),
                             ("DRO k-space MAE (sim)", "MAE", eval_dc_maes, avg_grasp_dc_mae),
                             ("Non-DRO k-space MAE", "MAE", eval_raw_dc_maes, avg_grasp_raw_dc_mae),
+                            ("Non-DRO k-space Relative PSNR", "PSNR", eval_raw_dc_psnrs, avg_grasp_raw_dc_psnr),
+                            (
+                                "Non-DRO k-space Relative L2",
+                                "||Ex-y||2 / ||y||2",
+                                eval_raw_dc_rel_l2s,
+                                avg_grasp_raw_dc_rel_l2,
+                            ),
+                            (
+                                "Non-DRO k-space Relative L2 (Low)",
+                                "Relative L2",
+                                eval_raw_dc_rel_l2_lows,
+                                avg_grasp_raw_dc_rel_l2_low,
+                            ),
+                            (
+                                "Non-DRO k-space Relative L2 (Mid)",
+                                "Relative L2",
+                                eval_raw_dc_rel_l2_mids,
+                                avg_grasp_raw_dc_rel_l2_mid,
+                            ),
+                            (
+                                "Non-DRO k-space Relative L2 (High)",
+                                "Relative L2",
+                                eval_raw_dc_rel_l2_highs,
+                                avg_grasp_raw_dc_rel_l2_high,
+                            ),
+                            (
+                                "Non-DRO Dynamic DCE MAE (wtd top%)",
+                                "MAE",
+                                eval_raw_dyn_dce_maes,
+                                avg_grasp_raw_dyn_dce_mae,
+                            ),
                             (
                                 "DRO Curve Correlation",
                                 "Pearson Correlation Coefficient",
@@ -3957,55 +5331,50 @@ def main():
                         plt.savefig(os.path.join(output_dir, "eval_metrics.png"))
                         plt.close()
 
-                        if eval_curve_maes or eval_ttae_secs or eval_iauc10_errs or eval_peak_errs:
-                            if eval_temporal_epochs and len(eval_temporal_epochs) == len(eval_curve_maes):
-                                temporal_epochs = eval_temporal_epochs
-                            else:
-                                temporal_epochs = list(range(0, len(eval_curve_maes) * eval_frequency, eval_frequency))
-
-                            min_len = min(
-                                len(temporal_epochs),
-                                len(eval_curve_maes),
-                                len(eval_ttae_secs),
-                                len(eval_iauc10_errs),
-                                len(eval_peak_errs),
+                        temporal_plot_specs = [
+                            ("ρ_full", "Pearson Correlation", eval_rho_fulls, avg_grasp_rho_full),
+                            ("MAE_full", "MAE", eval_curve_maes, avg_grasp_curve_mae),
+                            ("ρ_early", "Pearson Correlation", eval_early_corrs, avg_grasp_early_corr),
+                            ("MAE_early", "MAE", eval_early_maes, avg_grasp_early_mae),
+                            ("t_arr Error", "Seconds", eval_ttae_secs, avg_grasp_ttae_sec),
+                            ("MAE_wash-in", "MAE", eval_washin_maes, avg_grasp_washin_mae),
+                            ("iAUC_10 Error", "Error", eval_iauc10_errs, avg_grasp_iauc10_err),
+                            ("MAE_peak", "MAE", eval_peak_errs, avg_grasp_peak_err),
+                            ("t_peak Error", "Seconds", eval_ttpeak_err_secs, avg_grasp_ttpeak_err_sec),
+                        ]
+                        if any(series for _, _, series, _ in temporal_plot_specs):
+                            ncols_t = 3
+                            nrows_t = int(math.ceil(len(temporal_plot_specs) / ncols_t))
+                            fig, axes = plt.subplots(nrows_t, ncols_t, figsize=(ncols_t * 6, nrows_t * 4.8))
+                            axes = np.array(axes, ndmin=1).reshape(nrows_t, ncols_t)
+                            fig.suptitle(
+                                f"Temporal Fidelity Metrics Over Epochs ({N_spokes_eval} spokes/frame)",
+                                fontsize=20,
                             )
-                            if min_len > 0:
-                                temporal_epochs = temporal_epochs[:min_len]
-                                curve_maes_plot = eval_curve_maes[:min_len]
-                                ttae_plot = eval_ttae_secs[:min_len]
-                                iauc10_plot = eval_iauc10_errs[:min_len]
-                                peak_plot = eval_peak_errs[:min_len]
 
-                                fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-                                fig.suptitle(
-                                    f"Temporal Fidelity Metrics Over Epochs ({N_spokes_eval} spokes/frame)",
-                                    fontsize=20,
-                                )
+                            for idx, (title, ylabel, series, grasp_baseline) in enumerate(temporal_plot_specs):
+                                ax = axes[idx // ncols_t, idx % ncols_t]
+                                if eval_temporal_epochs and len(eval_temporal_epochs) >= len(series):
+                                    x = eval_temporal_epochs[: len(series)]
+                                else:
+                                    x = list(range(0, len(series) * eval_frequency, eval_frequency))
+                                finite_values = [v for v in series if v is not None and np.isfinite(v)]
+                                if finite_values:
+                                    sns.lineplot(x=x, y=series, ax=ax)
+                                else:
+                                    ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+                                if grasp_baseline is not None and np.isfinite(grasp_baseline):
+                                    ax.axhline(y=grasp_baseline, color='red', linestyle='--', linewidth=2)
+                                ax.set_title(title)
+                                ax.set_xlabel("Epoch")
+                                ax.set_ylabel(ylabel)
 
-                                sns.lineplot(x=temporal_epochs, y=curve_maes_plot, ax=axes[0, 0])
-                                axes[0, 0].set_title("Curve MAE")
-                                axes[0, 0].set_xlabel("Epoch")
-                                axes[0, 0].set_ylabel("MAE")
+                            for idx in range(len(temporal_plot_specs), nrows_t * ncols_t):
+                                axes[idx // ncols_t, idx % ncols_t].axis("off")
 
-                                sns.lineplot(x=temporal_epochs, y=ttae_plot, ax=axes[0, 1])
-                                axes[0, 1].set_title("Time to Arrival Error")
-                                axes[0, 1].set_xlabel("Epoch")
-                                axes[0, 1].set_ylabel("Seconds")
-
-                                sns.lineplot(x=temporal_epochs, y=iauc10_plot, ax=axes[1, 0])
-                                axes[1, 0].set_title("IAUC10 Error")
-                                axes[1, 0].set_xlabel("Epoch")
-                                axes[1, 0].set_ylabel("Error")
-
-                                sns.lineplot(x=temporal_epochs, y=peak_plot, ax=axes[1, 1])
-                                axes[1, 1].set_title("Peak Enhancement Error")
-                                axes[1, 1].set_xlabel("Epoch")
-                                axes[1, 1].set_ylabel("Error")
-
-                                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-                                plt.savefig(os.path.join(output_dir, "eval_temporal_metrics.png"))
-                                plt.close()
+                            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                            plt.savefig(os.path.join(output_dir, "eval_temporal_metrics.png"))
+                            plt.close()
 
                         if curriculum_enabled and eval_spf_curves:
                             for spf in sorted(eval_spf_curves):
@@ -4013,7 +5382,7 @@ def main():
                                 if not spf_curves["epochs"]:
                                     continue
 
-                                fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+                                fig, axes = plt.subplots(2, 4, figsize=(24, 10))
                                 fig.suptitle(
                                     f"Evaluation Metrics Over Epochs ({spf} spokes/frame)",
                                     fontsize=20,
@@ -4057,21 +5426,30 @@ def main():
 
                                 sns.lineplot(
                                     x=spf_curves["epochs"],
-                                    y=spf_curves["eval_raw_dc_maes"],
+                                    y=spf_curves["eval_raw_dc_mses"],
                                     ax=axes[1, 1],
                                 )
-                                axes[1, 1].set_title("Non-DRO k-space MAE")
+                                axes[1, 1].set_title("Non-DRO k-space MSE")
                                 axes[1, 1].set_xlabel("Epoch")
-                                axes[1, 1].set_ylabel("MAE")
+                                axes[1, 1].set_ylabel("MSE")
+
+                                sns.lineplot(
+                                    x=spf_curves["epochs"],
+                                    y=spf_curves["eval_raw_dc_maes"],
+                                    ax=axes[1, 2],
+                                )
+                                axes[1, 2].set_title("Non-DRO k-space MAE")
+                                axes[1, 2].set_xlabel("Epoch")
+                                axes[1, 2].set_ylabel("MAE")
 
                                 sns.lineplot(
                                     x=spf_curves["epochs"],
                                     y=spf_curves["eval_curve_corrs"],
-                                    ax=axes[1, 2],
+                                    ax=axes[1, 3],
                                 )
-                                axes[1, 2].set_title("DRO Curve Correlation")
-                                axes[1, 2].set_xlabel("Epoch")
-                                axes[1, 2].set_ylabel("Pearson Correlation Coefficient")
+                                axes[1, 3].set_title("DRO Curve Correlation")
+                                axes[1, 3].set_xlabel("Epoch")
+                                axes[1, 3].set_ylabel("Pearson Correlation Coefficient")
 
                                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
                                 plt.savefig(
@@ -4132,6 +5510,25 @@ def main():
                         plt.savefig(os.path.join(eval_dir, "eval_raw_dc_mses.png"))
                         plt.close()
 
+                        eval_raw_dc_psnrs = [_mse_to_psnr(v, peak=raw_dc_psnr_peak) for v in eval_raw_dc_mses]
+                        avg_grasp_raw_dc_psnr = _mse_to_psnr(avg_grasp_raw_dc_mse, peak=raw_dc_psnr_peak)
+                        plt.figure()
+                        plt.plot(epoch_labels, eval_raw_dc_psnrs)
+                        if np.isfinite(avg_grasp_raw_dc_psnr):
+                            plt.axhline(
+                                y=avg_grasp_raw_dc_psnr,
+                                color="red",
+                                linestyle="--",
+                                linewidth=2,
+                                label="GRASP Avg",
+                            )
+                        plt.xlabel("Epoch")
+                        plt.ylabel("Non-DRO k-space Relative PSNR")
+                        plt.title("k-space Relative PSNR")
+                        plt.grid(True)
+                        plt.savefig(os.path.join(eval_dir, "eval_raw_dc_psnrs.png"))
+                        plt.close()
+
 
                 if global_rank == 0 or not config['training']['multigpu']:
                     # Print epoch summary
@@ -4147,6 +5544,12 @@ def main():
                         print(
                             f"Epoch {epoch}: Training Adj Loss: {epoch_train_adj_loss:.6f}, Validation Adj Loss: {epoch_val_adj_loss:.6f}"
                         )
+                    if use_teacher_distill:
+                        print(
+                            "Epoch "
+                            f"{epoch}: Training Teacher Distill Loss: {epoch_train_teacher_distill_loss:.6f} "
+                            f"(weight={teacher_distill_loss_weight:.3g})"
+                        )
                     print(f"--- Evaluation Metrics: Epoch {epoch} ---")
                     print(f"Recon SSIM: {epoch_eval_ssim:.4f} ± {np.std(epoch_eval_ssims):.4f}")
                     print(f"Recon PSNR: {epoch_eval_psnr:.4f} ± {np.std(epoch_eval_psnrs):.4f}")
@@ -4154,8 +5557,24 @@ def main():
                     print(f"Recon LPIPS: {epoch_eval_lpips:.4f} ± {np.std(epoch_eval_lpipses):.4f}")
                     print(f"Recon DC MSE: {epoch_eval_dc_mse:.4f} ± {np.std(epoch_eval_dc_mses):.4f}")
                     print(f"Recon DC MAE: {epoch_eval_dc_mae:.4f} ± {np.std(epoch_eval_dc_maes):.4f}")
+                    avg_grasp_raw_dc_psnr = _mse_to_psnr(avg_grasp_raw_dc_mse, peak=raw_dc_psnr_peak)
                     print(f"Recon Raw DC MSE: {epoch_eval_raw_dc_mse:.4f} ± {np.std(epoch_eval_raw_dc_mses):.4f}")
                     print(f"Recon Raw DC MAE: {epoch_eval_raw_dc_mae:.4f} ± {np.std(epoch_eval_raw_dc_maes):.4f}")
+                    if np.isfinite(epoch_eval_raw_dc_psnr):
+                        print(f"Recon Raw DC Relative PSNR: {epoch_eval_raw_dc_psnr:.4f}")
+                    if np.isfinite(epoch_eval_raw_dc_rel_l2):
+                        print(f"Recon Raw DC Relative L2: {epoch_eval_raw_dc_rel_l2:.6f}")
+                    if np.isfinite(epoch_eval_raw_dc_rel_l2_low) and np.isfinite(epoch_eval_raw_dc_rel_l2_mid) and np.isfinite(epoch_eval_raw_dc_rel_l2_high):
+                        print(
+                            "Recon Raw DC Relative L2 Bands "
+                            f"(L/M/H): {epoch_eval_raw_dc_rel_l2_low:.6f} / "
+                            f"{epoch_eval_raw_dc_rel_l2_mid:.6f} / {epoch_eval_raw_dc_rel_l2_high:.6f}"
+                        )
+                    if epoch_eval_raw_dyn_dce_maes:
+                        print(
+                            f"Recon Raw Dynamic DCE MAE: {epoch_eval_raw_dyn_dce_mae:.6f} ± "
+                            f"{np.std(epoch_eval_raw_dyn_dce_maes):.6f}"
+                        )
                     print(f"Recon Enhancement Curve Correlation: {epoch_eval_curve_corr:.4f} ± {np.std(epoch_eval_curve_corrs):.4f}")
                     if not _grasp_baseline_ready():
                         raise RuntimeError(
@@ -4169,6 +5588,21 @@ def main():
                     print(f"GRASP DC MAE: {avg_grasp_dc_mae:.6f} ± {_std_or_zero(grasp_dc_maes):.4f}")
                     print(f"GRASP Raw DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {_std_or_zero(raw_grasp_dc_mses):.4f}")
                     print(f"GRASP Raw DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {_std_or_zero(raw_grasp_dc_maes):.4f}")
+                    if np.isfinite(avg_grasp_raw_dc_psnr):
+                        print(f"GRASP Raw DC Relative PSNR: {avg_grasp_raw_dc_psnr:.4f}")
+                    if np.isfinite(avg_grasp_raw_dc_rel_l2):
+                        print(f"GRASP Raw DC Relative L2: {avg_grasp_raw_dc_rel_l2:.6f}")
+                    if np.isfinite(avg_grasp_raw_dc_rel_l2_low) and np.isfinite(avg_grasp_raw_dc_rel_l2_mid) and np.isfinite(avg_grasp_raw_dc_rel_l2_high):
+                        print(
+                            "GRASP Raw DC Relative L2 Bands "
+                            f"(L/M/H): {avg_grasp_raw_dc_rel_l2_low:.6f} / "
+                            f"{avg_grasp_raw_dc_rel_l2_mid:.6f} / {avg_grasp_raw_dc_rel_l2_high:.6f}"
+                        )
+                    if raw_grasp_dyn_dce_maes:
+                        print(
+                            f"GRASP Raw Dynamic DCE MAE: {avg_grasp_raw_dyn_dce_mae:.6f} ± "
+                            f"{_std_or_zero(raw_grasp_dyn_dce_maes):.6f}"
+                        )
                     print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {_std_or_zero(grasp_curve_corrs):.4f}")
 
             # Always save the latest checkpoint after each epoch.

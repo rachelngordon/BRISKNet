@@ -129,3 +129,84 @@ Current best BRISKNet in this sweep (`707694` at ep35): SSIM `0.872`, PSNR `39.2
 
 ### Immediate decision rule (first checkpoint gate)
 - After first eval windows (epochs 10/15/20), prioritize continuation of runs that improve curve correlation and LPIPS together; de-prioritize any run that only improves one metric while collapsing the other.
+
+## 2026-02-12 2-SPF Inference Timing Probe (Burst)
+- Action: submitted quick burst probe job to measure comparable 2-SPF inference timing for Mamba vs LSFP and reuse GRASP timing reference.
+- Job:
+  - `709983` (`probe_2spf_inf_burst`)
+  - Queue: `general` + `qos=burst`
+  - Resources: `1 node x 1 GPU`, `cpus_per_task=8`, `timeout=240 min`
+- Launcher:
+  - `submit.py` with entry script `probe_inference_2spf.py`
+  - Config anchor: `configs/config_sampling_2spf_rebin_v3_mamba_temporal_speed12_arrival_only_2n4g_ablation.yaml`
+- Probe targets:
+  - Mamba exp dir: `/net/projects2/annawoodard/experiments/sampling_2spf_rebin_v3_mamba_temporal_2n4g_arrival_only_ablation`
+  - LSFP exp dir: `/net/projects2/annawoodard/experiments/sampling_2spf_rebin_v3_ft120_4n4g_warmfix`
+- Output summary path:
+  - `/net/projects2/annawoodard/experiments/probe_2spf_inference_burst/probe_summary.json`
+
+### 2026-02-12 update: preempted run + successful n=4 rerun
+- `709983` (`probe_2spf_inf_burst`) was preempted mid-run (burst), then requeued; canceled and replaced with smaller quick probe.
+- Replacement:
+  - `709999` (`probe_2spf_n4_burst`), completed.
+  - Summary JSON: `/net/projects2/annawoodard/experiments/probe_2spf_inference_burst_n4/probe_summary.json`
+- 2-SPF inference timing (recon-only):
+  - Mamba (`sampling_2spf_rebin_v3_mamba_temporal_2n4g_arrival_only_ablation`): `34.183 ± 3.571 s/sample` (n=4)
+  - LSFP (`sampling_2spf_rebin_v3_ft120_4n4g_warmfix`): `41.136 ± 1.586 s/sample` (n=4)
+  - GRASP reference (from `val_inference_logs.json`): `221.717 ± 3.063 s/sample` (n=15)
+
+## 2026-02-13 Update: Latest 36-SPF Matrix (6-8h Runtime)
+
+### Runs analyzed
+- `m36_dline_timeenc_mixmc002_ctrl_2n4g` (job `709973`)
+- `m36_dline_timeenc_mixmc005_ctrl_2n4g` (job `709974`)
+- `m36_dline_timeenc_mixmc002_earlyei_norebin_2n4g` (job `709975`)
+- `m36_dline_timeenc_mixmc002_earlyei_rebin_2n4g` (job `709976`)
+
+### Source of truth used
+- Overlay tables/plots: `/net/projects2/annawoodard/experiments/mamba_overlay_36spf/overlay_metric_tables.txt` (corrected overlay source).
+- Checkpoint curves from each run's `<exp_name>_model.pth` (not just overlay event files).
+- Note: overlay from event logs can look stale after requeue/multi-attempt runs; checkpoint curves contain the latest eval points.
+
+### Current snapshot vs GRASP baseline
+- GRASP baseline in these checkpoints: SSIM `0.9795`, PSNR `48.580`, LPIPS `0.00211`, curve corr `0.99933`.
+
+| run | ckpt epoch | best PSNR (epoch) | best SSIM (epoch) | best LPIPS (epoch) | best corr (epoch) | latest PSNR | latest SSIM | latest LPIPS | latest corr |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `m36_dline_timeenc_mixmc002_ctrl_2n4g` | 31 | 41.435 (e20) | 0.9264 (e10) | 0.0297 (e25) | 0.9984 (e25) | 36.339 (e30) | 0.5595 (e30) | 0.0412 (e30) | 0.9982 (e30) |
+| `m36_dline_timeenc_mixmc005_ctrl_2n4g` | 29 | 41.369 (e20) | 0.9308 (e10) | 0.0298 (e25) | 0.9984 (e25) | 40.492 (e25) | 0.7931 (e25) | 0.0298 (e25) | 0.9984 (e25) |
+| `m36_dline_timeenc_mixmc002_earlyei_norebin_2n4g` | 28 | 41.086 (e5) | 0.9153 (e5) | 0.0344 (e5) | 0.9978 (e5) | 8.112 (e25) | 0.2871 (e25) | 0.6132 (e25) | 0.9953 (e25) |
+| `m36_dline_timeenc_mixmc002_earlyei_rebin_2n4g` | 17 | 41.072 (e5) | 0.9191 (e5) | 0.0348 (e5) | 0.9978 (e5) | 9.146 (e15) | 0.1222 (e15) | 0.6125 (e15) | 0.8907 (e15) |
+
+### What we learned
+- Early EI (`warmup=5`, `weight=6000`) is unstable in this setup:
+  - Both early-EI runs collapse immediately after EI turns on.
+  - Rebin + early EI is worst (large PSNR/SSIM failure by e10-e15).
+- The control runs are much healthier through e20, then degrade after EI activation:
+  - `mixmc002_ctrl`: good through e20, then strong collapse by e30.
+  - `mixmc005_ctrl`: also degrades after e20, but less severely so far.
+- Rebin is **not** the cause in the control runs yet:
+  - `rebin warmup=70`, so it has not started during e25-e30 collapse.
+  - This points to EI schedule/strength, not rebin.
+- Mixed MC with slightly more MSE (`mse_weight=0.05`) appears more robust than `0.02` in this matrix.
+
+### Gap to GRASP (best observed so far in this matrix)
+- Best PSNR gap: `41.435 vs 48.580` (about `-7.15 dB`).
+- Best SSIM gap: `0.9308 vs 0.9795` (about `-0.0487`).
+- LPIPS remains far from GRASP despite improvements.
+- Temporal corr is already close numerically, so main gap is still image quality.
+
+### Updated hypotheses
+1. Main failure mode is EI overpowering MC once EI turns on, not lack of rebin.
+2. 36-SPF should use longer MC-dominant phase and gentler EI ramp; this is likely the highest-ROI path before returning to 2-SPF.
+3. For now, rebin should stay delayed/off at 36-SPF until EI is stable.
+
+### Recommended immediate 36-SPF next steps
+1. Keep running `mixmc005_ctrl` as the lead run (currently most stable after EI-on).
+2. Start a continuation branch from best pre-collapse checkpoint (`e20`) with gentler EI:
+   - EI warmup `>=35`
+   - EI weight `~1000-2000` (not 6000-8000)
+   - EI duration `~80-100`
+   - keep EI metric `MSE` (early-EI `MAE` variants were unstable here).
+3. Add EI activation gate in config (enable EI only after MC reaches threshold), then compare against fixed warmup.
+4. Keep rebin disabled or very late in 36-SPF while tuning EI stability; revisit rebin once spatial quality is retained past e30.

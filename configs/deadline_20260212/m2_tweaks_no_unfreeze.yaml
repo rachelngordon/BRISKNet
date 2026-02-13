@@ -91,7 +91,7 @@ model:
       warmup: 24
       warp_ratio_max: 0.95
       warp_ratio_min: 0.6
-      weight: 5000
+      weight: 10000
     mc_loss:
       metric: MAE
       weight: 1
@@ -109,7 +109,7 @@ model:
       enable: true
       factor: 4
       metric: MAE
-      offset_mode: random
+      offset_mode: average
       teacher_branch: lo
       teacher_stopgrad: true
       temporal_mode: temporal_difference
@@ -117,6 +117,33 @@ model:
       warmup: 60
       weight: 300
     use_ei_loss: true
+    teacher_distill:
+      enable: true
+      checkpoint: null
+      metric: MAE
+      temporal_mode: absolute
+      baseline_frames: 4
+      percent_enhancement_eps: 0.0001
+      weight: 0.2
+      warmup: 0
+      duration: 8
+      stop_epoch: 40
+      detach_teacher: true
+    activation_gate:
+      ei:
+        enable: true
+        metric: train_mc_loss
+        mode: <=
+        threshold: 1.8e-05
+        min_epoch: 4
+        patience: 2
+      rebin:
+        enable: true
+        metric: train_mc_loss
+        mode: <=
+        threshold: 1.6e-05
+        min_epoch: 12
+        patience: 2
   mamba:
     attn_drop_rate: 0.0
     block_depth: 2
@@ -204,3 +231,13 @@ training:
   multigpu: true
   plot_interval: 20
   save_interval: 5
+  progressive_unfreezing:
+    enable: false
+    freeze_epochs: 8
+    keep_trainable_patterns:
+    - mapping_network
+    - condition_to_film
+    - backbone_net.recon_net.patch_embed
+    - backbone_net.recon_net.norm
+    - backbone_net.recon_net.dc_layers
+    - backbone_net.recon_net.last_dc
