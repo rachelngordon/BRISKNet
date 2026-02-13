@@ -3868,6 +3868,8 @@ def main():
                         plt.plot(weighted_train_mc_losses, label="MC Loss")
                         plt.plot(weighted_train_ei_losses, label="EI Loss")
                         plt.plot(weighted_train_adj_losses, label="Adjoint Loss")
+                        if weighted_train_rebin_losses:
+                            plt.plot(weighted_train_rebin_losses, label="Rebin Loss")
                         plt.xlabel("Epoch")
                         plt.ylabel("Loss")
                         plt.title("Weighted Training Losses")

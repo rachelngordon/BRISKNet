@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 18
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 18
-  eval_spokes: 16
+  eval_timeframes: 8
+  eval_spokes: 36
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 16
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -34,16 +34,10 @@ dataloader:
   shuffle: true
   num_workers: 2
   max_subjects: 300
-  num_random_slices: 4
+  num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
   slice_range_end: None
-  slice_sampling_mode: nonenhancing
-  slice_sampling_uniform_fraction: 0.6
-  slice_sampling_filter_quantile: 0.3
-  slice_sampling_no_replacement: true
-  slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
-  slice_sampling_cache_workers: 4
 
 # Model settings
 model:
@@ -89,7 +83,7 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "none"
+      temporal_transform: "arrival_shift_enh_scale"
       spatial_transform: "diffeo"
       rotate_range: 0
       weight: 10000
@@ -105,10 +99,10 @@ model:
       arrival_shift_baseline_k: 2.0
       arrival_method: fraction
       arrival_fraction: 0.15       # used when method = fraction
+      enh_scale_start: arrival
       # --- enh_scale params ---
       enh_scale_min: 0.85
       enh_scale_max: 1.15
-      enh_scale_start: arrival
       pre_contrast_baseline: "m_seconds"
       baseline_seconds: 20.0
       total_seconds: 150.0
@@ -116,7 +110,7 @@ model:
     # Operator-level (binning) equivariance (DDEI-ish).
     rebin_loss:
       enable: false
-      weight: 10000
+      weight: 3000
       factor: 2
       metric: "MSE"
       time_index_mode: "scaled"
@@ -125,7 +119,7 @@ model:
 
 # Training settings
 training:
-  epochs: 90
+  epochs: 80
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
@@ -134,7 +128,7 @@ training:
     warmup_mode: cosine
     min_lr_factor: 0.2
     warmup_epochs: 5
-  edge_time_index_sampling: true
+  edge_time_index_sampling: false
   curriculum_learning:
     enabled: False
     phases:
