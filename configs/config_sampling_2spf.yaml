@@ -89,7 +89,7 @@ model:
       metric: "MAE"
     ei_loss:
       metric: "MSE"
-      temporal_transform: "arrival_shift_enh_scale"
+      temporal_transform: "none"
       spatial_transform: "diffeo"
       rotate_range: 0
       weight: 10000
