@@ -590,7 +590,7 @@ def main():
         ckpt_meta = _torch_load_checkpoint(ckpt_path, map_location="cpu")
     except Exception as exc:
         print(f"Warning: unable to load checkpoint metadata from {ckpt_path}: {exc}")
-    trained_epochs = ckpt_meta.get("epoch") - 1 if isinstance(ckpt_meta, dict) else None
+    trained_steps = ckpt_meta.get("step") - 1 if isinstance(ckpt_meta, dict) else None
 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -1767,7 +1767,7 @@ def main():
             "avg_inference_time": None if mean_infer is None else float(mean_infer),
             "std_inference_time": None if std_infer is None else float(std_infer),
             "num_samples": int(num_samples),
-            "training_epochs": None if trained_epochs is None else int(trained_epochs),
+            "training_steps": None if trained_steps is None else int(trained_steps),
             "spatial_metrics": {},
             "dc_metrics": {},
             "temporal_metrics": {},

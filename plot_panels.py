@@ -65,7 +65,7 @@ def _plot_series(
     *,
     x=None,
     title: str = "",
-    xlabel: str = "Epoch",
+    xlabel: str = "Step",
     ylabel: str = "",
     color: str | None = None,
     linestyle: str = "-",
@@ -124,13 +124,13 @@ def save_loss_panel(
     *,
     train_curves: dict,
     val_curves: dict,
-    eval_frequency: int,
+    eval_every_steps: int,
     spokes_per_frame: int,
     suptitle: str | None = None,
 ):
     import matplotlib.pyplot as plt
 
-    eval_frequency = max(int(eval_frequency or 1), 1)
+    eval_every_steps = max(int(eval_every_steps or 1), 1)
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
     if suptitle is None:
@@ -156,13 +156,13 @@ def save_loss_panel(
         ylabel="EI Loss",
     )
 
-    def _val_epochs(n: int) -> list[int]:
-        return list(range(0, int(n) * eval_frequency, eval_frequency))
+    def _val_steps(n: int) -> list[int]:
+        return list(range(0, int(n) * eval_every_steps, eval_every_steps))
 
     _plot_series(
         axes[1, 0],
         val_curves.get("val_adj_losses", []),
-        x=_val_epochs(len(_coerce_curve(val_curves.get("val_adj_losses", [])))),
+        x=_val_steps(len(_coerce_curve(val_curves.get("val_adj_losses", [])))),
         title=f"Validation Adjoint Loss ({int(spokes_per_frame)} spokes/frame)",
         ylabel="Adjoint Loss",
         color="C1",
@@ -170,7 +170,7 @@ def save_loss_panel(
     _plot_series(
         axes[1, 1],
         val_curves.get("val_mc_losses", []),
-        x=_val_epochs(len(_coerce_curve(val_curves.get("val_mc_losses", [])))),
+        x=_val_steps(len(_coerce_curve(val_curves.get("val_mc_losses", [])))),
         title=f"Validation MC Loss ({int(spokes_per_frame)} spokes/frame)",
         ylabel="MC Loss",
         color="C1",
@@ -178,7 +178,7 @@ def save_loss_panel(
     _plot_series(
         axes[1, 2],
         val_curves.get("val_ei_losses", []),
-        x=_val_epochs(len(_coerce_curve(val_curves.get("val_ei_losses", [])))),
+        x=_val_steps(len(_coerce_curve(val_curves.get("val_ei_losses", [])))),
         title=f"Validation EI Loss ({int(spokes_per_frame)} spokes/frame)",
         ylabel="EI Loss",
         color="C1",
@@ -189,30 +189,30 @@ def save_loss_panel(
     plt.close(fig)
 
 
-def save_eval_metrics_over_epochs(
+def save_eval_metrics_over_steps(
     out_path: str,
     *,
     eval_curves: dict,
-    eval_frequency: int,
+    eval_every_steps: int,
     spokes_per_frame: int,
     baselines: dict | None = None,
-    epochs: Any | None = None,
+    steps: Any | None = None,
     suptitle: str | None = None,
 ):
     import matplotlib.pyplot as plt
 
     baselines = baselines or {}
-    eval_frequency = max(int(eval_frequency or 1), 1)
+    eval_every_steps = max(int(eval_every_steps or 1), 1)
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
     if suptitle is None:
-        suptitle = f"Evaluation Metrics Over Epochs ({int(spokes_per_frame)} spokes/frame)"
+        suptitle = f"Evaluation Metrics Over Steps ({int(spokes_per_frame)} spokes/frame)"
     fig.suptitle(suptitle, fontsize=18)
 
-    def _eval_epochs(n: int) -> list[int]:
-        return list(range(0, int(n) * eval_frequency, eval_frequency))
+    def _eval_steps(n: int) -> list[int]:
+        return list(range(0, int(n) * eval_every_steps, eval_every_steps))
 
-    epoch_x = _coerce_curve(epochs) if epochs is not None else []
+    step_x = _coerce_curve(steps) if steps is not None else []
 
     specs = [
         SeriesSpec(title="DRO Evaluation SSIM", key="eval_ssims", ylabel="SSIM", start_at_zero=True),
@@ -225,7 +225,7 @@ def save_eval_metrics_over_epochs(
     baseline_keys = ["ssim", "psnr", "mse", "lpips", "raw_dc_mae", "curve_corr"]
     for ax, spec, bkey in zip(axes.ravel(), specs, baseline_keys, strict=True):
         y = eval_curves.get(spec.key, [])
-        x = epoch_x if epoch_x else _eval_epochs(len(_coerce_curve(y)))
+        x = step_x if step_x else _eval_steps(len(_coerce_curve(y)))
         _plot_series(
             ax,
             y,

@@ -637,42 +637,42 @@ def plot_rebin_consistency_diagnostic(
 
 def get_cosine_ei_weight(
     current_epoch,
-    warmup_epochs,
-    schedule_duration,
+    warmup_max_steps,
+    schedule_duration_steps,
     target_weight
 ):
     """
-    Calculates the EI loss weight for the current epoch using a cosine schedule.
+    Calculates the EI loss weight for the current step using a cosine schedule.
 
     This implements a curriculum learning strategy:
-    1. For `warmup_epochs`, the weight is 0 (MC loss only).
-    2. Over the next `schedule_duration` epochs, the weight smoothly ramps
+    1. For `warmup_max_steps`, the weight is 0 (MC loss only).
+    2. Over the next `schedule_duration_steps` steps, the weight smoothly ramps
        up from 0 to `target_weight` following a cosine curve.
     3. After the schedule is complete, the weight stays at `target_weight`.
 
     Args:
-        current_epoch (int): The current training epoch (starting from 1).
-        warmup_epochs (int): Number of epochs to train with only MC loss.
-        schedule_duration (int): Number of epochs for the ramp-up.
+        current_epoch (int): The current training step (starting from 1).
+        warmup_max_steps (int): Number of steps to train with only MC loss.
+        schedule_duration_steps (int): Number of steps for the ramp-up.
         target_weight (float): The final EI loss weight to reach.
 
     Returns:
-        float: The EI loss weight for the current epoch.
+        float: The EI loss weight for the current step.
     """
     # Phase 1: Warm-up phase (MC loss only)
-    if current_epoch <= warmup_epochs:
+    if current_epoch <= warmup_max_steps:
         return 0.0
 
     # Calculate progress within the scheduling phase
-    schedule_progress_epoch = current_epoch - warmup_epochs
+    schedule_progress_epoch = current_epoch - warmup_max_steps
 
     # Phase 3: Schedule is complete, hold at target weight
-    if schedule_progress_epoch >= schedule_duration:
+    if schedule_progress_epoch >= schedule_duration_steps:
         return target_weight
 
     # Phase 2: Cosine ramp-up phase
     # This creates a value that goes from 0 to 1 along a cosine curve.
-    cosine_multiplier = 0.5 * (1 - np.cos(np.pi * schedule_progress_epoch / schedule_duration))
+    cosine_multiplier = 0.5 * (1 - np.cos(np.pi * schedule_progress_epoch / schedule_duration_steps))
     
     return target_weight * cosine_multiplier
 
@@ -816,20 +816,20 @@ def remove_module_prefix(state_dict):
     return new_state_dict
 
 
-def save_checkpoint(model, optimizer, epoch,
-                    train_curves, val_curves, eval_curves, ei_weight, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, filename):
+def save_checkpoint(model, optimizer, step,
+                    train_curves, val_curves, eval_curves, ei_weight, step0_train_ei_loss, step_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, filename):
     
     # If the model is a DDP model, we need to access the underlying model
     # via the .module attribute to save a clean state_dict.
     model_state = model.module.state_dict() if isinstance(model, DDP) else model.state_dict()
 
     checkpoint = {
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
+        "step": step,
+        "model_state_dict": model_state,
         "optimizer_state_dict": optimizer.state_dict(),
         "ei_weight": ei_weight,
         "step0_train_ei_loss": step0_train_ei_loss,
-        "epoch_train_mc_loss": epoch_train_mc_loss,
+        "step_train_mc_loss": step_train_mc_loss,
         "avg_grasp_ssim": avg_grasp_ssim,
         "avg_grasp_psnr": avg_grasp_psnr,
         "avg_grasp_mse": avg_grasp_mse,
@@ -844,11 +844,18 @@ def save_checkpoint(model, optimizer, epoch,
         **eval_curves,
     }
     torch.save(checkpoint, filename)
-    print(f"Checkpoint saved at epoch {epoch} to {filename}")
+    print(f"Checkpoint saved at step {step} to {filename}")
 
 
 def load_checkpoint(model, optimizer, filename):
     ckpt = _torch_load_checkpoint(filename, map_location="cpu")
+    required_keys = ("step", "model_state_dict", "optimizer_state_dict", "step_train_mc_loss")
+    missing_required = [k for k in required_keys if k not in ckpt]
+    if missing_required:
+        missing_txt = ", ".join(missing_required)
+        raise KeyError(
+            f"Checkpoint '{filename}' is missing required step-native keys: {missing_txt}."
+        )
 
     model_to_load = model.module if isinstance(model, DDP) else model
 
@@ -866,11 +873,11 @@ def load_checkpoint(model, optimizer, filename):
         "train_rebin_losses": ckpt.get("train_rebin_losses", []),
         "weighted_train_rebin_losses": ckpt.get("weighted_train_rebin_losses", []),
         "lr_history": ckpt.get("lr_history", []),
-        "lr_epochs": ckpt.get("lr_epochs", []),
+        "lr_steps": ckpt.get("lr_steps", []),
         "ei_weight_history": ckpt.get("ei_weight_history", []),
-        "ei_weight_epochs": ckpt.get("ei_weight_epochs", []),
+        "ei_weight_steps": ckpt.get("ei_weight_steps", []),
         "ei_gradnorm_ratio_history": ckpt.get("ei_gradnorm_ratio_history", []),
-        "ei_gradnorm_ratio_epochs": ckpt.get("ei_gradnorm_ratio_epochs", []),
+        "ei_gradnorm_ratio_steps": ckpt.get("ei_gradnorm_ratio_steps", []),
         "ei_gradnorm_ratio_ema": ckpt.get("ei_gradnorm_ratio_ema"),
         "ei_gradnorm_samples": ckpt.get("ei_gradnorm_samples", 0),
         "ei_gradnorm_locked": ckpt.get("ei_gradnorm_locked", False),
@@ -883,7 +890,7 @@ def load_checkpoint(model, optimizer, filename):
             ckpt.get("ei_weight", 0.0),
         ),
         "rebin_weight_history": ckpt.get("rebin_weight_history", []),
-        "rebin_weight_epochs": ckpt.get("rebin_weight_epochs", []),
+        "rebin_weight_steps": ckpt.get("rebin_weight_steps", []),
     }
     val_curves = {
         "val_mc_losses": ckpt.get("val_mc_losses", []),
@@ -907,7 +914,7 @@ def load_checkpoint(model, optimizer, filename):
         "eval_raw_dyn_dce_maes": ckpt.get("eval_raw_dyn_dce_maes", []),
         "eval_raw_dyn_dce_mses": ckpt.get("eval_raw_dyn_dce_mses", []),
         "eval_curve_corrs": ckpt.get("eval_curve_corrs", []),
-        "eval_temporal_epochs": ckpt.get("eval_temporal_epochs", []),
+        "eval_steps": ckpt.get("eval_steps", []),
         "eval_rho_fulls": ckpt.get("eval_rho_fulls", []),
         "eval_curve_maes": ckpt.get("eval_curve_maes", []),
         "eval_early_corrs": ckpt.get("eval_early_corrs", []),
@@ -938,10 +945,10 @@ def load_checkpoint(model, optimizer, filename):
         "avg_grasp_raw_dyn_dce_mse": ckpt.get("avg_grasp_raw_dyn_dce_mse", float("nan")),
         "eval_spf_curves": ckpt.get("eval_spf_curves", {}),
         "best_psnr": ckpt.get("best_psnr"),
-        "best_epoch": ckpt.get("best_epoch"),
+        "best_step": ckpt.get("best_step"),
     }
 
-    return model, optimizer, ckpt.get("epoch", 1), ckpt.get("ei_weight"), ckpt.get("step0_train_ei_loss"), ckpt.get("epoch_train_mc_loss"), train_curves, val_curves, eval_curves, ckpt.get("avg_grasp_ssim"), ckpt.get("avg_grasp_psnr"), ckpt.get("avg_grasp_mse"), ckpt.get("avg_grasp_lpips"), ckpt.get("avg_grasp_dc_mse"), ckpt.get("avg_grasp_dc_mae"), ckpt.get("avg_grasp_curve_corr"), ckpt.get("avg_grasp_raw_dc_mae"), ckpt.get("avg_grasp_raw_dc_mse")
+    return model, optimizer, ckpt["step"], ckpt.get("ei_weight"), ckpt.get("step0_train_ei_loss"), ckpt["step_train_mc_loss"], train_curves, val_curves, eval_curves, ckpt.get("avg_grasp_ssim"), ckpt.get("avg_grasp_psnr"), ckpt.get("avg_grasp_mse"), ckpt.get("avg_grasp_lpips"), ckpt.get("avg_grasp_dc_mse"), ckpt.get("avg_grasp_dc_mae"), ckpt.get("avg_grasp_curve_corr"), ckpt.get("avg_grasp_raw_dc_mae"), ckpt.get("avg_grasp_raw_dc_mse")
 
 
 def load_pretrained_weights(model, filename, skip_prefixes=None):
@@ -985,7 +992,7 @@ def load_pretrained_weights(model, filename, skip_prefixes=None):
         "mismatched_keys": mismatched_keys,
         "missing_keys": len(incompatible.missing_keys),
         "unexpected_keys": len(incompatible.unexpected_keys),
-        "checkpoint_epoch": ckpt.get("epoch"),
+        "checkpoint_step": ckpt.get("step"),
     }
     return model, info
 

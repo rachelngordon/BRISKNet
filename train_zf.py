@@ -412,10 +412,10 @@ def _parse_loss_gate(gate_cfg, gate_name: str):
     if enable and threshold is None:
         raise ValueError(f"model.losses.activation_gate.{gate_name}.threshold is required when enabled.")
     threshold_val = float(threshold) if threshold is not None else float("nan")
-    min_epoch = int(gate_cfg.get("min_epoch", 1))
+    min_step = int(gate_cfg.get("min_step", 1))
     patience = int(gate_cfg.get("patience", 1))
-    if min_epoch < 1:
-        raise ValueError(f"model.losses.activation_gate.{gate_name}.min_epoch must be >= 1.")
+    if min_step < 1:
+        raise ValueError(f"model.losses.activation_gate.{gate_name}.min_step must be >= 1.")
     if patience < 1:
         raise ValueError(f"model.losses.activation_gate.{gate_name}.patience must be >= 1.")
 
@@ -424,11 +424,11 @@ def _parse_loss_gate(gate_cfg, gate_name: str):
         "metric": str(gate_cfg.get("metric", "train_mc_loss")).strip().lower(),
         "mode": mode,
         "threshold": threshold_val,
-        "min_epoch": min_epoch,
+        "min_step": min_step,
         "patience": patience,
         "satisfied_streak": 0,
         "triggered": False,
-        "trigger_epoch": None,
+        "trigger_step": None,
     }
 
 
@@ -475,16 +475,16 @@ def _resolve_gate_metric_value(
     )
 
 
-def _infer_gate_state_from_history(weight_history, weight_epochs):
+def _infer_gate_state_from_history(weight_history, weight_max_steps):
     if not weight_history:
         return False, None
     for idx, weight in enumerate(weight_history):
         try:
             if float(weight) > 0.0:
                 epoch_val = None
-                if idx < len(weight_epochs):
+                if idx < len(weight_max_steps):
                     try:
-                        epoch_val = int(weight_epochs[idx])
+                        epoch_val = int(weight_max_steps[idx])
                     except (TypeError, ValueError):
                         epoch_val = None
                 return True, epoch_val
@@ -573,10 +573,10 @@ def main():
         else:
             config = new_config
         config = apply_cluster_paths(config)
-        epochs = new_config['training']["epochs"]
+        max_steps = new_config['training']["max_steps"]
     else:
         config = new_config
-        epochs = config['training']["epochs"]
+        max_steps = config['training']["max_steps"]
 
     model_cfg = config.setdefault("model", {})
     model_name_norm = str(model_cfg.get("name", "")).strip().lower()
@@ -875,14 +875,14 @@ def main():
     ei_cfg = losses_cfg["ei_loss"]
     target_w_ei = float(ei_cfg["weight"])
     warmup = int(ei_cfg["warmup"])
-    duration = int(ei_cfg["duration"])
+    duration_steps = int(ei_cfg["duration_steps"])
     if warmup < 0:
         raise ValueError("model.losses.ei_loss.warmup must be >= 0.")
-    if duration < 0:
-        raise ValueError("model.losses.ei_loss.duration must be >= 0.")
-    transition_duration = max(duration, 1)
-    ei_transition_start_epoch = warmup + 1
-    ei_transition_end_epoch = warmup + transition_duration
+    if duration_steps < 0:
+        raise ValueError("model.losses.ei_loss.duration_steps must be >= 0.")
+    transition_duration = max(duration_steps, 1)
+    ei_transition_start_step = warmup + 1
+    ei_transition_end_step = warmup + transition_duration
 
     gradnorm_cfg = ei_cfg.get("gradnorm_transition", {})
     if isinstance(gradnorm_cfg, dict):
@@ -934,11 +934,11 @@ def main():
     use_rebin_loss = bool(rebin_cfg.get("enable", False))
     rebin_target_w = float(rebin_cfg.get("weight", 0.0))
     rebin_warmup = int(rebin_cfg.get("warmup", 0))
-    rebin_duration = int(rebin_cfg.get("duration", 0))
+    rebin_duration_steps = int(rebin_cfg.get("duration_steps", 0))
     if rebin_warmup < 0:
         raise ValueError("model.losses.rebin_loss.warmup must be >= 0.")
-    if rebin_duration < 0:
-        raise ValueError("model.losses.rebin_loss.duration must be >= 0.")
+    if rebin_duration_steps < 0:
+        raise ValueError("model.losses.rebin_loss.duration_steps must be >= 0.")
     rebin_factor = int(rebin_cfg.get("factor", 2))
     rebin_metric_name = str(rebin_cfg.get("metric", "MSE"))
     rebin_time_index_mode = str(rebin_cfg.get("time_index_mode", "none"))
@@ -954,7 +954,7 @@ def main():
         rebin_dynamic_mask_enable = bool(rebin_dynamic_mask_cfg.get("enable", False))
         rebin_dynamic_mask_fraction = float(rebin_dynamic_mask_cfg.get("fraction", 0.01))
         rebin_dynamic_mask_min_pixels = int(rebin_dynamic_mask_cfg.get("min_pixels", 256))
-        rebin_dynamic_mask_warmup_epochs = int(rebin_dynamic_mask_cfg.get("warmup_epochs", 0))
+        rebin_dynamic_mask_warmup_max_steps = int(rebin_dynamic_mask_cfg.get("warmup_max_steps", 0))
         rebin_dynamic_mask_smooth_kernel = int(rebin_dynamic_mask_cfg.get("smooth_kernel", 0))
         rebin_dynamic_mask_clip_min = float(rebin_dynamic_mask_cfg.get("clip_min", 0.0))
         rebin_dynamic_mask_clip_max = float(rebin_dynamic_mask_cfg.get("clip_max", 1.0))
@@ -963,7 +963,7 @@ def main():
         rebin_dynamic_mask_enable = bool(rebin_dynamic_mask_cfg)
         rebin_dynamic_mask_fraction = float(rebin_cfg.get("dynamic_mask_fraction", 0.01))
         rebin_dynamic_mask_min_pixels = int(rebin_cfg.get("dynamic_mask_min_pixels", 256))
-        rebin_dynamic_mask_warmup_epochs = int(rebin_cfg.get("dynamic_mask_warmup_epochs", 0))
+        rebin_dynamic_mask_warmup_max_steps = int(rebin_cfg.get("dynamic_mask_warmup_max_steps", 0))
         rebin_dynamic_mask_smooth_kernel = int(rebin_cfg.get("dynamic_mask_smooth_kernel", 0))
         rebin_dynamic_mask_clip_min = float(rebin_cfg.get("dynamic_mask_clip_min", 0.0))
         rebin_dynamic_mask_clip_max = float(rebin_cfg.get("dynamic_mask_clip_max", 1.0))
@@ -978,12 +978,12 @@ def main():
     use_teacher_distill = bool(teacher_distill_cfg.get("enable", False))
     teacher_distill_target_w = float(teacher_distill_cfg.get("weight", 0.0))
     teacher_distill_warmup = int(teacher_distill_cfg.get("warmup", 0))
-    teacher_distill_duration = int(teacher_distill_cfg.get("duration", 0))
+    teacher_distill_duration_steps = int(teacher_distill_cfg.get("duration_steps", 0))
     teacher_distill_metric_name = str(teacher_distill_cfg.get("metric", "MAE"))
     teacher_distill_temporal_mode = str(teacher_distill_cfg.get("temporal_mode", "absolute"))
     teacher_distill_baseline_frames = int(teacher_distill_cfg.get("baseline_frames", 4))
     teacher_distill_percent_eps = float(teacher_distill_cfg.get("percent_enhancement_eps", 1e-4))
-    teacher_distill_stop_epoch = _parse_optional_int(teacher_distill_cfg.get("stop_epoch", None))
+    teacher_distill_stop_step = _parse_optional_int(teacher_distill_cfg.get("stop_step", None))
     teacher_distill_detach_teacher = bool(teacher_distill_cfg.get("detach_teacher", True))
     teacher_distill_checkpoint = _normalize_optional_checkpoint_path(
         teacher_distill_cfg.get("checkpoint", None),
@@ -992,10 +992,10 @@ def main():
 
     if teacher_distill_warmup < 0:
         raise ValueError("model.losses.teacher_distill.warmup must be >= 0.")
-    if teacher_distill_duration < 0:
-        raise ValueError("model.losses.teacher_distill.duration must be >= 0.")
-    if teacher_distill_stop_epoch is not None and teacher_distill_stop_epoch < 1:
-        raise ValueError("model.losses.teacher_distill.stop_epoch must be >= 1 when set.")
+    if teacher_distill_duration_steps < 0:
+        raise ValueError("model.losses.teacher_distill.duration_steps must be >= 0.")
+    if teacher_distill_stop_step is not None and teacher_distill_stop_step < 1:
+        raise ValueError("model.losses.teacher_distill.stop_step must be >= 1 when set.")
     if teacher_distill_target_w < 0:
         raise ValueError("model.losses.teacher_distill.weight must be >= 0.")
 
@@ -1007,8 +1007,8 @@ def main():
     ei_gate = _parse_loss_gate(activation_gate_cfg.get("ei", {}), "ei")
     rebin_gate = _parse_loss_gate(activation_gate_cfg.get("rebin", {}), "rebin")
 
-    save_interval = config["training"]["save_interval"]
-    plot_interval = config["training"]["plot_interval"]
+    save_every_steps = config["training"]["save_every_steps"]
+    plot_every_steps = config["training"]["plot_every_steps"]
 
     model_type = config["model"]["name"]
     model_type_is_lsfp = is_lsfp_model(model_type)
@@ -1038,9 +1038,9 @@ def main():
     if not isinstance(progressive_unfreeze_cfg, dict):
         raise TypeError("training.progressive_unfreezing must be a mapping.")
     progressive_unfreeze_enable = bool(progressive_unfreeze_cfg.get("enable", False))
-    progressive_freeze_epochs = int(progressive_unfreeze_cfg.get("freeze_epochs", 0))
-    if progressive_freeze_epochs < 0:
-        raise ValueError("training.progressive_unfreezing.freeze_epochs must be >= 0.")
+    progressive_freeze_steps = int(progressive_unfreeze_cfg.get("freeze_max_steps", 0))
+    if progressive_freeze_steps < 0:
+        raise ValueError("training.progressive_unfreezing.freeze_max_steps must be >= 0.")
     progressive_patterns_raw = progressive_unfreeze_cfg.get("keep_trainable_patterns", None)
     if progressive_patterns_raw is None:
         progressive_patterns = []
@@ -1079,7 +1079,7 @@ def main():
 
     N_slices = config['data']['slices']
     num_slices_to_eval = config['data']['slices_to_eval']
-    eval_frequency = config['data']['eval_frequency']
+    eval_every_steps = config['data']['eval_every_steps']
 
     eval_chunk_size = config["evaluation"]["chunk_size"]
     eval_chunk_overlap = config["evaluation"]["chunk_overlap"]
@@ -1494,7 +1494,7 @@ def main():
     if progressive_unfreeze_enable and (global_rank == 0 or not config['training']['multigpu']):
         print(
             "[Unfreeze] Progressive unfreezing enabled: "
-            f"freeze_epochs={progressive_freeze_epochs}, "
+            f"freeze_max_steps={progressive_freeze_steps}, "
             f"trainable_pattern_count={len(progressive_patterns)} "
             "(logical freeze: gradients masked before optimizer step)"
         )
@@ -1531,7 +1531,7 @@ def main():
 
     # Load the checkpoint to resume training
     if resume_from_checkpoint:
-        model, optimizer, start_epoch, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
+        model, optimizer, start_step, target_w_ei, step0_train_ei_loss, epoch_train_mc_loss, train_curves, val_curves, eval_curves, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse = load_checkpoint(model, optimizer, checkpoint_file)
         if init_checkpoint and (global_rank == 0 or not config['training']['multigpu']):
             print(
                 f"[Checkpoint] Found {init_checkpoint_source}={init_checkpoint}, "
@@ -1539,7 +1539,7 @@ def main():
             )
 
     else:
-        start_epoch = 1
+        start_step = 1
         if init_checkpoint:
             if not os.path.isfile(init_checkpoint):
                 raise FileNotFoundError(
@@ -1678,7 +1678,7 @@ def main():
             dynamic_mask_enable=rebin_dynamic_mask_enable,
             dynamic_mask_fraction=rebin_dynamic_mask_fraction,
             dynamic_mask_min_pixels=rebin_dynamic_mask_min_pixels,
-            dynamic_mask_warmup_epochs=rebin_dynamic_mask_warmup_epochs,
+            dynamic_mask_warmup_steps=rebin_dynamic_mask_warmup_max_steps,
             dynamic_mask_smooth_kernel=rebin_dynamic_mask_smooth_kernel,
             dynamic_mask_clip_min=rebin_dynamic_mask_clip_min,
             dynamic_mask_clip_max=rebin_dynamic_mask_clip_max,
@@ -1690,7 +1690,7 @@ def main():
                 f"factor={rebin_factor}, teacher={rebin_teacher_branch}, stopgrad={rebin_teacher_stopgrad}, "
                 f"offset_mode={rebin_offset_mode}, temporal_mode={rebin_temporal_mode}, "
                 f"dynamic_mask={rebin_dynamic_mask_enable}, "
-                f"target_weight={rebin_target_w}, warmup={rebin_warmup}, duration={rebin_duration}"
+                f"target_weight={rebin_target_w}, warmup={rebin_warmup}, duration_steps={rebin_duration_steps}"
             )
     else:
         rebin_loss_fn = None
@@ -1730,8 +1730,8 @@ def main():
                 "[TeacherDistill] "
                 f"checkpoint={teacher_checkpoint_path}, metric={teacher_distill_metric_name}, "
                 f"temporal_mode={teacher_distill_temporal_mode}, target_weight={teacher_distill_target_w}, "
-                f"warmup={teacher_distill_warmup}, duration={teacher_distill_duration}, "
-                f"stop_epoch={teacher_distill_stop_epoch}"
+                f"warmup={teacher_distill_warmup}, duration_steps={teacher_distill_duration_steps}, "
+                f"stop_step={teacher_distill_stop_step}"
             )
             print(
                 "[TeacherDistill] Preload summary: "
@@ -1759,7 +1759,7 @@ def main():
     if ei_gradnorm_transition_enable and (global_rank == 0 or not config['training']['multigpu']):
         print(
             "[EI] GradNorm transition calibration enabled: "
-            f"window=[{ei_transition_start_epoch}, {ei_transition_end_epoch}], "
+            f"window=[{ei_transition_start_step}, {ei_transition_end_step}], "
             f"ema_beta={ei_gradnorm_ema_beta}, ratio_clip=[{ei_gradnorm_ratio_min}, {ei_gradnorm_ratio_max}], "
             f"target_scale_clip=[{ei_gradnorm_target_scale_min}, {ei_gradnorm_target_scale_max}], "
             f"measure_every_n_steps={ei_gradnorm_measure_every}"
@@ -2068,24 +2068,24 @@ def main():
         train_teacher_distill_losses = train_curves.get("train_teacher_distill_losses", [])
         weighted_train_teacher_distill_losses = train_curves.get("weighted_train_teacher_distill_losses", [])
         lr_history = train_curves.get("lr_history", [])
-        lr_epochs = train_curves.get("lr_epochs", [])
+        lr_steps = train_curves.get("lr_steps", [])
         ei_weight_history = train_curves.get("ei_weight_history", [])
-        ei_weight_epochs = train_curves.get("ei_weight_epochs", [])
+        ei_weight_steps = train_curves.get("ei_weight_steps", [])
         teacher_distill_weight_history = train_curves.get("teacher_distill_weight_history", [])
-        teacher_distill_weight_epochs = train_curves.get("teacher_distill_weight_epochs", [])
+        teacher_distill_weight_steps = train_curves.get("teacher_distill_weight_steps", [])
         ei_gradnorm_ratio_history = train_curves.get("ei_gradnorm_ratio_history", [])
-        ei_gradnorm_ratio_epochs = train_curves.get("ei_gradnorm_ratio_epochs", [])
+        ei_gradnorm_ratio_steps = train_curves.get("ei_gradnorm_ratio_steps", [])
         rebin_weight_history = train_curves.get("rebin_weight_history", [])
-        rebin_weight_epochs = train_curves.get("rebin_weight_epochs", [])
+        rebin_weight_steps = train_curves.get("rebin_weight_steps", [])
         saved_ei_gate = train_curves.get("ei_gate_state", None)
         if isinstance(saved_ei_gate, dict):
             ei_gate["triggered"] = bool(saved_ei_gate.get("triggered", ei_gate.get("triggered", False)))
-            ei_gate["trigger_epoch"] = saved_ei_gate.get("trigger_epoch", ei_gate.get("trigger_epoch", None))
+            ei_gate["trigger_step"] = saved_ei_gate.get("trigger_step", ei_gate.get("trigger_step", None))
             ei_gate["satisfied_streak"] = int(saved_ei_gate.get("satisfied_streak", ei_gate.get("satisfied_streak", 0)))
         saved_rebin_gate = train_curves.get("rebin_gate_state", None)
         if isinstance(saved_rebin_gate, dict):
             rebin_gate["triggered"] = bool(saved_rebin_gate.get("triggered", rebin_gate.get("triggered", False)))
-            rebin_gate["trigger_epoch"] = saved_rebin_gate.get("trigger_epoch", rebin_gate.get("trigger_epoch", None))
+            rebin_gate["trigger_step"] = saved_rebin_gate.get("trigger_step", rebin_gate.get("trigger_step", None))
             rebin_gate["satisfied_streak"] = int(saved_rebin_gate.get("satisfied_streak", rebin_gate.get("satisfied_streak", 0)))
         ei_gradnorm_ratio_ema = train_curves.get("ei_gradnorm_ratio_ema", None)
         if ei_gradnorm_ratio_ema is not None:
@@ -2109,7 +2109,7 @@ def main():
         eval_raw_dyn_dce_maes = eval_curves.get("eval_raw_dyn_dce_maes", [])
         eval_raw_dyn_dce_mses = eval_curves.get("eval_raw_dyn_dce_mses", [])
         eval_curve_corrs = eval_curves["eval_curve_corrs"]
-        eval_temporal_epochs = eval_curves.get("eval_temporal_epochs", [])
+        eval_steps = eval_curves.get("eval_steps", [])
         eval_rho_fulls = eval_curves.get("eval_rho_fulls", [])
         eval_curve_maes = eval_curves.get("eval_curve_maes", [])
         eval_early_corrs = eval_curves.get("eval_early_corrs", [])
@@ -2153,15 +2153,15 @@ def main():
         train_teacher_distill_losses = []
         weighted_train_teacher_distill_losses = []
         lr_history = []
-        lr_epochs = []
+        lr_steps = []
         ei_weight_history = []
-        ei_weight_epochs = []
+        ei_weight_steps = []
         teacher_distill_weight_history = []
-        teacher_distill_weight_epochs = []
+        teacher_distill_weight_steps = []
         ei_gradnorm_ratio_history = []
-        ei_gradnorm_ratio_epochs = []
+        ei_gradnorm_ratio_steps = []
         rebin_weight_history = []
-        rebin_weight_epochs = []
+        rebin_weight_steps = []
         ei_gradnorm_ratio_ema = None
         ei_gradnorm_samples = 0
         ei_gradnorm_locked = False
@@ -2182,7 +2182,7 @@ def main():
         eval_raw_dyn_dce_maes = []
         eval_raw_dyn_dce_mses = []
         eval_curve_corrs = []
-        eval_temporal_epochs = []
+        eval_steps = []
         eval_rho_fulls = []
         eval_curve_maes = []
         eval_early_corrs = []
@@ -2213,32 +2213,32 @@ def main():
         avg_grasp_raw_dyn_dce_mse = float("nan")
 
     if ei_gate.get("enable", False):
-        was_triggered, trigger_epoch = _infer_gate_state_from_history(ei_weight_history, ei_weight_epochs)
+        was_triggered, trigger_step = _infer_gate_state_from_history(ei_weight_history, ei_weight_steps)
         if was_triggered:
             ei_gate["triggered"] = True
-            if ei_gate.get("trigger_epoch") is None:
-                ei_gate["trigger_epoch"] = trigger_epoch
+            if ei_gate.get("trigger_step") is None:
+                ei_gate["trigger_step"] = trigger_step
     if rebin_gate.get("enable", False):
-        was_triggered, trigger_epoch = _infer_gate_state_from_history(rebin_weight_history, rebin_weight_epochs)
+        was_triggered, trigger_step = _infer_gate_state_from_history(rebin_weight_history, rebin_weight_steps)
         if was_triggered:
             rebin_gate["triggered"] = True
-            if rebin_gate.get("trigger_epoch") is None:
-                rebin_gate["trigger_epoch"] = trigger_epoch
+            if rebin_gate.get("trigger_step") is None:
+                rebin_gate["trigger_step"] = trigger_step
 
     if global_rank == 0 or not config['training']['multigpu']:
         if ei_gate.get("enable", False):
             print(
                 "[Gate][EI] "
                 f"metric={ei_gate['metric']} {ei_gate['mode']} {ei_gate['threshold']}, "
-                f"min_epoch={ei_gate['min_epoch']}, patience={ei_gate['patience']}, "
-                f"triggered={ei_gate['triggered']}, trigger_epoch={ei_gate['trigger_epoch']}"
+                f"min_step={ei_gate['min_step']}, patience={ei_gate['patience']}, "
+                f"triggered={ei_gate['triggered']}, trigger_step={ei_gate['trigger_step']}"
             )
         if rebin_gate.get("enable", False):
             print(
                 "[Gate][Rebin] "
                 f"metric={rebin_gate['metric']} {rebin_gate['mode']} {rebin_gate['threshold']}, "
-                f"min_epoch={rebin_gate['min_epoch']}, patience={rebin_gate['patience']}, "
-                f"triggered={rebin_gate['triggered']}, trigger_epoch={rebin_gate['trigger_epoch']}"
+                f"min_step={rebin_gate['min_step']}, patience={rebin_gate['patience']}, "
+                f"triggered={rebin_gate['triggered']}, trigger_step={rebin_gate['trigger_step']}"
             )
 
 
@@ -2246,7 +2246,7 @@ def main():
     if resume_from_checkpoint:
         eval_spf_curves = eval_curves.get("eval_spf_curves", {})
     spf_curve_keys = (
-        "epochs",
+        "max_steps",
         "eval_ssims",
         "eval_psnrs",
         "eval_mses",
@@ -2263,19 +2263,19 @@ def main():
 
     best_checkpoint_path = os.path.join(output_dir, f'{exp_name}_best_model.pth')
     best_psnr = -np.inf
-    best_epoch = None
+    best_step = None
     if resume_from_checkpoint:
         psnr_array = np.array(eval_psnrs, dtype=float)
         if psnr_array.size and np.isfinite(psnr_array).any():
             best_idx = int(np.nanargmax(psnr_array))
             best_psnr = float(psnr_array[best_idx])
-            if eval_temporal_epochs and len(eval_temporal_epochs) == len(eval_psnrs):
-                best_epoch = eval_temporal_epochs[best_idx]
+            if eval_steps and len(eval_steps) == len(eval_psnrs):
+                best_step = eval_steps[best_idx]
             else:
-                best_epoch = best_idx * eval_frequency
+                best_step = best_idx * eval_every_steps
         if global_rank == 0 or not config['training']['multigpu']:
-            if best_epoch is not None:
-                print(f"[Checkpoint] Loaded best PSNR {best_psnr:.4f} from epoch {best_epoch}")
+            if best_step is not None:
+                print(f"[Checkpoint] Loaded best PSNR {best_psnr:.4f} from epoch {best_step}")
 
     def _build_checkpoint_curves():
         train_curves = dict(
@@ -2290,20 +2290,20 @@ def main():
             train_teacher_distill_losses=train_teacher_distill_losses,
             weighted_train_teacher_distill_losses=weighted_train_teacher_distill_losses,
             lr_history=lr_history,
-            lr_epochs=lr_epochs,
+            lr_steps=lr_steps,
             ei_weight_history=ei_weight_history,
-            ei_weight_epochs=ei_weight_epochs,
+            ei_weight_steps=ei_weight_steps,
             teacher_distill_weight_history=teacher_distill_weight_history,
-            teacher_distill_weight_epochs=teacher_distill_weight_epochs,
+            teacher_distill_weight_steps=teacher_distill_weight_steps,
             ei_gradnorm_ratio_history=ei_gradnorm_ratio_history,
-            ei_gradnorm_ratio_epochs=ei_gradnorm_ratio_epochs,
+            ei_gradnorm_ratio_steps=ei_gradnorm_ratio_steps,
             ei_gradnorm_ratio_ema=ei_gradnorm_ratio_ema,
             ei_gradnorm_samples=ei_gradnorm_samples,
             ei_gradnorm_locked=ei_gradnorm_locked,
             ei_target_weight_base=ei_target_weight_base,
             ei_target_weight_effective=ei_target_weight_effective,
             rebin_weight_history=rebin_weight_history,
-            rebin_weight_epochs=rebin_weight_epochs,
+            rebin_weight_steps=rebin_weight_steps,
             ei_gate_state=ei_gate,
             rebin_gate_state=rebin_gate,
         )
@@ -2328,7 +2328,7 @@ def main():
             eval_raw_dyn_dce_maes=eval_raw_dyn_dce_maes,
             eval_raw_dyn_dce_mses=eval_raw_dyn_dce_mses,
             eval_curve_corrs=eval_curve_corrs,
-            eval_temporal_epochs=eval_temporal_epochs,
+            eval_steps=eval_steps,
             eval_rho_fulls=eval_rho_fulls,
             eval_curve_maes=eval_curve_maes,
             eval_early_corrs=eval_early_corrs,
@@ -2359,7 +2359,7 @@ def main():
             avg_grasp_raw_dyn_dce_mse=avg_grasp_raw_dyn_dce_mse,
             eval_spf_curves=eval_spf_curves,
             best_psnr=best_psnr,
-            best_epoch=best_epoch,
+            best_step=best_step,
         )
         return train_curves, val_curves, eval_curves
 
@@ -2380,7 +2380,7 @@ def main():
         epoch_i = int(epoch_idx)
         if epoch_i <= 0:
             return
-        if start_epoch > epoch_i:
+        if start_step > epoch_i:
             return
         loss_transition_checkpoints.setdefault(epoch_i, [])
         if tag not in loss_transition_checkpoints[epoch_i]:
@@ -2404,7 +2404,7 @@ def main():
                 )
                 print(f"[Checkpoint] Transition checkpoints enabled: {transitions}")
             else:
-                print("[Checkpoint] Transition checkpoints enabled, but no future transition epochs found.")
+                print("[Checkpoint] Transition checkpoints enabled, but no future transition max_steps found.")
     else:
         if global_rank == 0 or not config['training']['multigpu']:
             print("[Checkpoint] Transition checkpoints disabled by config.")
@@ -3065,7 +3065,7 @@ def main():
                 eval_raw_dyn_dce_maes.append(initial_eval_raw_dyn_dce_mae)
                 eval_raw_dyn_dce_mses.append(initial_eval_raw_dyn_dce_mse)
                 eval_curve_corrs.append(initial_eval_curve_corr)
-                eval_temporal_epochs.append(0)
+                eval_steps.append(0)
                 eval_rho_fulls.append(initial_eval_rho_full)
                 eval_curve_maes.append(initial_eval_curve_mae)
                 eval_early_corrs.append(initial_eval_early_corr)
@@ -3080,7 +3080,7 @@ def main():
 
                 spf_key = int(N_spokes_eval)
                 if spf_key in eval_spf_curves:
-                    eval_spf_curves[spf_key]["epochs"].append(0)
+                    eval_spf_curves[spf_key]["max_steps"].append(0)
                     eval_spf_curves[spf_key]["eval_ssims"].append(initial_eval_ssim)
                     eval_spf_curves[spf_key]["eval_psnrs"].append(initial_eval_psnr)
                     eval_spf_curves[spf_key]["eval_mses"].append(initial_eval_mse)
@@ -3186,7 +3186,7 @@ def main():
             if global_rank == 0 or not config['training']['multigpu']:
                 if np.isfinite(initial_eval_psnr) and initial_eval_psnr > best_psnr:
                     best_psnr = float(initial_eval_psnr)
-                    best_epoch = 0
+                    best_step = 0
                     train_curves, val_curves, eval_curves = _build_checkpoint_curves()
                     save_checkpoint(
                         model,
@@ -3210,11 +3210,11 @@ def main():
                         best_checkpoint_path,
                     )
                     print(
-                        f"[Checkpoint] New best PSNR {best_psnr:.4f} at epoch 0. Saved to {best_checkpoint_path}"
+                        f"[Checkpoint] New best PSNR {best_psnr:.4f} at step 0. Saved to {best_checkpoint_path}"
                     )
                     if run_state is not None:
                         with state_lock:
-                            run_state["best_checkpoint_epoch"] = int(best_epoch)
+                            run_state["best_checkpoint_step"] = int(best_step)
                             run_state["best_checkpoint_psnr"] = float(best_psnr)
                             _save_run_state(run_state_path, run_state)
 
@@ -3231,14 +3231,14 @@ def main():
 
     # Training Loop
     svd_fail_count = 0
-    if (epochs + 1) == start_epoch:
-        raise(ValueError("Full training epochs already complete."))
+    if start_step > max_steps:
+        raise(ValueError("Full training max_steps already complete."))
 
     else: 
 
         current_curriculum_phase_idx = -1
 
-        for epoch in range(start_epoch, epochs + 1):
+        for epoch in range(start_step, max_steps + 1):
             model.train()
             if torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats(device)
@@ -3276,9 +3276,9 @@ def main():
 
 
             # cosine LR with warmup (set before first step of the epoch)
-            total = epochs
+            total = max_steps
             lr_sched_cfg = config.get("training", {}).get("lr_schedule", {})
-            warm = int(lr_sched_cfg.get("warmup_epochs", 5))
+            warm = int(lr_sched_cfg.get("warmup_max_steps", 5))
             if warm < 0:
                 warm = 0
             warmup_mode = str(lr_sched_cfg.get("warmup_mode", "linear")).lower()
@@ -3296,12 +3296,12 @@ def main():
 
             current_lr = optimizer.param_groups[0]["lr"]
             lr_history.append(current_lr)
-            lr_epochs.append(epoch)
+            lr_steps.append(epoch)
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('LR', current_lr, epoch)
 
             if progressive_unfreeze_enable:
-                phase = "frozen" if epoch <= progressive_freeze_epochs else "full"
+                phase = "frozen" if epoch <= progressive_freeze_steps else "full"
                 if phase != progressive_unfreeze_phase:
                     if phase == "frozen":
                         trainability_info = _logical_trainability_by_patterns(
@@ -3315,7 +3315,7 @@ def main():
                             )
                         if global_rank == 0 or not config['training']['multigpu']:
                             print(
-                                "[Unfreeze] Entered frozen phase at epoch "
+                                "[Unfreeze] Entered frozen phase at step "
                                 f"{epoch}: trainable_params={trainability_info['trainable_params']:,}/"
                                 f"{trainability_info['total_params']:,}"
                             )
@@ -3325,7 +3325,7 @@ def main():
                         trainability_info = _logical_all_trainable(model_for_trainability)
                         if global_rank == 0 or not config['training']['multigpu']:
                             print(
-                                "[Unfreeze] Entered full-trainable phase at epoch "
+                                "[Unfreeze] Entered full-trainable phase at step "
                                 f"{epoch}: trainable_params={trainability_info['trainable_params']:,}/"
                                 f"{trainability_info['total_params']:,}"
                             )
@@ -3348,18 +3348,23 @@ def main():
                         ei_gradnorm_transition_enable = False
 
             train_loader_tqdm = tqdm(
-                train_loader, desc=f"Epoch {epoch}/{epochs}  Training", unit="batch"
+                train_loader,
+                total=1,
+                desc=f"Step {epoch}/{max_steps}  Training",
+                unit="batch",
+                leave=False,
+                disable=config['training']['multigpu'] and global_rank != 0,
             )
 
             if hasattr(train_dataset, 'resample_slices'):
-                print(f"Epoch {epoch}: Resampling training slices...")
+                print(f"Step {epoch}: Resampling training slices...")
                 train_dataset.resample_slices()
 
             if curriculum_enabled:
                 for i, phase in enumerate(curriculum_phases):
-                    if epoch >= phase['start_epoch']:
+                    if epoch >= phase['start_step']:
                         if i > current_curriculum_phase_idx: # Transition to a new phase
-                            print(f"\n--- Entering Curriculum Phase: {phase['name']} at Epoch {epoch} ---")
+                            print(f"\n--- Entering Curriculum Phase: {phase['name']} at Step {epoch} ---")
                             # Update training spokes range
                             train_dataset.spokes_range = phase['train_spokes_range']
                             train_dataset.update_spokes_weights()
@@ -3419,7 +3424,7 @@ def main():
                 use_ei_loss
                 and ei_gradnorm_transition_enable
                 and (not ei_gradnorm_locked)
-                and epoch > ei_transition_end_epoch
+                and epoch > ei_transition_end_step
             ):
                 if ei_gradnorm_ratio_ema is not None:
                     scale = float(np.clip(
@@ -3445,7 +3450,7 @@ def main():
 
             ei_gate_metric_val = None
             if use_ei_loss and ei_gate.get("enable", False) and not ei_gate.get("triggered", False):
-                if epoch >= int(ei_gate.get("min_epoch", 1)):
+                if epoch >= int(ei_gate.get("min_step", 1)):
                     ei_gate_metric_val = _resolve_gate_metric_value(
                         ei_gate.get("metric", "train_mc_loss"),
                         train_mc_losses=train_mc_losses,
@@ -3469,13 +3474,13 @@ def main():
                         ei_gate["satisfied_streak"] = 0
                     if int(ei_gate.get("satisfied_streak", 0)) >= int(ei_gate.get("patience", 1)):
                         ei_gate["triggered"] = True
-                        ei_gate["trigger_epoch"] = int(epoch)
+                        ei_gate["trigger_step"] = int(epoch)
                         if global_rank == 0 or not config['training']['multigpu']:
-                            print(
-                                "[Gate][EI] Triggered at epoch "
-                                f"{epoch} using metric={ei_gate['metric']} value={ei_gate_metric_val} "
-                                f"({ei_gate['mode']} {ei_gate['threshold']})."
-                            )
+                                print(
+                                    "[Gate][EI] Triggered at step "
+                                    f"{epoch} using metric={ei_gate['metric']} value={ei_gate_metric_val} "
+                                    f"({ei_gate['mode']} {ei_gate['threshold']})."
+                                )
 
             # EI schedule is epoch-wise; compute once per epoch to avoid per-iteration overhead.
             ei_loss_weight = 0.0
@@ -3486,12 +3491,12 @@ def main():
                 else:
                     ei_schedule_epoch = int(epoch)
                     if ei_gate.get("enable", False):
-                        trigger_epoch = int(ei_gate.get("trigger_epoch") or epoch)
-                        ei_schedule_epoch = int(epoch - trigger_epoch + 1)
+                        trigger_step = int(ei_gate.get("trigger_step") or epoch)
+                        ei_schedule_epoch = int(epoch - trigger_step + 1)
                     ei_loss_weight = get_cosine_ei_weight(
                         current_epoch=ei_schedule_epoch,
-                        warmup_epochs=warmup,
-                        schedule_duration=duration,
+                        warmup_max_steps=warmup,
+                        schedule_duration_steps=duration_steps,
                         target_weight=ei_target_weight_effective,
                     )
                 compute_ei_this_epoch = ei_loss_weight > 0.0
@@ -3499,17 +3504,17 @@ def main():
                 use_ei_loss
                 and ei_gradnorm_transition_enable
                 and (not ei_gradnorm_locked)
-                and (ei_transition_start_epoch <= epoch <= ei_transition_end_epoch)
+                and (ei_transition_start_step <= epoch <= ei_transition_end_step)
             )
             ei_weight_history.append(ei_loss_weight)
-            ei_weight_epochs.append(epoch)
+            ei_weight_steps.append(epoch)
             if (global_rank == 0 or not config['training']['multigpu']) and use_ei_loss:
                 writer.add_scalar("Loss/EI_Target_Weight_Effective", ei_target_weight_effective, epoch)
                 if ei_gate.get("enable", False) and ei_gate_metric_val is not None and np.isfinite(ei_gate_metric_val):
                     writer.add_scalar("Loss/EI_Gate_Metric", float(ei_gate_metric_val), epoch)
                 writer.add_scalar("Loss/EI_Gate_Triggered", 1.0 if ei_gate.get("triggered", False) else 0.0, epoch)
                 if ei_gradnorm_ratio_ema is not None:
-                    writer.add_scalar("Loss/EI_GradNorm_Ratio_EMA_Epoch", ei_gradnorm_ratio_ema, epoch)
+                    writer.add_scalar("Loss/EI_GradNorm_Ratio_EMA_Step", ei_gradnorm_ratio_ema, epoch)
 
             # Rebin schedule is epoch-wise; skip rebin compute whenever its weight is zero.
             rebin_loss_weight = 0.0
@@ -3517,7 +3522,7 @@ def main():
             if use_rebin_loss:
                 rebin_gate_metric_val = None
                 if rebin_gate.get("enable", False) and not rebin_gate.get("triggered", False):
-                    if epoch >= int(rebin_gate.get("min_epoch", 1)):
+                    if epoch >= int(rebin_gate.get("min_step", 1)):
                         rebin_gate_metric_val = _resolve_gate_metric_value(
                             rebin_gate.get("metric", "train_mc_loss"),
                             train_mc_losses=train_mc_losses,
@@ -3541,10 +3546,10 @@ def main():
                             rebin_gate["satisfied_streak"] = 0
                         if int(rebin_gate.get("satisfied_streak", 0)) >= int(rebin_gate.get("patience", 1)):
                             rebin_gate["triggered"] = True
-                            rebin_gate["trigger_epoch"] = int(epoch)
+                            rebin_gate["trigger_step"] = int(epoch)
                             if global_rank == 0 or not config['training']['multigpu']:
                                 print(
-                                    "[Gate][Rebin] Triggered at epoch "
+                                    "[Gate][Rebin] Triggered at step "
                                     f"{epoch} using metric={rebin_gate['metric']} value={rebin_gate_metric_val} "
                                     f"({rebin_gate['mode']} {rebin_gate['threshold']})."
                                 )
@@ -3553,12 +3558,12 @@ def main():
                 else:
                     rebin_schedule_epoch = int(epoch)
                     if rebin_gate.get("enable", False):
-                        trigger_epoch = int(rebin_gate.get("trigger_epoch") or epoch)
-                        rebin_schedule_epoch = int(epoch - trigger_epoch + 1)
+                        trigger_step = int(rebin_gate.get("trigger_step") or epoch)
+                        rebin_schedule_epoch = int(epoch - trigger_step + 1)
                     scheduled_rebin_w = get_cosine_ei_weight(
                         current_epoch=rebin_schedule_epoch,
-                        warmup_epochs=rebin_warmup,
-                        schedule_duration=rebin_duration,
+                        warmup_max_steps=rebin_warmup,
+                        schedule_duration_steps=rebin_duration_steps,
                         target_weight=rebin_target_w,
                     )
                 rebin_loss_weight = scheduled_rebin_w
@@ -3568,29 +3573,30 @@ def main():
                         writer.add_scalar("Loss/Rebin_Gate_Metric", float(rebin_gate_metric_val), epoch)
                     writer.add_scalar("Loss/Rebin_Gate_Triggered", 1.0 if rebin_gate.get("triggered", False) else 0.0, epoch)
             rebin_weight_history.append(rebin_loss_weight)
-            rebin_weight_epochs.append(epoch)
+            rebin_weight_steps.append(epoch)
 
             teacher_distill_loss_weight = 0.0
             compute_teacher_distill_this_epoch = False
             if use_teacher_distill:
-                if teacher_distill_stop_epoch is not None and epoch > int(teacher_distill_stop_epoch):
+                if teacher_distill_stop_step is not None and epoch > int(teacher_distill_stop_step):
                     teacher_distill_loss_weight = 0.0
                 else:
                     teacher_distill_loss_weight = get_cosine_ei_weight(
                         current_epoch=epoch,
-                        warmup_epochs=teacher_distill_warmup,
-                        schedule_duration=teacher_distill_duration,
+                        warmup_max_steps=teacher_distill_warmup,
+                        schedule_duration_steps=teacher_distill_duration_steps,
                         target_weight=teacher_distill_target_w,
                     )
                 compute_teacher_distill_this_epoch = teacher_distill_loss_weight > 0.0
             teacher_distill_weight_history.append(teacher_distill_loss_weight)
-            teacher_distill_weight_epochs.append(epoch)
+            teacher_distill_weight_steps.append(epoch)
 
             # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
             t_img = None
             val_t_img = None
 
             sample_check_ids = [] if sample_check_enabled else None
+            num_train_batches = 0
 
             for batch_idx, batch in enumerate(train_loader_tqdm):  # measured_kspace shape: (B, C, I, S, T)
                 if include_sample_indices:
@@ -3684,7 +3690,7 @@ def main():
                                 spokes_per_frame=n_spokes_i,
                                 samples_per_spoke=n_samples_i,
                                 norm=config['model']['norm'],
-                                epoch=epoch,
+                                step=epoch,
                             )
                             running_rebin_loss += rebin_loss.item()
                         else:
@@ -3793,9 +3799,7 @@ def main():
                                         )
                                     ei_gradnorm_samples += 1
                                     ei_gradnorm_ratio_history.append(ratio_clipped)
-                                    ei_gradnorm_ratio_epochs.append(
-                                        epoch + (batch_idx / max(1, len(train_loader)))
-                                    )
+                                    ei_gradnorm_ratio_steps.append(float(epoch))
                                     if global_rank == 0 or not config['training']['multigpu']:
                                         writer.add_scalar(
                                             "Loss/EI_GradNorm_Ratio",
@@ -3807,19 +3811,10 @@ def main():
                                             ei_gradnorm_ratio_ema,
                                             iteration_count,
                                         )
-                            train_loader_tqdm.set_postfix(
-                                mc_loss=mc_loss.item(),
-                                ei_loss=ei_loss.item(),
-                                rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
-                                distill_loss=(teacher_distill_loss.item() if teacher_distill_loss is not None else None),
-                            )
+                            pass
 
                         else:
-                            train_loader_tqdm.set_postfix(
-                                mc_loss=mc_loss.item(),
-                                rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
-                                distill_loss=(teacher_distill_loss.item() if teacher_distill_loss is not None else None),
-                            )
+                            pass
 
                         total_loss = mc_loss * mc_loss_weight
                         if ei_loss is not None:
@@ -3886,17 +3881,22 @@ def main():
 
                     if global_rank == 0 or not config['training']['multigpu']:
                         print("time for one iteration: ", end-start)
+                    num_train_batches += 1
+                    break
 
                 except RuntimeError as e:
                     # catch only SVD-related failures
                     if "svd" in str(e).lower():
                         svd_fail_count += 1
                         optimizer.zero_grad()
-                        print(f"[Warning] Skipping batch {iteration_count} in epoch {epoch} due to SVD failure. "
+                        print(f"[Warning] Skipping batch {iteration_count} at step {epoch} due to SVD failure. "
                             f"Total failures so far: {svd_fail_count}")
                         continue  # skip this batch, go to next one
                     else:
                         raise  # re-raise other errors
+
+            if num_train_batches <= 0:
+                raise RuntimeError(f"Step {epoch}: no valid training batch was processed.")
 
             if sample_check_enabled and dist.is_available() and dist.is_initialized():
                 try:
@@ -3909,14 +3909,14 @@ def main():
                         print(f"[DDP] Sample check failed: {exc}")
 
             # plot training samples
-            if epoch % save_interval == 0:
+            if epoch % save_every_steps == 0:
 
                 if global_rank == 0 or not config['training']['multigpu']:
 
                     plot_reconstruction_sample(
                         x_recon,
-                        f"Training Sample - Epoch {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)}, FPG = {Ng})",
-                        f"train_sample_epoch_{epoch}",
+                        f"Training Sample - Step {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)}, FPG = {Ng})",
+                        f"train_sample_step_{epoch}",
                         output_dir,
                     )
 
@@ -3926,7 +3926,7 @@ def main():
                         plot_enhancement_curve(
                             x_recon_reshaped,
                             output_filename=os.path.join(
-                                ec_dir, f"train_sample_enhancement_curve_epoch_{epoch}.png"
+                                ec_dir, f"train_sample_enhancement_curve_step_{epoch}.png"
                             ),
                         )
                     
@@ -3934,19 +3934,19 @@ def main():
 
                         plot_reconstruction_sample(
                             t_img,
-                            f"Transformed Train Sample - Epoch {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
-                            f"transforms/transform_train_sample_epoch_{epoch}",
+                            f"Transformed Train Sample - Step {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
+                            f"transforms/transform_train_sample_step_{epoch}",
                             output_dir,
                             x_recon,
                             transform=True
                         )
 
             # Calculate and store average epoch losses
-            epoch_train_mc_loss = running_mc_loss / len(train_loader)
+            epoch_train_mc_loss = running_mc_loss / max(1, num_train_batches)
             train_mc_losses.append(epoch_train_mc_loss)
             weighted_train_mc_losses.append(epoch_train_mc_loss*mc_loss_weight)
             if use_ei_loss:
-                epoch_train_ei_loss = running_ei_loss / len(train_loader)
+                epoch_train_ei_loss = running_ei_loss / max(1, num_train_batches)
             else:
                 # Append 0 if EI loss is not used to keep lists aligned
                 epoch_train_ei_loss = 0.0
@@ -3956,14 +3956,14 @@ def main():
             weighted_train_ei_losses.append(epoch_train_ei_loss*ei_loss_weight)
 
             if use_adj_loss:
-                epoch_train_adj_loss = running_adj_loss / len(train_loader)
+                epoch_train_adj_loss = running_adj_loss / max(1, num_train_batches)
             else:
                 epoch_train_adj_loss = 0.0
             train_adj_losses.append(epoch_train_adj_loss)
             weighted_train_adj_losses.append(epoch_train_adj_loss*adj_loss_weight)
 
             if use_rebin_loss and compute_rebin_this_epoch:
-                epoch_train_rebin_loss = running_rebin_loss / len(train_loader)
+                epoch_train_rebin_loss = running_rebin_loss / max(1, num_train_batches)
             else:
                 epoch_train_rebin_loss = 0.0
             if use_rebin_loss:
@@ -3971,7 +3971,7 @@ def main():
                 weighted_train_rebin_losses.append(epoch_train_rebin_loss * rebin_loss_weight)
 
             if use_teacher_distill and compute_teacher_distill_this_epoch:
-                epoch_train_teacher_distill_loss = running_teacher_distill_loss / len(train_loader)
+                epoch_train_teacher_distill_loss = running_teacher_distill_loss / max(1, num_train_batches)
             else:
                 epoch_train_teacher_distill_loss = 0.0
             if use_teacher_distill:
@@ -4008,7 +4008,7 @@ def main():
 
 
             # --- Validation Loop ---
-            if epoch % eval_frequency == 0:
+            if epoch % eval_every_steps == 0:
                 model.eval()
                 val_running_mc_loss = 0.0
                 val_running_ei_loss = 0.0
@@ -4057,13 +4057,13 @@ def main():
                     grasp_iauc10_errs.clear()
                     grasp_peak_errs.clear()
                     grasp_ttpeak_err_secs.clear()
-                    print(f"[Eval] Epoch {epoch}: collecting GRASP baseline metrics from validation set.")
+                    print(f"[Eval] Step {epoch}: collecting GRASP baseline metrics from validation set.")
                 local_eval_records = []
                 val_infer_times_local = []
                 epoch_eval_infer_times = []
                 val_loader_tqdm = tqdm(
                     val_dro_eval_loader if distributed_eval_this_epoch else val_dro_loader,
-                    desc=f"Epoch {epoch}/{epochs}  Validation",
+                    desc=f"Step {epoch}/{max_steps}  Validation",
                     unit="batch",
                     leave=False,
                     disable=config['training']['multigpu'] and global_rank != 0,
@@ -4651,7 +4651,7 @@ def main():
                     if global_rank == 0:
                         all_eval_records = _flatten_gathered_records(gathered_eval_records)
                         if not all_eval_records:
-                            raise RuntimeError(f"Epoch {epoch}: distributed eval collected zero records.")
+                            raise RuntimeError(f"Step {epoch}: distributed eval collected zero records.")
                         epoch_eval_infer_times = _flatten_gathered_records(gathered_infer_times)
 
                         epoch_eval_ssims = [r["ssim"] for r in all_eval_records]
@@ -4781,7 +4781,7 @@ def main():
                     if collect_grasp_baseline:
                         if len(grasp_ssims) == 0:
                             raise RuntimeError(
-                                f"Epoch {epoch}: GRASP baseline collection returned zero samples."
+                                f"Step {epoch}: GRASP baseline collection returned zero samples."
                             )
                         avg_grasp_ssim = _mean_or_nan(grasp_ssims)
                         avg_grasp_psnr = _mean_or_nan(grasp_psnrs)
@@ -4811,10 +4811,10 @@ def main():
                         avg_grasp_raw_dyn_dce_mse = _mean_or_nan(raw_grasp_dyn_dce_mses)
                         if not _grasp_baseline_ready():
                             raise RuntimeError(
-                                f"Epoch {epoch}: GRASP baseline metrics are non-finite after collection."
+                                f"Step {epoch}: GRASP baseline metrics are non-finite after collection."
                             )
                         print(
-                            f"[Eval] Epoch {epoch}: GRASP baseline set "
+                            f"[Eval] Step {epoch}: GRASP baseline set "
                             f"(SSIM={avg_grasp_ssim:.4f}, PSNR={avg_grasp_psnr:.4f}, "
                             f"LPIPS={avg_grasp_lpips:.4f}, CurveCorr={avg_grasp_curve_corr:.4f})."
                         )
@@ -4872,7 +4872,7 @@ def main():
                         epoch_infer_std = float(np.std(epoch_eval_infer_times, ddof=1)) if len(epoch_eval_infer_times) > 1 else 0.0
                         infer_mode = "sliding-window" if epoch_use_sliding_window else "direct-full"
                         print(
-                            f"[Eval] Epoch {epoch}: inference time/sample ({infer_mode}) = "
+                            f"[Eval] Step {epoch}: inference time/sample ({infer_mode}) = "
                             f"{epoch_infer_mean:.3f}s ± {epoch_infer_std:.3f}s "
                             f"(n={len(epoch_eval_infer_times)})"
                         )
@@ -4894,7 +4894,7 @@ def main():
                     eval_raw_dyn_dce_maes.append(epoch_eval_raw_dyn_dce_mae)
                     eval_raw_dyn_dce_mses.append(epoch_eval_raw_dyn_dce_mse)
                     eval_curve_corrs.append(epoch_eval_curve_corr)  
-                    eval_temporal_epochs.append(epoch)
+                    eval_steps.append(epoch)
                     eval_rho_fulls.append(epoch_eval_rho_full)
                     eval_curve_maes.append(epoch_eval_curve_mae)
                     eval_early_corrs.append(epoch_eval_early_corr)
@@ -4909,7 +4909,7 @@ def main():
 
                     spf_key = int(N_spokes_eval)
                     if spf_key in eval_spf_curves:
-                        eval_spf_curves[spf_key]["epochs"].append(epoch)
+                        eval_spf_curves[spf_key]["max_steps"].append(epoch)
                         eval_spf_curves[spf_key]["eval_ssims"].append(epoch_eval_ssim)
                         eval_spf_curves[spf_key]["eval_psnrs"].append(epoch_eval_psnr)
                         eval_spf_curves[spf_key]["eval_mses"].append(epoch_eval_mse)
@@ -4969,11 +4969,11 @@ def main():
                     
                     
                     # save a sample from the last validation batch of the epoch
-                    if epoch % save_interval == 0:
+                    if epoch % save_every_steps == 0:
                         
                         plot_reconstruction_sample(
                             val_x_recon,
-                            f"Validation Sample - Epoch {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
+                            f"Validation Sample - Step {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
                             f"val_sample_epoch_{epoch}",
                             output_dir,
                             val_dro_grasp_img
@@ -4985,7 +4985,7 @@ def main():
                             plot_enhancement_curve(
                                 val_x_recon_reshaped,
                                 output_filename=os.path.join(
-                                    ec_dir, f"val_dro_sample_enhancement_curve_epoch_{epoch}.png"
+                                    ec_dir, f"val_dro_sample_enhancement_curve_step_{epoch}.png"
                                 ),
                                 show_arrival=True,
                                 arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
@@ -5001,7 +5001,7 @@ def main():
                             plot_enhancement_curve(
                                 val_dro_grasp_img,
                                 output_filename=os.path.join(
-                                    ec_dir, f"val_dro_grasp_sample_enhancement_curve_epoch_{epoch}.png"
+                                    ec_dir, f"val_dro_grasp_sample_enhancement_curve_step_{epoch}.png"
                                 ),
                                 show_arrival=True,
                                 arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
@@ -5017,7 +5017,7 @@ def main():
                         if use_ei_loss and val_t_img is not None:
                             plot_reconstruction_sample(
                                 val_t_img,
-                                f"Transformed Validation Sample - Epoch {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
+                                f"Transformed Validation Sample - Step {epoch} (AF = {round(acceleration.item(), 1)}, SPF = {int(N_spokes)})",
                                 f"transforms/transform_val_sample_epoch_{epoch}",
                                 output_dir,
                                 val_x_recon,
@@ -5054,7 +5054,7 @@ def main():
 
                     if np.isfinite(epoch_eval_psnr) and epoch_eval_psnr > best_psnr:
                         best_psnr = float(epoch_eval_psnr)
-                        best_epoch = epoch
+                        best_step = epoch
                         train_curves, val_curves, eval_curves = _build_checkpoint_curves()
                         save_checkpoint(
                             model,
@@ -5082,7 +5082,7 @@ def main():
                         )
                         if run_state is not None:
                             with state_lock:
-                                run_state["best_checkpoint_epoch"] = int(best_epoch)
+                                run_state["best_checkpoint_step"] = int(best_step)
                                 run_state["best_checkpoint_psnr"] = float(best_psnr)
                                 _save_run_state(run_state_path, run_state)
 
@@ -5090,7 +5090,7 @@ def main():
 
 
                 # --- Plotting and Logging ---
-                if epoch % save_interval == 0:
+                if epoch % save_every_steps == 0:
 
                     if global_rank == 0 or not config['training']['multigpu']:
 
@@ -5104,51 +5104,51 @@ def main():
                         # Plot Training Adjoint Loss
                         sns.lineplot(x=range(len(train_adj_losses)), y=train_adj_losses, ax=axes[0, 0])
                         axes[0, 0].set_title("Training Adjoint Loss")
-                        axes[0, 0].set_xlabel("Epoch")
+                        axes[0, 0].set_xlabel("Step")
                         axes[0, 0].set_ylabel("Adjoint Loss")
 
                         # Plot Training MC Loss
                         sns.lineplot(x=range(len(train_mc_losses)), y=train_mc_losses, ax=axes[0, 1])
                         axes[0, 1].set_title("Training MC Loss")
-                        axes[0, 1].set_xlabel("Epoch")
+                        axes[0, 1].set_xlabel("Step")
                         axes[0, 1].set_ylabel("MC Loss")
 
                         # Plot Training EI Loss
                         sns.lineplot(x=range(len(train_ei_losses)), y=train_ei_losses, ax=axes[0, 2])
                         axes[0, 2].set_title("Training EI Loss")
-                        axes[0, 2].set_xlabel("Epoch")
+                        axes[0, 2].set_xlabel("Step")
                         axes[0, 2].set_ylabel("EI Loss")
 
                         # Plot Learning Rate Schedule
                         if lr_history:
-                            sns.lineplot(x=lr_epochs, y=lr_history, ax=axes[0, 3])
+                            sns.lineplot(x=lr_steps, y=lr_history, ax=axes[0, 3])
                         axes[0, 3].set_title("Learning Rate Schedule")
-                        axes[0, 3].set_xlabel("Epoch")
+                        axes[0, 3].set_xlabel("Step")
                         axes[0, 3].set_ylabel("Learning Rate")
 
                         # Plot Validation Adjoint Loss
-                        sns.lineplot(x=range(0, len(val_adj_losses)*eval_frequency, eval_frequency), y=val_adj_losses, ax=axes[1, 0], color='orange')
+                        sns.lineplot(x=range(0, len(val_adj_losses)*eval_every_steps, eval_every_steps), y=val_adj_losses, ax=axes[1, 0], color='orange')
                         axes[1, 0].set_title(f"Validation Adjoint Loss ({N_spokes_eval} spokes/frame)")
-                        axes[1, 0].set_xlabel("Epoch")
+                        axes[1, 0].set_xlabel("Step")
                         axes[1, 0].set_ylabel("Adjoint Loss")
 
                         # Plot Validation MC Loss
-                        sns.lineplot(x=range(0, len(val_mc_losses)*eval_frequency, eval_frequency), y=val_mc_losses, ax=axes[1, 1], color='orange')
+                        sns.lineplot(x=range(0, len(val_mc_losses)*eval_every_steps, eval_every_steps), y=val_mc_losses, ax=axes[1, 1], color='orange')
                         axes[1, 1].set_title(f"Validation MC Loss ({N_spokes_eval} spokes/frame)")
-                        axes[1, 1].set_xlabel("Epoch")
+                        axes[1, 1].set_xlabel("Step")
                         axes[1, 1].set_ylabel("MC Loss")
 
                         # Plot Validation EI Loss
-                        sns.lineplot(x=range(0, len(val_ei_losses)*eval_frequency, eval_frequency), y=val_ei_losses, ax=axes[1, 2], color='orange')
+                        sns.lineplot(x=range(0, len(val_ei_losses)*eval_every_steps, eval_every_steps), y=val_ei_losses, ax=axes[1, 2], color='orange')
                         axes[1, 2].set_title(f"Validation EI Loss ({N_spokes_eval} spokes/frame)")
-                        axes[1, 2].set_xlabel("Epoch")
+                        axes[1, 2].set_xlabel("Step")
                         axes[1, 2].set_ylabel("EI Loss")
 
                         # Plot EI Loss Weight Schedule
                         if ei_weight_history:
-                            sns.lineplot(x=ei_weight_epochs, y=ei_weight_history, ax=axes[1, 3], color='orange')
+                            sns.lineplot(x=ei_weight_steps, y=ei_weight_history, ax=axes[1, 3], color='orange')
                         axes[1, 3].set_title("EI Loss Weight Schedule")
-                        axes[1, 3].set_xlabel("Epoch")
+                        axes[1, 3].set_xlabel("Step")
                         axes[1, 3].set_ylabel("EI Weight")
 
                         plt.tight_layout()
@@ -5165,32 +5165,32 @@ def main():
 
                         sns.lineplot(x=range(len(lambda_Ls)), y=lambda_Ls, ax=axes[0, 0])
                         axes[0, 0].set_title("Lambda_L Parameter Value")
-                        axes[0, 0].set_xlabel("Epoch")
+                        axes[0, 0].set_xlabel("Step")
                         axes[0, 0].set_ylabel("Lambda_L")
 
                         sns.lineplot(x=range(len(lambda_Ss)), y=lambda_Ss, ax=axes[0, 1])
                         axes[0, 1].set_title("Lambda_S Parameter Value")
-                        axes[0, 1].set_xlabel("Epoch")
+                        axes[0, 1].set_xlabel("Step")
                         axes[0, 1].set_ylabel("Lambda_S")
 
                         sns.lineplot(x=range(len(lambda_spatial_Ls)), y=lambda_spatial_Ls, ax=axes[0, 2])
                         axes[0, 2].set_title("Spatial Lambda_L Parameter Value")
-                        axes[0, 2].set_xlabel("Epoch")
+                        axes[0, 2].set_xlabel("Step")
                         axes[0, 2].set_ylabel("Spatial Lambda_L")
 
                         sns.lineplot(x=range(len(lambda_spatial_Ss)), y=lambda_spatial_Ss, ax=axes[1, 0])
                         axes[1, 0].set_title("Spatial Lambda_S Parameter Value")
-                        axes[1, 0].set_xlabel("Epoch")
+                        axes[1, 0].set_xlabel("Step")
                         axes[1, 0].set_ylabel("Spatial Lambda_S")
 
                         sns.lineplot(x=range(len(gammas)), y=gammas, ax=axes[1, 1])
                         axes[1, 1].set_title("Gamma Parameter Value")
-                        axes[1, 1].set_xlabel("Epoch")
+                        axes[1, 1].set_xlabel("Step")
                         axes[1, 1].set_ylabel("Gamma")
 
                         sns.lineplot(x=range(len(lambda_steps)), y=lambda_steps, ax=axes[1, 2])
                         axes[1, 2].set_title("Lambda Step Parameter Value")
-                        axes[1, 2].set_xlabel("Epoch")
+                        axes[1, 2].set_xlabel("Step")
                         axes[1, 2].set_ylabel("Lambda Step")
 
                         plt.tight_layout()
@@ -5203,7 +5203,7 @@ def main():
                         plt.plot(weighted_train_mc_losses, label="MC Loss")
                         plt.plot(weighted_train_ei_losses, label="EI Loss")
                         plt.plot(weighted_train_adj_losses, label="Adjoint Loss")
-                        plt.xlabel("Epoch")
+                        plt.xlabel("Step")
                         plt.ylabel("Loss")
                         plt.title("Weighted Training Losses")
                         plt.legend()
@@ -5214,8 +5214,8 @@ def main():
                         # Plot Learning Rate Schedule
                         if lr_history:
                             plt.figure()
-                            plt.plot(lr_epochs, lr_history)
-                            plt.xlabel("Epoch")
+                            plt.plot(lr_steps, lr_history)
+                            plt.xlabel("Step")
                             plt.ylabel("Learning Rate")
                             plt.title("Learning Rate Schedule")
                             plt.grid(True)
@@ -5228,7 +5228,7 @@ def main():
                             plt.plot(train_rebin_losses, label="Rebin Loss")
                             if weighted_train_rebin_losses:
                                 plt.plot(weighted_train_rebin_losses, label="Weighted Rebin Loss")
-                            plt.xlabel("Epoch")
+                            plt.xlabel("Step")
                             plt.ylabel("Loss")
                             plt.title("Training Rebin Loss")
                             plt.legend()
@@ -5306,14 +5306,14 @@ def main():
                         nrows = int(math.ceil(len(eval_plot_specs) / ncols))
                         fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6, nrows * 4.5))
                         axes = np.array(axes, ndmin=1).reshape(nrows, ncols)
-                        fig.suptitle(f'Evaluation Metrics Over Epochs ({N_spokes_eval} spokes/frame)', fontsize=20)
+                        fig.suptitle(f'Evaluation Metrics Over Steps ({N_spokes_eval} spokes/frame)', fontsize=20)
 
                         for idx, (title, ylabel, series, grasp_baseline) in enumerate(eval_plot_specs):
                             ax = axes[idx // ncols, idx % ncols]
-                            if eval_temporal_epochs and len(eval_temporal_epochs) == len(series):
-                                x = eval_temporal_epochs
+                            if eval_steps and len(eval_steps) == len(series):
+                                x = eval_steps
                             else:
-                                x = list(range(0, len(series) * eval_frequency, eval_frequency))
+                                x = list(range(0, len(series) * eval_every_steps, eval_every_steps))
                             finite_values = [v for v in series if v is not None and np.isfinite(v)]
                             if finite_values:
                                 sns.lineplot(x=x, y=series, ax=ax)
@@ -5322,7 +5322,7 @@ def main():
                             if grasp_baseline is not None and np.isfinite(grasp_baseline):
                                 ax.axhline(y=grasp_baseline, color='red', linestyle='--', linewidth=2)
                             ax.set_title(title)
-                            ax.set_xlabel("Epoch")
+                            ax.set_xlabel("Step")
                             ax.set_ylabel(ylabel)
                         for idx in range(len(eval_plot_specs), nrows * ncols):
                             axes[idx // ncols, idx % ncols].axis("off")
@@ -5348,16 +5348,16 @@ def main():
                             fig, axes = plt.subplots(nrows_t, ncols_t, figsize=(ncols_t * 6, nrows_t * 4.8))
                             axes = np.array(axes, ndmin=1).reshape(nrows_t, ncols_t)
                             fig.suptitle(
-                                f"Temporal Fidelity Metrics Over Epochs ({N_spokes_eval} spokes/frame)",
+                                f"Temporal Fidelity Metrics Over Steps ({N_spokes_eval} spokes/frame)",
                                 fontsize=20,
                             )
 
                             for idx, (title, ylabel, series, grasp_baseline) in enumerate(temporal_plot_specs):
                                 ax = axes[idx // ncols_t, idx % ncols_t]
-                                if eval_temporal_epochs and len(eval_temporal_epochs) >= len(series):
-                                    x = eval_temporal_epochs[: len(series)]
+                                if eval_steps and len(eval_steps) >= len(series):
+                                    x = eval_steps[: len(series)]
                                 else:
-                                    x = list(range(0, len(series) * eval_frequency, eval_frequency))
+                                    x = list(range(0, len(series) * eval_every_steps, eval_every_steps))
                                 finite_values = [v for v in series if v is not None and np.isfinite(v)]
                                 if finite_values:
                                     sns.lineplot(x=x, y=series, ax=ax)
@@ -5366,7 +5366,7 @@ def main():
                                 if grasp_baseline is not None and np.isfinite(grasp_baseline):
                                     ax.axhline(y=grasp_baseline, color='red', linestyle='--', linewidth=2)
                                 ax.set_title(title)
-                                ax.set_xlabel("Epoch")
+                                ax.set_xlabel("Step")
                                 ax.set_ylabel(ylabel)
 
                             for idx in range(len(temporal_plot_specs), nrows_t * ncols_t):
@@ -5379,76 +5379,76 @@ def main():
                         if curriculum_enabled and eval_spf_curves:
                             for spf in sorted(eval_spf_curves):
                                 spf_curves = eval_spf_curves[spf]
-                                if not spf_curves["epochs"]:
+                                if not spf_curves["max_steps"]:
                                     continue
 
                                 fig, axes = plt.subplots(2, 4, figsize=(24, 10))
                                 fig.suptitle(
-                                    f"Evaluation Metrics Over Epochs ({spf} spokes/frame)",
+                                    f"Evaluation Metrics Over Steps ({spf} spokes/frame)",
                                     fontsize=20,
                                 )
 
                                 sns.lineplot(
-                                    x=spf_curves["epochs"],
+                                    x=spf_curves["max_steps"],
                                     y=spf_curves["eval_ssims"],
                                     ax=axes[0, 0],
                                 )
                                 axes[0, 0].set_title("DRO SSIM")
-                                axes[0, 0].set_xlabel("Epoch")
+                                axes[0, 0].set_xlabel("Step")
                                 axes[0, 0].set_ylabel("SSIM")
 
                                 sns.lineplot(
-                                    x=spf_curves["epochs"],
+                                    x=spf_curves["max_steps"],
                                     y=spf_curves["eval_psnrs"],
                                     ax=axes[0, 1],
                                 )
                                 axes[0, 1].set_title("DRO PSNR")
-                                axes[0, 1].set_xlabel("Epoch")
+                                axes[0, 1].set_xlabel("Step")
                                 axes[0, 1].set_ylabel("PSNR")
 
                                 sns.lineplot(
-                                    x=spf_curves["epochs"],
+                                    x=spf_curves["max_steps"],
                                     y=spf_curves["eval_mses"],
                                     ax=axes[0, 2],
                                 )
                                 axes[0, 2].set_title("DRO Image MSE")
-                                axes[0, 2].set_xlabel("Epoch")
+                                axes[0, 2].set_xlabel("Step")
                                 axes[0, 2].set_ylabel("MSE")
 
                                 sns.lineplot(
-                                    x=spf_curves["epochs"],
+                                    x=spf_curves["max_steps"],
                                     y=spf_curves["eval_lpipses"],
                                     ax=axes[1, 0],
                                 )
                                 axes[1, 0].set_title("DRO LPIPS")
-                                axes[1, 0].set_xlabel("Epoch")
+                                axes[1, 0].set_xlabel("Step")
                                 axes[1, 0].set_ylabel("LPIPS")
 
                                 sns.lineplot(
-                                    x=spf_curves["epochs"],
+                                    x=spf_curves["max_steps"],
                                     y=spf_curves["eval_raw_dc_mses"],
                                     ax=axes[1, 1],
                                 )
                                 axes[1, 1].set_title("Non-DRO k-space MSE")
-                                axes[1, 1].set_xlabel("Epoch")
+                                axes[1, 1].set_xlabel("Step")
                                 axes[1, 1].set_ylabel("MSE")
 
                                 sns.lineplot(
-                                    x=spf_curves["epochs"],
+                                    x=spf_curves["max_steps"],
                                     y=spf_curves["eval_raw_dc_maes"],
                                     ax=axes[1, 2],
                                 )
                                 axes[1, 2].set_title("Non-DRO k-space MAE")
-                                axes[1, 2].set_xlabel("Epoch")
+                                axes[1, 2].set_xlabel("Step")
                                 axes[1, 2].set_ylabel("MAE")
 
                                 sns.lineplot(
-                                    x=spf_curves["epochs"],
+                                    x=spf_curves["max_steps"],
                                     y=spf_curves["eval_curve_corrs"],
                                     ax=axes[1, 3],
                                 )
                                 axes[1, 3].set_title("DRO Curve Correlation")
-                                axes[1, 3].set_xlabel("Epoch")
+                                axes[1, 3].set_xlabel("Step")
                                 axes[1, 3].set_ylabel("Pearson Correlation Coefficient")
 
                                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -5457,12 +5457,12 @@ def main():
                                 )
                                 plt.close()
 
-                        epoch_labels = range(0, len(eval_dc_mses)*eval_frequency, eval_frequency)
+                        step_labels = range(0, len(eval_dc_mses)*eval_every_steps, eval_every_steps)
 
                         
 
                         plt.figure()
-                        plt.plot(epoch_labels, eval_dc_mses)
+                        plt.plot(step_labels, eval_dc_mses)
                         plt.axhline(
                             y=avg_grasp_dc_mse,
                             color="red",
@@ -5470,7 +5470,7 @@ def main():
                             linewidth=2,
                             label="GRASP Avg"
                         )
-                        plt.xlabel("Epoch")
+                        plt.xlabel("Step")
                         plt.ylabel("DRO k-space MSE (sim)")
                         plt.title("k-space MSE")
                         plt.grid(True)
@@ -5479,7 +5479,7 @@ def main():
 
 
                         plt.figure()
-                        plt.plot(epoch_labels, eval_dc_maes)
+                        plt.plot(step_labels, eval_dc_maes)
                         plt.axhline(
                             y=avg_grasp_dc_mae,
                             color="red",
@@ -5487,7 +5487,7 @@ def main():
                             linewidth=2,
                             label="GRASP Avg"
                         )
-                        plt.xlabel("Epoch")
+                        plt.xlabel("Step")
                         plt.ylabel("DRO k-space MAE (sim)")
                         plt.title("k-space MAE")
                         plt.grid(True)
@@ -5495,7 +5495,7 @@ def main():
                         plt.close()
 
                         plt.figure()
-                        plt.plot(epoch_labels, eval_raw_dc_mses)
+                        plt.plot(step_labels, eval_raw_dc_mses)
                         plt.axhline(
                             y=avg_grasp_raw_dc_mse,
                             color="red",
@@ -5503,7 +5503,7 @@ def main():
                             linewidth=2,
                             label="GRASP Avg"
                         )
-                        plt.xlabel("Epoch")
+                        plt.xlabel("Step")
                         plt.ylabel("Non-DRO k-space MSE")
                         plt.title("k-space MSE")
                         plt.grid(True)
@@ -5513,7 +5513,7 @@ def main():
                         eval_raw_dc_psnrs = [_mse_to_psnr(v, peak=raw_dc_psnr_peak) for v in eval_raw_dc_mses]
                         avg_grasp_raw_dc_psnr = _mse_to_psnr(avg_grasp_raw_dc_mse, peak=raw_dc_psnr_peak)
                         plt.figure()
-                        plt.plot(epoch_labels, eval_raw_dc_psnrs)
+                        plt.plot(step_labels, eval_raw_dc_psnrs)
                         if np.isfinite(avg_grasp_raw_dc_psnr):
                             plt.axhline(
                                 y=avg_grasp_raw_dc_psnr,
@@ -5522,7 +5522,7 @@ def main():
                                 linewidth=2,
                                 label="GRASP Avg",
                             )
-                        plt.xlabel("Epoch")
+                        plt.xlabel("Step")
                         plt.ylabel("Non-DRO k-space Relative PSNR")
                         plt.title("k-space Relative PSNR")
                         plt.grid(True)
@@ -5533,24 +5533,24 @@ def main():
                 if global_rank == 0 or not config['training']['multigpu']:
                     # Print epoch summary
                     print(
-                        f"Epoch {epoch}: Training MC Loss: {epoch_train_mc_loss:.6f}, Validation MC Loss: {epoch_val_mc_loss:.6f}"
+                        f"Step {epoch}: Training MC Loss: {epoch_train_mc_loss:.6f}, Validation MC Loss: {epoch_val_mc_loss:.6f}"
                     )
                     if use_ei_loss:
                         print(
-                            f"Epoch {epoch}: Training EI Loss: {epoch_train_ei_loss:.6f}, Validation EI Loss: {epoch_val_ei_loss:.6f}"
+                            f"Step {epoch}: Training EI Loss: {epoch_train_ei_loss:.6f}, Validation EI Loss: {epoch_val_ei_loss:.6f}"
                         )
 
                     if use_adj_loss:
                         print(
-                            f"Epoch {epoch}: Training Adj Loss: {epoch_train_adj_loss:.6f}, Validation Adj Loss: {epoch_val_adj_loss:.6f}"
+                            f"Step {epoch}: Training Adj Loss: {epoch_train_adj_loss:.6f}, Validation Adj Loss: {epoch_val_adj_loss:.6f}"
                         )
                     if use_teacher_distill:
                         print(
-                            "Epoch "
+                            "Step "
                             f"{epoch}: Training Teacher Distill Loss: {epoch_train_teacher_distill_loss:.6f} "
                             f"(weight={teacher_distill_loss_weight:.3g})"
                         )
-                    print(f"--- Evaluation Metrics: Epoch {epoch} ---")
+                    print(f"--- Evaluation Metrics: Step {epoch} ---")
                     print(f"Recon SSIM: {epoch_eval_ssim:.4f} ± {np.std(epoch_eval_ssims):.4f}")
                     print(f"Recon PSNR: {epoch_eval_psnr:.4f} ± {np.std(epoch_eval_psnrs):.4f}")
                     print(f"Recon MSE: {epoch_eval_mse:.4f} ± {np.std(epoch_eval_mses):.4f}")
@@ -5578,7 +5578,7 @@ def main():
                     print(f"Recon Enhancement Curve Correlation: {epoch_eval_curve_corr:.4f} ± {np.std(epoch_eval_curve_corrs):.4f}")
                     if not _grasp_baseline_ready():
                         raise RuntimeError(
-                            f"Epoch {epoch}: GRASP baseline metrics unavailable; cannot log baseline."
+                            f"Step {epoch}: GRASP baseline metrics unavailable; cannot log baseline."
                         )
                     print(f"GRASP SSIM: {avg_grasp_ssim:.4f} ± {_std_or_zero(grasp_ssims):.4f}")
                     print(f"GRASP PSNR: {avg_grasp_psnr:.4f} ± {_std_or_zero(grasp_psnrs):.4f}")
@@ -5605,8 +5605,9 @@ def main():
                         )
                     print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {_std_or_zero(grasp_curve_corrs):.4f}")
 
-            # Always save the latest checkpoint after each epoch.
-            if global_rank == 0 or not config['training']['multigpu']:
+            # Save latest checkpoint on configured cadence (and at final step).
+            should_save_latest = (epoch % save_every_steps == 0) or (epoch == max_steps)
+            if should_save_latest and (global_rank == 0 or not config['training']['multigpu']):
                 train_curves, val_curves, eval_curves = _build_checkpoint_curves()
                 model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
                 save_checkpoint(
@@ -5638,7 +5639,7 @@ def main():
                     train_curves, val_curves, eval_curves = _build_checkpoint_curves()
                     for tag in transition_tags:
                         transition_checkpoint_path = os.path.join(
-                            output_dir, f"{exp_name}_{tag}_epoch{epoch}.pth"
+                            output_dir, f"{exp_name}_{tag}_step{epoch}.pth"
                         )
                         save_checkpoint(
                             model,
@@ -5678,12 +5679,12 @@ def main():
     if global_rank == 0 or not config['training']['multigpu']:
         train_curves, val_curves, eval_curves = _build_checkpoint_curves()
         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
-        save_checkpoint(model, optimizer, epochs + 1, train_curves, val_curves, eval_curves, ei_target_weight_effective, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
+        save_checkpoint(model, optimizer, max_steps + 1, train_curves, val_curves, eval_curves, ei_target_weight_effective, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
         print(f'Model saved to {model_save_path}')
 
 
         # save final evaluation metrics
-        if epoch > eval_frequency:
+        if epoch > eval_every_steps:
             
             metrics_path = os.path.join(eval_dir, "eval_metrics.csv")
 

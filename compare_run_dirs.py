@@ -104,10 +104,10 @@ def _resolve_checkpoint(run_dir: str, explicit_ckpt: Optional[str], prefer_best:
     return max(candidates, key=os.path.getmtime)
 
 
-def _infer_eval_frequency(run_dir: str, override: Optional[int]) -> int:
+def _infer_eval_every_steps(run_dir: str, override: Optional[int]) -> int:
     if override is not None:
         if override < 1:
-            raise ValueError("--eval-frequency must be >= 1.")
+            raise ValueError("--eval-every-steps must be >= 1.")
         return int(override)
 
     config_path = os.path.join(run_dir, "config.yaml")
@@ -120,7 +120,7 @@ def _infer_eval_frequency(run_dir: str, override: Optional[int]) -> int:
     data_cfg = cfg.get("data", {})
     if not isinstance(data_cfg, dict):
         return 1
-    freq = data_cfg.get("eval_frequency", 1)
+    freq = data_cfg.get("eval_every_steps", 1)
     try:
         freq_int = int(freq)
     except (TypeError, ValueError):
@@ -192,19 +192,15 @@ def _collect_unique_legend(axes_list):
     return handles, labels
 
 
-def _build_eval_axis(ckpt: Dict, n: int, eval_frequency: int) -> List[int]:
-    temporal_epochs = _as_list(ckpt.get("eval_temporal_epochs", []))
-    if len(temporal_epochs) >= n:
-        return [int(v) for v in temporal_epochs[:n]]
+def _build_eval_axis(ckpt: Dict, n: int, eval_every_steps: int) -> List[int]:
+    temporal_steps = _as_list(ckpt.get("eval_steps", []))
+    if len(temporal_steps) >= n:
+        return [int(v) for v in temporal_steps[:n]]
 
-    eval_epochs = _as_list(ckpt.get("eval_epochs", []))
-    if len(eval_epochs) >= n:
-        return [int(v) for v in eval_epochs[:n]]
-
-    return [i * eval_frequency for i in range(n)]
+    return [i * eval_every_steps for i in range(n)]
 
 
-def _build_epoch_axis(n: int) -> List[int]:
+def _build_step_axis(n: int) -> List[int]:
     return list(range(1, n + 1))
 
 
@@ -243,9 +239,9 @@ def _plot_metric_grid(
             if not any(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in series):
                 continue
             if metric_kind == "eval":
-                x = _build_eval_axis(exp["ckpt"], len(series), exp["eval_frequency"])
+                x = _build_eval_axis(exp["ckpt"], len(series), exp["eval_every_steps"])
             else:
-                x = _build_epoch_axis(len(series))
+                x = _build_step_axis(len(series))
             ax.plot(x, series, label=exp["label"], linewidth=1.8)
             plotted = True
 
@@ -255,7 +251,7 @@ def _plot_metric_grid(
                 ax.axhline(y=baseline, label="GRASP", **GRASP_LINE_STYLE)
 
         ax.set_title(panel_title)
-        ax.set_xlabel("Epoch")
+        ax.set_xlabel("Step")
         ax.set_ylabel(ylabel)
         ax.grid(alpha=0.3)
         if not plotted:
@@ -282,14 +278,14 @@ def _plot_lr_overlay(out_path: str, experiments: Sequence[Dict], dpi: int, title
         lr_hist = exp["series"].get("lr_history", [])
         if not lr_hist:
             continue
-        lr_epochs = exp["series"].get("lr_epochs", [])
-        if len(lr_epochs) != len(lr_hist):
-            lr_epochs = _build_epoch_axis(len(lr_hist))
-        ax.plot(lr_epochs, lr_hist, label=exp["label"], linewidth=1.8)
+        lr_steps = exp["series"].get("lr_steps", [])
+        if len(lr_steps) != len(lr_hist):
+            lr_steps = _build_step_axis(len(lr_hist))
+        ax.plot(lr_steps, lr_hist, label=exp["label"], linewidth=1.8)
         plotted = True
 
     ax.set_title(title)
-    ax.set_xlabel("Epoch")
+    ax.set_xlabel("Step")
     ax.set_ylabel("LR")
     ax.grid(alpha=0.3)
     if not plotted:
@@ -313,7 +309,7 @@ def _load_experiment(
     label: Optional[str],
     explicit_ckpt: Optional[str],
     prefer_best: bool,
-    eval_frequency_override: Optional[int],
+    eval_every_steps_override: Optional[int],
 ) -> Dict:
     run_dir = os.path.abspath(os.path.expanduser(run_dir))
     ckpt_path = _resolve_checkpoint(run_dir, explicit_ckpt=explicit_ckpt, prefer_best=prefer_best)
@@ -326,7 +322,7 @@ def _load_experiment(
 
     series_keys = [key for key, *_ in EVAL_METRICS]
     series_keys.extend([key for key, _, _ in UNWEIGHTED_LOSS_METRICS + WEIGHTED_LOSS_METRICS])
-    series_keys.extend(["lr_history", "lr_epochs"])
+    series_keys.extend(["lr_history", "lr_steps"])
     series = {k: _as_list(ckpt.get(k, [])) for k in series_keys}
     baselines = {k: ckpt.get(k) for k in ckpt.keys() if isinstance(k, str) and k.startswith("avg_grasp_")}
     spf = _infer_spf(run_dir)
@@ -341,7 +337,7 @@ def _load_experiment(
         "series": series,
         "baselines": baselines,
         "spf": spf,
-        "eval_frequency": _infer_eval_frequency(run_dir, eval_frequency_override),
+        "eval_every_steps": _infer_eval_every_steps(run_dir, eval_every_steps_override),
     }
 
 
@@ -371,10 +367,12 @@ def main() -> None:
         help="Prefer '*_best_model.pth' over '*_model.pth' when auto-resolving checkpoints.",
     )
     parser.add_argument(
+        "--eval-every-steps",
         "--eval-frequency",
+        dest="eval_every_steps",
         type=int,
         default=None,
-        help="Override eval-frequency for x-axis. Default reads each run's config.yaml.",
+        help="Override eval interval in steps for x-axis. Default reads each run's config.yaml.",
     )
     parser.add_argument("--out-dir", default="comparison_plots", help="Output directory for plots.")
     parser.add_argument("--dpi", type=int, default=150, help="Output DPI.")
@@ -386,14 +384,14 @@ def main() -> None:
             label=args.label_a,
             explicit_ckpt=args.ckpt_a,
             prefer_best=args.prefer_best,
-            eval_frequency_override=args.eval_frequency,
+            eval_every_steps_override=args.eval_every_steps,
         ),
         _load_experiment(
             run_dir=args.run_b,
             label=args.label_b,
             explicit_ckpt=args.ckpt_b,
             prefer_best=args.prefer_best,
-            eval_frequency_override=args.eval_frequency,
+            eval_every_steps_override=args.eval_every_steps,
         ),
     ]
 

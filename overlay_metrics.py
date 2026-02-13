@@ -189,9 +189,9 @@ def _load_data_cfg_from_run_dir(run_dir: str) -> Dict:
     return data_cfg
 
 
-def _infer_eval_frequency_from_run_dir(run_dir: str) -> int:
+def _infer_eval_every_steps_from_run_dir(run_dir: str) -> int:
     data_cfg = _load_data_cfg_from_run_dir(run_dir)
-    raw = data_cfg.get("eval_frequency", 1)
+    raw = data_cfg.get("eval_every_steps", 1)
     try:
         return max(1, int(raw))
     except (TypeError, ValueError):
@@ -358,39 +358,39 @@ def _expand_input_paths(paths: List[str], kind: str) -> List[str]:
     return expanded
 
 
-def _build_eval_epoch_axis(n: int, eval_frequency: int) -> List[int]:
-    return [(i + 1) * eval_frequency for i in range(n)]
+def _build_eval_step_axis(n: int, eval_every_steps: int) -> List[int]:
+    return [(i + 1) * eval_every_steps for i in range(n)]
 
 
-def _build_train_epoch_axis(n: int) -> List[int]:
+def _build_train_step_axis(n: int) -> List[int]:
     return list(range(1, n + 1))
 
 
 def _resolve_eval_axis(
     curves: Dict[str, List[float]],
-    eval_frequency: int,
+    eval_every_steps: int,
     n: int,
 ) -> List[int]:
-    temporal_epochs = _as_list(curves.get("eval_temporal_epochs", []))
-    if len(temporal_epochs) >= n and n > 0:
-        return [int(round(float(v))) for v in temporal_epochs[:n]]
-    return _build_eval_epoch_axis(n, eval_frequency)
+    temporal_steps = _as_list(curves.get("eval_steps", []))
+    if len(temporal_steps) >= n and n > 0:
+        return [int(round(float(v))) for v in temporal_steps[:n]]
+    return _build_eval_step_axis(n, eval_every_steps)
 
 
 def _resolve_train_axis(
     curves: Dict[str, List[float]],
     key: str,
-    eval_frequency: int,
+    eval_every_steps: int,
     n: int,
 ) -> List[int]:
     if key == "lr_history":
-        lr_epochs = _as_list(curves.get("lr_epochs", []))
-        if len(lr_epochs) >= n and n > 0:
-            return [int(round(float(v))) for v in lr_epochs[:n]]
-        return _build_train_epoch_axis(n)
+        lr_steps = _as_list(curves.get("lr_steps", []))
+        if len(lr_steps) >= n and n > 0:
+            return [int(round(float(v))) for v in lr_steps[:n]]
+        return _build_train_step_axis(n)
     if key.startswith("val_"):
-        return _resolve_eval_axis(curves, eval_frequency, n)
-    return _build_train_epoch_axis(n)
+        return _resolve_eval_axis(curves, eval_every_steps, n)
+    return _build_train_step_axis(n)
 
 
 def _resolve_metric_series(
@@ -399,7 +399,7 @@ def _resolve_metric_series(
     kind: str,
 ) -> Tuple[List[int], List[float]]:
     curves = exp["curves"]
-    eval_frequency = exp["eval_frequency"]
+    eval_every_steps = exp["eval_every_steps"]
 
     if kind == "temporal":
         values = curves.get(key, [])
@@ -409,22 +409,22 @@ def _resolve_metric_series(
         n = len(values)
         if n == 0:
             return [], []
-        temporal_epochs = _as_list(curves.get("eval_temporal_epochs", []))
-        if len(temporal_epochs) >= n:
-            epochs = [int(round(float(v))) for v in temporal_epochs[:n]]
+        temporal_steps = _as_list(curves.get("eval_steps", []))
+        if len(temporal_steps) >= n:
+            steps = [int(round(float(v))) for v in temporal_steps[:n]]
         else:
-            epochs = _build_eval_epoch_axis(n, eval_frequency)
-        return epochs, values[:n]
+            steps = _build_eval_step_axis(n, eval_every_steps)
+        return steps, values[:n]
 
     if kind == "eval":
         values = curves.get(key, [])
         n = len(values)
-        return _resolve_eval_axis(curves, eval_frequency, n), values
+        return _resolve_eval_axis(curves, eval_every_steps, n), values
 
     if kind == "train":
         values = curves.get(key, [])
         n = len(values)
-        return _resolve_train_axis(curves, key, eval_frequency, n), values
+        return _resolve_train_axis(curves, key, eval_every_steps, n), values
 
     raise ValueError(f"Unsupported metric kind: {kind}")
 
@@ -575,7 +575,7 @@ def _plot_six_panel(
                 _add_legend_entry(legend_entries, "GRASP", baseline_line)
         plotted_panels += 1
         ax.set_title(panel_title)
-        ax.set_xlabel("Epoch")
+        ax.set_xlabel("Step")
         ax.set_ylabel(ylabel)
     if plotted_panels == 0:
         plt.close(fig)
@@ -656,7 +656,7 @@ def _plot_temporal(
                     _add_legend_entry(legend_entries, "GRASP", baseline_line)
         plotted_panels += 1
         ax.set_title(panel_title)
-        ax.set_xlabel("Epoch")
+        ax.set_xlabel("Step")
         ax.set_ylabel(ylabel)
     for idx in range(n_metrics, len(axes)):
         axes[idx].axis("off")
@@ -727,7 +727,7 @@ def _plot_training(
             continue
         plotted_panels += 1
         ax.set_title(panel_title)
-        ax.set_xlabel("Epoch")
+        ax.set_xlabel("Step")
         ax.set_ylabel(ylabel)
 
     if plotted_panels == 0:
@@ -817,7 +817,7 @@ def _write_metric_tables(
     with open(out_path, "w") as f:
         f.write("# Metric Tables\n")
         f.write("# Rows: experiments\n")
-        f.write("# Columns: epochs\n\n")
+        f.write("# Columns: steps\n\n")
 
         for kind, key, title in specs:
             epoch_union = set()
@@ -865,8 +865,8 @@ def _write_metric_tables(
 
             per_exp = sorted(per_exp, key=_sort_key)
 
-            f.write(f"=== {title} ({key}) | sorted by best-{sort_goal} over all epochs ===\n")
-            columns = ["experiment", "slurm_job_id", "running_now"] + [f"ep{ep}" for ep in sorted_epochs]
+            f.write(f"=== {title} ({key}) | sorted by best-{sort_goal} over all steps ===\n")
+            columns = ["experiment", "slurm_job_id", "running_now"] + [f"step{ep}" for ep in sorted_epochs]
             rows: List[List[str]] = []
             for item in per_exp:
                 safe_label = str(item["label"]).replace("\t", " ").replace("\n", " ")
@@ -913,10 +913,12 @@ def main() -> None:
     ap.add_argument("--label-a", default=None, help="Label for first checkpoint (legacy).")
     ap.add_argument("--label-b", default=None, help="Label for second checkpoint (legacy).")
     ap.add_argument(
+        "--eval-every-steps",
         "--eval-frequency",
+        dest="eval_every_steps",
         type=int,
         default=None,
-        help="Eval frequency in epochs. For --run-dir, overrides config-derived frequency.",
+        help="Evaluation interval in steps. For --run-dir, overrides config-derived value.",
     )
     ap.add_argument(
         "--prefer-best",
@@ -960,7 +962,7 @@ def main() -> None:
     def _build_experiment(
         ckpt: Dict,
         label: str,
-        eval_frequency: int,
+        eval_every_steps: int,
         spf: Optional[int],
         job_id: Optional[str],
         run_state_status: Optional[str],
@@ -970,8 +972,8 @@ def main() -> None:
             curves[key] = _as_list(ckpt.get(key, []))
         for key, _, _ in TRAIN_METRICS:
             curves[key] = _as_list(ckpt.get(key, []))
-        curves["eval_temporal_epochs"] = _as_list(ckpt.get("eval_temporal_epochs", []))
-        curves["lr_epochs"] = _as_list(ckpt.get("lr_epochs", []))
+        curves["eval_steps"] = _as_list(ckpt.get("eval_steps", []))
+        curves["lr_steps"] = _as_list(ckpt.get("lr_steps", []))
         curves["eval_raw_dc_psnrs"] = _mse_series_to_psnr(curves.get("eval_raw_dc_mses", []), peak=1.0)
         baselines = {
             key: _as_scalar(value)
@@ -986,7 +988,7 @@ def main() -> None:
             "label": _label_with_spf(label, spf),
             "curves": curves,
             "baselines": baselines,
-            "eval_frequency": max(1, int(eval_frequency)),
+            "eval_every_steps": max(1, int(eval_every_steps)),
             "spf": spf,
             "job_id": str(job_id) if job_id is not None else "-",
             "run_state_status": run_state_status if run_state_status is not None else "-",
@@ -1008,9 +1010,9 @@ def main() -> None:
             except FileNotFoundError:
                 print(f"Skipping {run_dir}: no checkpoint found.")
                 continue
-            eval_frequency = args.eval_frequency
-            if eval_frequency is None:
-                eval_frequency = _infer_eval_frequency_from_run_dir(run_dir)
+            eval_every_steps = args.eval_every_steps
+            if eval_every_steps is None:
+                eval_every_steps = _infer_eval_every_steps_from_run_dir(run_dir)
             spf = _infer_spf_from_run_dir(run_dir)
             job_id = _infer_slurm_job_id_from_run_dir(run_dir)
             run_state_status = _infer_run_state_status_from_run_dir(run_dir)
@@ -1023,7 +1025,7 @@ def main() -> None:
                 _build_experiment(
                     ckpt=ckpt,
                     label=label or os.path.basename(os.path.normpath(run_dir)),
-                    eval_frequency=eval_frequency,
+                    eval_every_steps=eval_every_steps,
                     spf=spf,
                     job_id=job_id,
                     run_state_status=run_state_status,
@@ -1035,7 +1037,7 @@ def main() -> None:
         if len(labels) < len(ckpt_paths):
             labels.extend([None] * (len(ckpt_paths) - len(labels)))
         labels = labels[: len(ckpt_paths)]
-        eval_frequency = 1 if args.eval_frequency is None else args.eval_frequency
+        eval_every_steps = 1 if args.eval_every_steps is None else args.eval_every_steps
         for ckpt_path, label in zip(ckpt_paths, labels):
             ckpt = _load_checkpoint(ckpt_path)
             spf = _infer_spf_from_ckpt_path(ckpt_path)
@@ -1045,7 +1047,7 @@ def main() -> None:
                 _build_experiment(
                     ckpt=ckpt,
                     label=label or _default_label(ckpt_path),
-                    eval_frequency=eval_frequency,
+                    eval_every_steps=eval_every_steps,
                     spf=spf,
                     job_id=job_id,
                     run_state_status=run_state_status,
@@ -1056,7 +1058,7 @@ def main() -> None:
             raise SystemExit("Provide --run-dir (2+) or --ckpt paths (2+) or legacy --ckpt-a/--ckpt-b.")
         ckpt_paths = [args.ckpt_a, args.ckpt_b]
         labels = [args.label_a, args.label_b]
-        eval_frequency = 1 if args.eval_frequency is None else args.eval_frequency
+        eval_every_steps = 1 if args.eval_every_steps is None else args.eval_every_steps
         for ckpt_path, label in zip(ckpt_paths, labels):
             ckpt = _load_checkpoint(ckpt_path)
             spf = _infer_spf_from_ckpt_path(ckpt_path)
@@ -1066,7 +1068,7 @@ def main() -> None:
                 _build_experiment(
                     ckpt=ckpt,
                     label=label or _default_label(ckpt_path),
-                    eval_frequency=eval_frequency,
+                    eval_every_steps=eval_every_steps,
                     spf=spf,
                     job_id=job_id,
                     run_state_status=run_state_status,

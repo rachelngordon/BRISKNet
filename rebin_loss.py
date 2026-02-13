@@ -47,7 +47,7 @@ class RebinConsistencyLoss(Loss):
         dynamic_mask_enable: bool = False,
         dynamic_mask_fraction: float = 0.01,
         dynamic_mask_min_pixels: int = 256,
-        dynamic_mask_warmup_epochs: int = 0,
+        dynamic_mask_warmup_steps: int = 0,
         dynamic_mask_smooth_kernel: int = 0,
         dynamic_mask_clip_min: float = 0.0,
         dynamic_mask_clip_max: float = 1.0,
@@ -69,7 +69,7 @@ class RebinConsistencyLoss(Loss):
         self.dynamic_mask_fraction = float(dynamic_mask_fraction)
         # Deprecated: kept only for backward-compatible config parsing.
         self.dynamic_mask_min_pixels = int(dynamic_mask_min_pixels)
-        self.dynamic_mask_warmup_epochs = max(0, int(dynamic_mask_warmup_epochs))
+        self.dynamic_mask_warmup_steps = max(0, int(dynamic_mask_warmup_steps))
         self.dynamic_mask_smooth_kernel = max(0, int(dynamic_mask_smooth_kernel))
         self.dynamic_mask_clip_min = float(dynamic_mask_clip_min)
         self.dynamic_mask_clip_max = float(dynamic_mask_clip_max)
@@ -206,19 +206,19 @@ class RebinConsistencyLoss(Loss):
         return torch.sqrt(x[:, :1] ** 2 + x[:, 1:2] ** 2 + eps)
 
     @staticmethod
-    def _parse_epoch(epoch: object) -> Optional[int]:
-        if epoch is None:
+    def _parse_step(step: object) -> Optional[int]:
+        if step is None:
             return None
-        if isinstance(epoch, int):
-            return epoch
-        if isinstance(epoch, float):
-            return int(epoch)
-        if torch.is_tensor(epoch):
-            if epoch.numel() == 0:
+        if isinstance(step, int):
+            return step
+        if isinstance(step, float):
+            return int(step)
+        if torch.is_tensor(step):
+            if step.numel() == 0:
                 return None
-            return int(epoch.reshape(-1)[0].item())
-        if isinstance(epoch, str):
-            match = re.search(r"-?\d+", epoch)
+            return int(step.reshape(-1)[0].item())
+        if isinstance(step, str):
+            match = re.search(r"-?\d+", step)
             if match is not None:
                 return int(match.group(0))
         return None
@@ -246,12 +246,12 @@ class RebinConsistencyLoss(Loss):
             return shifted / float(self.factor)
         return shifted
 
-    def _build_dynamic_mask(self, x_hi: torch.Tensor, epoch: object) -> torch.Tensor | None:
+    def _build_dynamic_mask(self, x_hi: torch.Tensor, step: object) -> torch.Tensor | None:
         if not self.dynamic_mask_enable:
             return None
 
-        epoch_i = self._parse_epoch(epoch)
-        if self.dynamic_mask_warmup_epochs > 0 and (epoch_i is None or epoch_i <= self.dynamic_mask_warmup_epochs):
+        step_i = self._parse_step(step)
+        if self.dynamic_mask_warmup_steps > 0 and (step_i is None or step_i <= self.dynamic_mask_warmup_steps):
             return None
 
         x_src = x_hi.detach() if self.dynamic_mask_stop_grad else x_hi
@@ -348,8 +348,8 @@ class RebinConsistencyLoss(Loss):
         if self.factor <= 1:
             return self._zero_like_loss_ref(x_net)
 
-        epoch = kwargs.get("epoch", None)
-        dynamic_mask = self._build_dynamic_mask(x_net, epoch)
+        step = kwargs.get("step", None)
+        dynamic_mask = self._build_dynamic_mask(x_net, step)
         offsets = self._select_offsets(x_net)
 
         losses: list[torch.Tensor] = []
