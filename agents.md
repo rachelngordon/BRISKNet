@@ -17,6 +17,11 @@ This project trains a reconstruction agent for highly undersampled breast DCE-MR
 - **Backbone**: LSFPNet unrolls the Low-rank + Sparsity with Framelet transform and primal–dual fixed-point optimization; includes learnable cascades, Film-style modulation, and optional low-k DC (`lsfpnet.py`, `lsfpnet_encoding.py`, `radial_lsfp.py`).
 - **Flexible transforms**: EI loss supports spatial transforms (rotation, warp, subsample) and optional noise/augmentation scheduling via YAML config.
 
+## Paper Priorities
+- The paper narrative requires showing EI provides measurable benefit; experiment plans should include explicit EI-on vs EI-off comparisons and report the deltas.
+- Primary optimization priority is temporal fidelity at high acceleration (especially early-temporal metrics), not only global image metrics.
+- Run-selection decisions should prioritize early-temporal metrics under high-acceleration settings before secondary metrics.
+
 ## Data & Splits
 - **Dataset**: fastMRI breast DCE-MRI; 300 radial k-space scans (288 spokes, 640 samples/spoke). 83 z-partitions are zero-padded to 192 slices then FFTed to image space. The data is located at /net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace. 
 The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each within a separate directory for the patient id. Tumor segmentations for each non-DRO malignant scan are in /net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations. The reconstructions stored in subdirectories for each patient in /net/scratch2/rachelgordon/zf_data_192_slices/ are of shape (2, 320, 320) and are complex, so they should be converted to real for plotting by np.abs(img[0]+1j*img[1])
@@ -49,17 +54,30 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - Prefer learning-oriented follow-ups over blind sweeps; propose the smallest next experiment that answers the open question.
 - When metrics shift meaningfully or collapse appears, include a short "why" analysis tied to data mix, loss schedules, optimization settings, and sampling behavior.
 - For any recommendation, include tradeoffs (what is gained, what is sacrificed, and viable alternatives).
+- Be proactive toward the big-picture objective: do not wait for explicit prompts to identify obvious unblockers (for example, failed shards, stalled queues, missing artifacts). Propose and execute the highest-value safe next step, then report what was done and why.
 
 ## Lab Notebook & Logging
-- Maintain a canonical experiment notebook at `experiment_log.md`.
+- Maintain a canonical experiment notebook at `lab_notebook.md`.
+- Notebook maintenance is mandatory for every experiment-management action in the same turn (submit/cancel/resubmit/complete/fail).
+- Before sending a user update about experiment status/results, ensure `lab_notebook.md` is updated first.
 - When new results or failures appear, immediately append:
   - run name/path, job id, config path, key hypothesis,
   - best/last metrics with epoch,
   - outcome vs hypothesis,
   - concrete next action.
-- When submitting or canceling runs, log that action in `experiment_log.md` in the same turn.
-- If a run crashes and is resubmitted, record root cause and fix; low-value failed run dirs may be deleted after logging the lesson.
+- When submitting or canceling runs, log that action in `lab_notebook.md` in the same turn.
+- If a run crashes and is resubmitted, record root cause and fix in `lab_notebook.md`; low-value failed run dirs may be deleted after logging the lesson.
 - If a run completes with usable validation, add a takeaway block (what happened, what was learned, what to do next).
+- Required completed-run block format (copy/paste skeleton):
+  - `Run:` `<exp_name>` (`job_id`)
+  - `Status:` `COMPLETED/FAILED/CANCELLED`
+  - `Config:` `<path>`
+  - `Best metrics:` include at least PSNR/SSIM/LPIPS/CurveCorr with step.
+  - `Final metrics:` include same metrics at final step.
+  - `Runtime:` wall time, mean iteration time, eval time/sample (if present).
+  - `Takeaway:` 1-3 concrete lessons.
+  - `Decision:` keep/kill/branch and exact next config/action.
+- If there is a mismatch between `eval_metrics.csv` and checkpoint/log metrics, record the mismatch and treat checkpoint/log metrics as source of truth for decisions.
 
 ## Monitoring & Triage
 - For status updates: check `squeue`, then reconcile with `sacct` for recently exited jobs.
@@ -67,6 +85,7 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - When a run leaves the queue, capture: job id/state, error signature (if any), likely cause, fix, and resubmit details.
 - If asked to "babysit" jobs, default to an active loop: monitor, diagnose failures, apply minimal fix, resubmit, and update `experiment_log.md`.
 - Do not promise continuous monitoring after returning a message in a normal turn; continuous monitoring requires staying in-turn.
+- For long artifact-generation campaigns (for example GRASP target generation), proactively track completion coverage and schedule catch-up submissions for missing partitions once root cause is understood.
 
 ## Config Discipline
 - New knobs must be intentional and expected to be ablated soon; avoid adding knobs for stable architectural behavior.

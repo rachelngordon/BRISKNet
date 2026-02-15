@@ -24,6 +24,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 REPO_ROOT = Path(__file__).resolve().parent
 SLICE_MAP_PATH = REPO_ROOT / "data" / "largest_tumor_slices.csv"
 
+
+def _resolve_abs_path(path: str) -> str:
+    return os.path.abspath(os.path.expanduser(str(path)))
+
 def _get_distributed_rank() -> int:
     """Best-effort rank detection for DDP/SLURM/PMI setups."""
     for key in ("RANK", "SLURM_PROCID", "PMI_RANK", "LOCAL_RANK"):
@@ -667,6 +671,14 @@ class ZFSliceDataset(Dataset):
         slice_sampling_cache_workers: int = 0,
         slice_sampling_cache_rank: Optional[int] = None,
         slice_sampling_cache_rank_only: Optional[int] = None,
+        shuffle_buffer_enable: bool = False,
+        shuffle_buffer_active_exams: Optional[int] = None,
+        shuffle_buffer_slices_per_exam: Optional[int] = None,
+        shuffle_buffer_replace_fraction: float = 0.25,
+        supervised_distill_enable: bool = False,
+        supervised_distill_target_root: Optional[str] = None,
+        supervised_distill_force_target_slice: bool = True,
+        supervised_distill_require_any_target: bool = False,
         N_time=8,
         N_coils=16,
         spf_aug=False,
@@ -709,10 +721,43 @@ class ZFSliceDataset(Dataset):
         self.slice_sampling_cache_workers = int(slice_sampling_cache_workers)
         self.slice_sampling_cache_rank = slice_sampling_cache_rank
         self.slice_sampling_cache_rank_only = slice_sampling_cache_rank_only
+        self.shuffle_buffer_enable = bool(shuffle_buffer_enable)
+        self.shuffle_buffer_active_exams = (
+            int(shuffle_buffer_active_exams) if shuffle_buffer_active_exams is not None else None
+        )
+        self.shuffle_buffer_slices_per_exam = (
+            int(shuffle_buffer_slices_per_exam) if shuffle_buffer_slices_per_exam is not None else None
+        )
+        self.shuffle_buffer_replace_fraction = float(shuffle_buffer_replace_fraction)
+        self._shuffle_buffer_active_indices: list[int] = []
+        self._shuffle_buffer_step = 0
+        self._shuffle_buffer_seed_base = 314159
+        self.supervised_distill_enable = bool(supervised_distill_enable)
+        self.supervised_distill_target_root = (
+            _resolve_abs_path(supervised_distill_target_root)
+            if supervised_distill_target_root is not None
+            else None
+        )
+        self.supervised_distill_force_target_slice = bool(supervised_distill_force_target_slice)
+        self.supervised_distill_require_any_target = bool(supervised_distill_require_any_target)
+        self._grasp_target_index: dict[str, dict[int, str]] = {}
+        self._grasp_target_slices: dict[str, list[int]] = {}
         self._slice_score_cache = {}
         self._slice_remaining = {}
         self._slice_score_cache_ready = False
         self._slice_score_cache_ready = False
+
+        if self.supervised_distill_enable:
+            if self.spf_aug:
+                raise ValueError("supervised_distill requires spf_aug=false (fixed spokes/frame).")
+            if self.spokes_per_frame is None:
+                raise ValueError("supervised_distill requires a fixed spokes_per_frame.")
+            if self.supervised_distill_target_root is None:
+                raise ValueError("supervised_distill_target_root is required when supervised_distill is enabled.")
+            if not os.path.isdir(self.supervised_distill_target_root):
+                raise FileNotFoundError(
+                    f"supervised_distill_target_root does not exist: {self.supervised_distill_target_root}"
+                )
 
         # Find all matching HDF5 files under root_dir
         all_files = sorted(glob.glob(os.path.join(root_dir, file_pattern)))
@@ -735,9 +780,26 @@ class ZFSliceDataset(Dataset):
         if len(self.file_list) == 0:
             raise RuntimeError("No files matched the provided patient_ids filter.")
 
+        if self.supervised_distill_enable:
+            self._build_supervised_distill_index()
+
         # Logic for random slice sampling
-        if self.num_random_slices is not None:
-            print(f"Initializing in random slice sampling mode with N={self.num_random_slices} slices per volume.")
+        if self.num_random_slices is not None or self.shuffle_buffer_enable:
+            if self.shuffle_buffer_enable:
+                if self.slice_sampling_no_replacement:
+                    raise ValueError("shuffle_buffer requires slice_sampling_no_replacement=False.")
+                if self.shuffle_buffer_active_exams is None or self.shuffle_buffer_active_exams <= 0:
+                    raise ValueError("shuffle_buffer_active_exams must be a positive integer.")
+                if self.shuffle_buffer_slices_per_exam is None or self.shuffle_buffer_slices_per_exam <= 0:
+                    raise ValueError("shuffle_buffer_slices_per_exam must be a positive integer.")
+                if not (0.0 < self.shuffle_buffer_replace_fraction <= 1.0):
+                    raise ValueError("shuffle_buffer_replace_fraction must be in (0, 1].")
+            else:
+                if self.num_random_slices is None or int(self.num_random_slices) <= 0:
+                    raise ValueError("num_random_slices must be a positive integer when shuffle_buffer is disabled.")
+                print(
+                    f"Initializing in random slice sampling mode with N={int(self.num_random_slices)} slices per volume."
+                )
             self.volume_map = []
             for fp in self.file_list:
                 with h5py.File(fp, "r") as f:
@@ -747,7 +809,21 @@ class ZFSliceDataset(Dataset):
                     num_slices, _, num_spokes, num_samples = ds_shape
                     self.volume_map.append((fp, num_slices, num_spokes, num_samples))
                     if self.slice_sampling_no_replacement:
-                        self._slice_remaining[fp] = list(range(num_slices))
+                        self._slice_remaining[fp] = self._resolve_distill_slice_pool(fp, int(num_slices))
+
+            if self.shuffle_buffer_enable:
+                if self.shuffle_buffer_active_exams > len(self.volume_map):
+                    raise ValueError(
+                        f"shuffle_buffer_active_exams={self.shuffle_buffer_active_exams} exceeds "
+                        f"available exams={len(self.volume_map)}."
+                    )
+                print(
+                    "Initializing shuffle buffer sampling mode with "
+                    f"active_exams={self.shuffle_buffer_active_exams}, "
+                    f"slices_per_exam={self.shuffle_buffer_slices_per_exam}, "
+                    f"replace_fraction={self.shuffle_buffer_replace_fraction:.3f}, "
+                    "reuse=1, seed_mode=step."
+                )
             
             # Perform the initial random sampling for the first epoch
             self.resample_slices()
@@ -778,6 +854,10 @@ class ZFSliceDataset(Dataset):
                 else:
                     raise TypeError(f"slice_idx must be an int, range, or None, but got {type(self.slice_idx)}")
 
+                if self.supervised_distill_enable:
+                    allowed = set(self._resolve_distill_slice_pool(fp, int(num_slices)))
+                    slices_to_add = [s for s in slices_to_add if s in allowed]
+
                 for z in slices_to_add:
                     self.slice_index_map.append((fp, z))
 
@@ -794,33 +874,119 @@ class ZFSliceDataset(Dataset):
         else:
             self.spf_weights = [1.0 for _ in self.spokes_range]
 
+    def _build_supervised_distill_index(self) -> None:
+        if not self.supervised_distill_enable:
+            return
+        expected_spf = int(self.spokes_per_frame)
+        expected_frames = int(self.N_time)
+        total_exams = int(len(self.file_list))
+        indexed: dict[str, dict[int, str]] = {}
+        exams_with_targets = 0
+        invalid_target_files = 0
+        dropped_exams_no_finite_targets = 0
+        for file_path in self.file_list:
+            patient_id = os.path.splitext(os.path.basename(file_path))[0]
+            patient_dir = os.path.join(self.supervised_distill_target_root, patient_id)
+            if not os.path.isdir(patient_dir):
+                continue
+            pattern = os.path.join(
+                patient_dir,
+                f"grasp_recon_{expected_spf}spf_{expected_frames}frames_slice*.npy",
+            )
+            matches = sorted(glob.glob(pattern))
+            if not matches:
+                continue
+            slice_to_path = {}
+            for target_path in matches:
+                match = re.search(r"slice(\d+)\.npy$", os.path.basename(target_path))
+                if match is None:
+                    raise ValueError(
+                        f"Could not parse slice index from GRASP target filename: {target_path}"
+                    )
+                slice_idx = int(match.group(1))
+                grasp_complex = np.load(target_path)
+                if not np.isfinite(grasp_complex).all():
+                    invalid_target_files += 1
+                    continue
+                if slice_idx in slice_to_path:
+                    raise RuntimeError(
+                        f"Duplicate GRASP target for patient={patient_id}, slice={slice_idx}."
+                    )
+                slice_to_path[slice_idx] = target_path
+            if not slice_to_path:
+                dropped_exams_no_finite_targets += 1
+                continue
+            indexed[file_path] = slice_to_path
+            exams_with_targets += 1
+
+        if not indexed:
+            message = (
+                "supervised_distill is enabled but no matching finite GRASP targets were found for "
+                f"spf={expected_spf}, frames={expected_frames} under {self.supervised_distill_target_root}."
+            )
+            if self.supervised_distill_require_any_target:
+                raise RuntimeError(message)
+            print(
+                "[SupervisedDistill][WARN] "
+                f"{message} Continuing without supervised-distill targets for now."
+            )
+            self._grasp_target_index = {}
+            self._grasp_target_slices = {}
+            return
+
+        self._grasp_target_index = indexed
+        self._grasp_target_slices = {
+            file_path: sorted(slice_to_path.keys())
+            for file_path, slice_to_path in indexed.items()
+        }
+        total_target_slices = sum(len(v) for v in self._grasp_target_slices.values())
+        print(
+            "[SupervisedDistill] "
+            f"target_coverage={exams_with_targets}/{total_exams} exams, "
+            f"target_slices={total_target_slices}, "
+            f"spf={expected_spf}, frames={expected_frames}, "
+            f"invalid_target_files={invalid_target_files}, "
+            f"dropped_exams_no_finite_targets={dropped_exams_no_finite_targets}"
+        )
+
+    def _resolve_distill_slice_pool(self, file_path: str, num_slices: int) -> list[int]:
+        if not self.supervised_distill_enable:
+            return list(range(num_slices))
+        # Keep full slice pool for all exams. Distillation is applied selectively
+        # later via grasp_target_valid when a target exists for the sampled slice.
+        return list(range(num_slices))
+
 
     def resample_slices(self):
         """
         Resamples N unique slices from each volume. This should be called at the
         beginning of each training epoch to ensure the model sees different data.
         """
-        if self.num_random_slices is None:
+        if self.num_random_slices is None and not self.shuffle_buffer_enable:
             # If not in random sampling mode, do nothing.
             return
         self._warm_slice_score_cache()
+        if self.shuffle_buffer_enable:
+            self._resample_slices_with_shuffle_buffer()
+            return
 
         self.slice_index_map = []
         for file_path, num_slices, num_spokes, num_samples in self.volume_map:
             if num_slices <= 0:
                 continue
-            if num_slices <= self.num_random_slices:
+            pool_all = self._resolve_distill_slice_pool(file_path, int(num_slices))
+            if len(pool_all) <= self.num_random_slices:
                 # If the volume has fewer than N slices, take all of them.
-                print(f"Warning: Volume {os.path.basename(file_path)} has only {num_slices} slices, "
+                print(f"Warning: Volume {os.path.basename(file_path)} has only {len(pool_all)} eligible slices, "
                       f"which is less than the requested {self.num_random_slices}. Using all available slices.")
-                selected_slices = list(range(num_slices))
+                selected_slices = list(pool_all)
                 if self.slice_sampling_no_replacement:
                     self._slice_remaining[file_path] = []
             else:
                 if self.slice_sampling_no_replacement:
                     pool = self._slice_remaining.get(file_path)
                     if not pool:
-                        pool = list(range(num_slices))
+                        pool = list(pool_all)
                     if len(pool) >= self.num_random_slices:
                         selected_slices = self._sample_from_pool(
                             file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=self.num_random_slices
@@ -838,7 +1004,7 @@ class ZFSliceDataset(Dataset):
                             file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=len(pool)
                         )
                         selected_set = set(selected_slices)
-                        reset_pool = [idx for idx in range(num_slices) if idx not in selected_set]
+                        reset_pool = [idx for idx in pool_all if idx not in selected_set]
                         need = self.num_random_slices - len(selected_slices)
                         if need > 0:
                             extra = self._sample_from_pool(
@@ -850,14 +1016,82 @@ class ZFSliceDataset(Dataset):
                         else:
                             self._slice_remaining[file_path] = reset_pool
                 elif self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
-                    selected_slices = random.sample(range(num_slices), self.num_random_slices)
+                    selected_slices = self._sample_from_pool(
+                        file_path,
+                        pool_all,
+                        num_slices,
+                        num_spokes,
+                        num_samples,
+                        num_to_sample=self.num_random_slices,
+                    )
                 else:
                     selected_slices = self._sample_slices_weighted(
-                        file_path, list(range(num_slices)), num_slices, num_spokes, num_samples
+                        file_path, pool_all, num_slices, num_spokes, num_samples
                     )
 
             for z in selected_slices:
                 self.slice_index_map.append((file_path, z))
+
+    def _resample_slices_with_shuffle_buffer(self) -> None:
+        if not hasattr(self, "volume_map") or len(self.volume_map) == 0:
+            raise RuntimeError("shuffle_buffer is enabled but volume_map is empty.")
+        if self.shuffle_buffer_active_exams is None or self.shuffle_buffer_slices_per_exam is None:
+            raise RuntimeError("shuffle_buffer settings are not initialized.")
+        if len(self._shuffle_buffer_active_indices) == 0:
+            init_rng = random.Random(self._shuffle_buffer_seed_base)
+            self._shuffle_buffer_active_indices = init_rng.sample(
+                list(range(len(self.volume_map))), self.shuffle_buffer_active_exams
+            )
+
+        step_seed = self._shuffle_buffer_seed_base + int(self._shuffle_buffer_step)
+        rng = random.Random(step_seed)
+        np_rng = np.random.default_rng(step_seed)
+
+        next_slice_index_map: list[tuple[str, int]] = []
+        for exam_idx in self._shuffle_buffer_active_indices:
+            file_path, num_slices, num_spokes, num_samples = self.volume_map[exam_idx]
+            if num_slices <= 0:
+                continue
+            pool = self._resolve_distill_slice_pool(file_path, int(num_slices))
+            if len(pool) <= 0:
+                continue
+            num_to_sample = min(self.shuffle_buffer_slices_per_exam, len(pool))
+            if num_to_sample == len(pool):
+                selected_slices = pool
+            else:
+                selected_slices = self._sample_from_pool(
+                    file_path,
+                    pool,
+                    num_slices,
+                    num_spokes,
+                    num_samples,
+                    num_to_sample=num_to_sample,
+                    rng=rng,
+                    np_rng=np_rng,
+                )
+            for z in selected_slices:
+                next_slice_index_map.append((file_path, z))
+
+        if len(next_slice_index_map) == 0:
+            raise RuntimeError("shuffle_buffer produced zero training slices.")
+
+        rng.shuffle(next_slice_index_map)
+        self.slice_index_map = next_slice_index_map
+
+        active_set = set(self._shuffle_buffer_active_indices)
+        available = [i for i in range(len(self.volume_map)) if i not in active_set]
+        if len(available) > 0:
+            n_replace = int(round(self.shuffle_buffer_active_exams * self.shuffle_buffer_replace_fraction))
+            if self.shuffle_buffer_replace_fraction > 0.0 and n_replace == 0:
+                n_replace = 1
+            n_replace = min(n_replace, len(available), len(self._shuffle_buffer_active_indices))
+            if n_replace > 0:
+                replace_pos = rng.sample(list(range(len(self._shuffle_buffer_active_indices))), n_replace)
+                new_exam_indices = rng.sample(available, n_replace)
+                for pos, new_exam in zip(replace_pos, new_exam_indices):
+                    self._shuffle_buffer_active_indices[pos] = int(new_exam)
+
+        self._shuffle_buffer_step += 1
 
     def _warm_slice_score_cache(self) -> None:
         if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
@@ -1020,15 +1254,47 @@ class ZFSliceDataset(Dataset):
         num_spokes: int,
         num_samples: int,
         num_to_sample: Optional[int] = None,
+        rng=None,
+        np_rng=None,
     ) -> list[int]:
         if num_to_sample is None:
             num_to_sample = self.num_random_slices
         num_to_sample = min(num_to_sample, len(pool))
+        if num_to_sample <= 0:
+            return []
+
+        random_source = rng if rng is not None else random
+        remaining_pool = list(pool)
+        selected = []
+
+        if self.supervised_distill_enable and self.supervised_distill_force_target_slice:
+            target_pool = [idx for idx in self._grasp_target_slices.get(file_path, []) if idx in remaining_pool]
+            if target_pool:
+                forced_target = random_source.choice(target_pool)
+                selected.append(int(forced_target))
+                remaining_pool = [idx for idx in remaining_pool if idx != forced_target]
+                num_to_sample = max(0, num_to_sample - 1)
+
+        if num_to_sample <= 0:
+            return selected
+
         if self.slice_sampling_mode == "uniform" or self.slice_sampling_uniform_fraction >= 1.0:
-            return random.sample(pool, num_to_sample)
-        return self._sample_slices_weighted(
-            file_path, pool, num_slices, num_spokes, num_samples, num_to_sample=num_to_sample
+            selected.extend(random_source.sample(remaining_pool, num_to_sample))
+            return selected
+
+        selected.extend(
+            self._sample_slices_weighted(
+                file_path,
+                remaining_pool,
+                num_slices,
+                num_spokes,
+                num_samples,
+                num_to_sample=num_to_sample,
+                rng=rng,
+                np_rng=np_rng,
+            )
         )
+        return selected
 
     def _sample_slices_weighted(
         self,
@@ -1038,12 +1304,16 @@ class ZFSliceDataset(Dataset):
         num_spokes: int,
         num_samples: int,
         num_to_sample: Optional[int] = None,
+        rng=None,
+        np_rng=None,
     ) -> list[int]:
         if num_to_sample is None:
             num_to_sample = self.num_random_slices
         num_to_sample = min(num_to_sample, len(pool))
         if num_to_sample <= 0:
             return []
+        random_source = rng if rng is not None else random
+        np_source = np_rng if np_rng is not None else np.random.default_rng()
         uniform_fraction = min(max(self.slice_sampling_uniform_fraction, 0.0), 1.0)
         n_uniform = int(round(num_to_sample * uniform_fraction))
         n_uniform = min(n_uniform, num_to_sample)
@@ -1051,7 +1321,7 @@ class ZFSliceDataset(Dataset):
 
         selected = set()
         if n_uniform > 0 and pool:
-            selected.update(random.sample(pool, min(n_uniform, len(pool))))
+            selected.update(random_source.sample(pool, min(n_uniform, len(pool))))
 
         if n_weighted <= 0:
             return list(selected)
@@ -1063,7 +1333,7 @@ class ZFSliceDataset(Dataset):
             weights = np.array(scores["enhancement"], dtype=np.float64)
         else:
             remaining = [idx for idx in pool if idx not in selected]
-            return list(selected) + random.sample(remaining, min(n_weighted, len(remaining)))
+            return list(selected) + random_source.sample(remaining, min(n_weighted, len(remaining)))
 
         if self.slice_sampling_filter_quantile > 0:
             cutoff = np.quantile(weights, self.slice_sampling_filter_quantile)
@@ -1076,7 +1346,7 @@ class ZFSliceDataset(Dataset):
         remaining_weights = np.array([weights[idx] for idx in remaining], dtype=np.float64)
         n_weighted_target = min(n_weighted, len(remaining))
         if remaining_weights.sum() <= 0:
-            selected.update(random.sample(remaining, n_weighted_target))
+            selected.update(random_source.sample(remaining, n_weighted_target))
             return list(selected)
 
         nonzero_mask = remaining_weights > 0
@@ -1087,11 +1357,11 @@ class ZFSliceDataset(Dataset):
             selected.update([int(x) for x in nonzero_pool])
             need = n_weighted_target - nonzero_count
             if need > 0 and zero_pool:
-                selected.update(random.sample(zero_pool, need))
+                selected.update(random_source.sample(zero_pool, need))
             return list(selected)
 
         probs = remaining_weights / remaining_weights.sum()
-        picks = np.random.choice(remaining, size=n_weighted_target, replace=False, p=probs)
+        picks = np_source.choice(remaining, size=n_weighted_target, replace=False, p=probs)
         selected.update([int(x) for x in picks])
         return list(selected)
 
@@ -1125,6 +1395,57 @@ class ZFSliceDataset(Dataset):
         csmap_path = os.path.join(ground_truth_dir, patient_id + '_cs_maps', f'cs_map_slice_{slice:03d}.npy')
         csmap = np.load(csmap_path)
         return csmap.squeeze()
+
+    def _format_grasp_target(self, grasp_complex: np.ndarray, expected_h: int, expected_w: int, expected_t: int) -> torch.Tensor:
+        if grasp_complex.ndim == 4 and 1 in grasp_complex.shape:
+            grasp_complex = np.squeeze(grasp_complex)
+        if grasp_complex.ndim != 3:
+            raise ValueError(
+                f"Expected GRASP target with 3 dims, got shape {grasp_complex.shape}."
+            )
+        shape = tuple(int(x) for x in grasp_complex.shape)
+        if shape == (expected_h, expected_w, expected_t):
+            hwt = grasp_complex
+        elif shape == (expected_t, expected_h, expected_w):
+            hwt = np.transpose(grasp_complex, (1, 2, 0))
+        elif shape == (expected_h, expected_t, expected_w):
+            hwt = np.transpose(grasp_complex, (0, 2, 1))
+        else:
+            raise ValueError(
+                "Unsupported GRASP target shape for supervised distill. "
+                f"Got {shape}, expected one of "
+                f"({expected_h}, {expected_w}, {expected_t}), "
+                f"({expected_t}, {expected_h}, {expected_w}), "
+                f"({expected_h}, {expected_t}, {expected_w})."
+            )
+
+        target = torch.from_numpy(
+            np.stack([hwt.real.astype(np.float32), hwt.imag.astype(np.float32)], axis=0)
+        )
+        if self.flip_kspace:
+            target = torch.rot90(target, k=2, dims=[1, 2])
+        return target
+
+    def _load_supervised_distill_target(
+        self,
+        file_path: str,
+        slice_idx: int,
+        expected_h: int,
+        expected_w: int,
+        expected_t: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self.supervised_distill_enable:
+            raise RuntimeError("_load_supervised_distill_target called while supervised_distill is disabled.")
+        target_path = self._grasp_target_index.get(file_path, {}).get(int(slice_idx))
+        if target_path is None:
+            empty = torch.zeros((2, expected_h, expected_w, expected_t), dtype=torch.float32)
+            return empty, torch.tensor(False)
+        grasp_complex = np.load(target_path)
+        if not np.isfinite(grasp_complex).all():
+            empty = torch.zeros((2, expected_h, expected_w, expected_t), dtype=torch.float32)
+            return empty, torch.tensor(False)
+        target = self._format_grasp_target(grasp_complex, expected_h=expected_h, expected_w=expected_w, expected_t=expected_t)
+        return target, torch.tensor(True)
     
 
     def __len__(self):
@@ -1175,6 +1496,25 @@ class ZFSliceDataset(Dataset):
             csmap_tensor = torch.from_numpy(csmap)
             csmap_tensor = torch.rot90(csmap_tensor, k=2, dims=[-2, -1])
             csmap = csmap_tensor.numpy()
+        if self.supervised_distill_enable:
+            target_h = int(csmap.shape[-2])
+            target_w = int(csmap.shape[-1])
+            grasp_target, grasp_target_valid = self._load_supervised_distill_target(
+                file_path=file_path,
+                slice_idx=current_slice_idx,
+                expected_h=target_h,
+                expected_w=target_w,
+                expected_t=int(N_time),
+            )
+            return (
+                kspace_final,
+                csmap,
+                N_samples,
+                spokes_per_frame,
+                N_time,
+                grasp_target,
+                grasp_target_valid,
+            )
 
         return kspace_final, csmap, N_samples, spokes_per_frame, N_time
 

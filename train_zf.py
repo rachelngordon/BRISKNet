@@ -339,6 +339,308 @@ def _temporal_loss_representation(
     )
 
 
+def _temporal_difference_representation(
+    x: torch.Tensor,
+    lag: int = 1,
+) -> torch.Tensor:
+    lag_i = int(lag)
+    if lag_i < 1:
+        raise ValueError(f"temporal difference lag must be >= 1, got {lag_i}.")
+    x_mag = torch.sqrt(x[:, :1] ** 2 + x[:, 1:2] ** 2 + 1e-12)
+    t_frames = int(x_mag.shape[-1])
+    if t_frames <= lag_i:
+        return x_mag[..., :0]
+    return x_mag[..., lag_i:] - x_mag[..., :-lag_i]
+
+
+def _pointwise_temporal_residual(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    metric_name: str,
+) -> torch.Tensor:
+    metric = str(metric_name).strip().upper()
+    diff = pred - target
+    if metric == "MAE":
+        return torch.abs(diff)
+    if metric == "MSE":
+        return diff * diff
+    raise ValueError(f"Unsupported temporal metric '{metric_name}'. Expected one of: MAE, MSE.")
+
+
+def _reduce_temporal_residual(
+    residual: torch.Tensor,
+    time_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if residual.numel() == 0:
+        return torch.zeros((), device=residual.device, dtype=residual.dtype)
+    if time_weights is None:
+        return residual.mean()
+
+    if residual.ndim < 2:
+        raise ValueError(f"Expected residual ndim >= 2, got {residual.ndim}.")
+    if time_weights.ndim != residual.ndim:
+        raise ValueError(
+            f"time_weights ndim mismatch: weights={time_weights.ndim}, residual={residual.ndim}."
+        )
+    if time_weights.shape[-1] != residual.shape[-1]:
+        raise ValueError(
+            f"time_weights T mismatch: weights={time_weights.shape[-1]}, residual={residual.shape[-1]}."
+        )
+    weighted = residual * time_weights
+    denom = time_weights.sum().clamp_min(torch.finfo(residual.dtype).eps)
+    spatial_scale = 1
+    for dim_i in range(1, residual.ndim - 1):
+        spatial_scale *= int(residual.shape[dim_i])
+    denom = denom * float(spatial_scale)
+    return weighted.sum() / denom
+
+
+def _compute_arrival_time_weights(
+    target_complex: torch.Tensor,
+    output_length: int,
+    lag: int,
+    baseline_frames: int,
+    arrival_fraction: float,
+    pre_scale: float,
+    arrival_to_peak_scale: float,
+    post_scale: float,
+) -> torch.Tensor:
+    if target_complex.ndim != 5:
+        raise ValueError(
+            f"Expected target_complex with ndim=5 [B,2,H,W,T], got shape {tuple(target_complex.shape)}."
+        )
+    if output_length < 0:
+        raise ValueError(f"output_length must be >= 0, got {output_length}.")
+    if output_length == 0:
+        bsz = int(target_complex.shape[0])
+        return torch.zeros((bsz, 1, 1, 1, 0), device=target_complex.device, dtype=target_complex.dtype)
+
+    x_mag = torch.sqrt(target_complex[:, :1] ** 2 + target_complex[:, 1:2] ** 2 + 1e-12)
+    curve = x_mag.mean(dim=(1, 2, 3))
+    bsz, t_frames = int(curve.shape[0]), int(curve.shape[1])
+    if t_frames < 1:
+        return torch.ones((bsz, 1, 1, 1, output_length), device=target_complex.device, dtype=target_complex.dtype)
+
+    baseline_n = min(max(int(baseline_frames), 1), t_frames)
+    baseline = curve[:, :baseline_n].mean(dim=1)
+    peak_vals, peak_idx = curve.max(dim=1)
+    threshold = baseline + float(arrival_fraction) * (peak_vals - baseline)
+    t_index = torch.arange(t_frames, device=curve.device, dtype=torch.long).unsqueeze(0).expand(bsz, -1)
+    above = curve >= threshold.unsqueeze(1)
+    sentinel = torch.full_like(t_index, fill_value=t_frames)
+    arrival_idx = torch.where(above, t_index, sentinel).min(dim=1).values
+    arrival_idx = torch.where(arrival_idx >= t_frames, torch.zeros_like(arrival_idx), arrival_idx)
+    peak_idx = torch.maximum(peak_idx, arrival_idx)
+
+    weights = torch.full((bsz, t_frames), float(post_scale), device=curve.device, dtype=curve.dtype)
+    pre_val = torch.full_like(weights, float(pre_scale))
+    rise_val = torch.full_like(weights, float(arrival_to_peak_scale))
+    weights = torch.where(t_index < arrival_idx.unsqueeze(1), pre_val, weights)
+    in_rise = (t_index >= arrival_idx.unsqueeze(1)) & (t_index <= peak_idx.unsqueeze(1))
+    weights = torch.where(in_rise, rise_val, weights)
+
+    lag_i = int(max(0, lag))
+    if lag_i > 0:
+        if lag_i >= t_frames:
+            trimmed = weights[:, :0]
+        else:
+            trimmed = weights[:, lag_i:]
+    else:
+        trimmed = weights
+
+    if trimmed.shape[1] != output_length:
+        if trimmed.shape[1] > output_length:
+            trimmed = trimmed[:, :output_length]
+        else:
+            pad_n = output_length - int(trimmed.shape[1])
+            pad_val = trimmed[:, -1:] if trimmed.shape[1] > 0 else torch.ones((bsz, 1), device=curve.device, dtype=curve.dtype)
+            trimmed = torch.cat([trimmed, pad_val.repeat(1, pad_n)], dim=1)
+
+    return trimmed[:, None, None, None, :]
+
+
+def _linear_ramp_alpha(step: int, start: int, duration: int) -> float:
+    step_i = int(step)
+    start_i = int(start)
+    dur_i = int(duration)
+    if dur_i <= 0:
+        return 1.0 if step_i >= start_i else 0.0
+    if step_i <= start_i:
+        return 0.0
+    if step_i >= start_i + dur_i:
+        return 1.0
+    return float(step_i - start_i) / float(dur_i)
+
+
+def _compute_temporal_representation_with_lag(
+    x: torch.Tensor,
+    mode: str,
+    baseline_frames: int,
+    percent_enhancement_eps: float,
+    lag: int,
+) -> torch.Tensor:
+    mode_norm = str(mode).strip().lower()
+    if mode_norm == "temporal_difference":
+        return _temporal_difference_representation(x, lag=lag)
+    return _temporal_loss_representation(
+        x,
+        mode,
+        baseline_frames=baseline_frames,
+        percent_enhancement_eps=percent_enhancement_eps,
+    )
+
+
+def _compute_temporal_loss_term(
+    pred_complex: torch.Tensor,
+    target_complex: torch.Tensor,
+    metric_name: str,
+    temporal_mode: str,
+    baseline_frames: int,
+    percent_enhancement_eps: float,
+    lag: int = 1,
+    arrival_weight_cfg: dict | None = None,
+) -> torch.Tensor:
+    pred_rep = _compute_temporal_representation_with_lag(
+        pred_complex,
+        temporal_mode,
+        baseline_frames=baseline_frames,
+        percent_enhancement_eps=percent_enhancement_eps,
+        lag=lag,
+    )
+    target_rep = _compute_temporal_representation_with_lag(
+        target_complex,
+        temporal_mode,
+        baseline_frames=baseline_frames,
+        percent_enhancement_eps=percent_enhancement_eps,
+        lag=lag,
+    )
+    if pred_rep.shape != target_rep.shape:
+        raise RuntimeError(
+            "temporal loss representation shape mismatch: "
+            f"pred={tuple(pred_rep.shape)} target={tuple(target_rep.shape)} "
+            f"(mode={temporal_mode}, lag={lag})"
+        )
+    if pred_rep.shape[-1] == 0:
+        return torch.zeros((), device=pred_complex.device, dtype=pred_complex.dtype)
+    residual = _pointwise_temporal_residual(pred_rep, target_rep, metric_name)
+    time_weights = None
+    if arrival_weight_cfg and arrival_weight_cfg.get("enable", False):
+        lag_for_weights = int(lag) if str(temporal_mode).strip().lower() == "temporal_difference" else 0
+        time_weights = _compute_arrival_time_weights(
+            target_complex,
+            output_length=int(pred_rep.shape[-1]),
+            lag=lag_for_weights,
+            baseline_frames=int(arrival_weight_cfg["baseline_frames"]),
+            arrival_fraction=float(arrival_weight_cfg["arrival_fraction"]),
+            pre_scale=float(arrival_weight_cfg["pre_scale"]),
+            arrival_to_peak_scale=float(arrival_weight_cfg["arrival_to_peak_scale"]),
+            post_scale=float(arrival_weight_cfg["post_scale"]),
+        ).to(device=residual.device, dtype=residual.dtype)
+    return _reduce_temporal_residual(residual, time_weights=time_weights)
+
+
+def _compute_multi_lag_temporal_difference_loss(
+    pred_complex: torch.Tensor,
+    target_complex: torch.Tensor,
+    metric_name: str,
+    baseline_frames: int,
+    percent_enhancement_eps: float,
+    lags: list[int],
+    lag_weights: list[float],
+    arrival_weight_cfg: dict | None = None,
+) -> torch.Tensor:
+    if len(lags) != len(lag_weights):
+        raise ValueError(
+            f"temporal_diff_lags and temporal_diff_lag_weights length mismatch: {len(lags)} vs {len(lag_weights)}."
+        )
+    accum = torch.zeros((), device=pred_complex.device, dtype=pred_complex.dtype)
+    for lag_i, w_i in zip(lags, lag_weights):
+        if float(w_i) <= 0:
+            continue
+        lag_loss = _compute_temporal_loss_term(
+            pred_complex,
+            target_complex,
+            metric_name=metric_name,
+            temporal_mode="temporal_difference",
+            baseline_frames=baseline_frames,
+            percent_enhancement_eps=percent_enhancement_eps,
+            lag=int(lag_i),
+            arrival_weight_cfg=arrival_weight_cfg,
+        )
+        accum = accum + float(w_i) * lag_loss
+    return accum
+
+
+def _compute_temporal_frequency_loss(
+    pred_complex: torch.Tensor,
+    target_complex: torch.Tensor,
+    metric_name: str,
+    temporal_mode: str,
+    baseline_frames: int,
+    percent_enhancement_eps: float,
+    low_bin: int,
+    high_bin: int | None,
+    log_magnitude: bool,
+    fft_window: str,
+    fft_norm: str,
+) -> torch.Tensor:
+    pred_rep = _compute_temporal_representation_with_lag(
+        pred_complex,
+        temporal_mode,
+        baseline_frames=baseline_frames,
+        percent_enhancement_eps=percent_enhancement_eps,
+        lag=1,
+    )
+    target_rep = _compute_temporal_representation_with_lag(
+        target_complex,
+        temporal_mode,
+        baseline_frames=baseline_frames,
+        percent_enhancement_eps=percent_enhancement_eps,
+        lag=1,
+    )
+    if pred_rep.shape != target_rep.shape:
+        raise RuntimeError(
+            "temporal frequency representation shape mismatch: "
+            f"pred={tuple(pred_rep.shape)} target={tuple(target_rep.shape)}."
+        )
+    if pred_rep.shape[-1] < 2:
+        return torch.zeros((), device=pred_complex.device, dtype=pred_complex.dtype)
+
+    window_mode = str(fft_window).strip().lower()
+    if window_mode == "hann":
+        t_frames = int(pred_rep.shape[-1])
+        window = torch.hann_window(t_frames, device=pred_rep.device, dtype=pred_rep.dtype)
+        pred_rep = pred_rep * window.view(1, 1, 1, 1, t_frames)
+        target_rep = target_rep * window.view(1, 1, 1, 1, t_frames)
+    elif window_mode != "none":
+        raise ValueError(f"Unsupported supervised_distill.frequency_loss.window '{fft_window}'.")
+
+    fft_norm_mode = str(fft_norm).strip().lower()
+    if fft_norm_mode not in {"backward", "forward", "ortho"}:
+        raise ValueError(
+            f"Unsupported supervised_distill.frequency_loss.fft_norm '{fft_norm}'. "
+            "Expected one of: backward, forward, ortho."
+        )
+    pred_fft = torch.fft.rfft(pred_rep, dim=-1, norm=fft_norm_mode)
+    target_fft = torch.fft.rfft(target_rep, dim=-1, norm=fft_norm_mode)
+    pred_mag = torch.abs(pred_fft)
+    target_mag = torch.abs(target_fft)
+    if bool(log_magnitude):
+        pred_mag = torch.log1p(pred_mag)
+        target_mag = torch.log1p(target_mag)
+
+    n_bins = int(pred_mag.shape[-1])
+    low_i = max(0, int(low_bin))
+    high_i = n_bins - 1 if high_bin is None else min(int(high_bin), n_bins - 1)
+    if high_i < low_i:
+        return torch.zeros((), device=pred_complex.device, dtype=pred_complex.dtype)
+
+    pred_sel = pred_mag[..., low_i : high_i + 1]
+    target_sel = target_mag[..., low_i : high_i + 1]
+    residual = _pointwise_temporal_residual(pred_sel, target_sel, metric_name)
+    return residual.mean()
+
+
 def _param_name_matches(name: str, patterns):
     return any(str(pat) in name for pat in patterns)
 
@@ -851,6 +1153,7 @@ def main():
     split_file = config["data"]["split_file"]
 
     data_dir = config["data"]["root_dir"]
+    grasp_target_root = config["data"].get("grasp_target_root", os.path.dirname(data_dir))
 
     batch_size = config["dataloader"]["batch_size"]
     max_subjects = config["dataloader"]["max_subjects"]
@@ -862,6 +1165,16 @@ def main():
     slice_sampling_cache_workers = config["dataloader"].get("slice_sampling_cache_workers", 0)
     slice_sampling_cache_rank = global_rank if config['training']['multigpu'] else None
     slice_sampling_cache_rank_only = 0 if config['training']['multigpu'] else None
+    supervised_distill_force_target_slice = bool(
+        config["dataloader"].get("supervised_distill_force_target_slice", True)
+    )
+    supervised_distill_require_any_target = bool(
+        config["dataloader"].get("supervised_distill_require_any_target", False)
+    )
+    shuffle_buffer_enable = bool(config["dataloader"].get("shuffle_buffer_enable", False))
+    shuffle_buffer_active_exams = config["dataloader"].get("shuffle_buffer_active_exams", None)
+    shuffle_buffer_slices_per_exam = config["dataloader"].get("shuffle_buffer_slices_per_exam", None)
+    shuffle_buffer_replace_fraction = config["dataloader"].get("shuffle_buffer_replace_fraction", 0.25)
 
     losses_cfg = config["model"]["losses"]
     mc_loss_weight = float(losses_cfg["mc_loss"]["weight"])
@@ -998,6 +1311,202 @@ def main():
         raise ValueError("model.losses.teacher_distill.stop_step must be >= 1 when set.")
     if teacher_distill_target_w < 0:
         raise ValueError("model.losses.teacher_distill.weight must be >= 0.")
+
+    supervised_distill_cfg = losses_cfg.get("supervised_distill", {})
+    if supervised_distill_cfg is None:
+        supervised_distill_cfg = {}
+    if not isinstance(supervised_distill_cfg, dict):
+        raise TypeError("model.losses.supervised_distill must be a mapping.")
+
+    use_supervised_distill = bool(supervised_distill_cfg.get("enable", False))
+    supervised_distill_target_w = float(supervised_distill_cfg.get("weight", 0.0))
+    supervised_distill_warmup = int(supervised_distill_cfg.get("warmup", 0))
+    supervised_distill_duration_steps = int(supervised_distill_cfg.get("duration_steps", 0))
+    supervised_distill_metric_name = str(supervised_distill_cfg.get("metric", "MAE"))
+    supervised_distill_temporal_mode = str(supervised_distill_cfg.get("temporal_mode", "absolute"))
+    supervised_distill_baseline_frames = int(supervised_distill_cfg.get("baseline_frames", 4))
+    supervised_distill_percent_eps = float(supervised_distill_cfg.get("percent_enhancement_eps", 1e-4))
+    supervised_distill_stop_step = _parse_optional_int(supervised_distill_cfg.get("stop_step", None))
+    supervised_distill_temporal_diff_lags_raw = supervised_distill_cfg.get("temporal_diff_lags", [1])
+    if isinstance(supervised_distill_temporal_diff_lags_raw, (int, np.integer)):
+        supervised_distill_temporal_diff_lags = [int(supervised_distill_temporal_diff_lags_raw)]
+    elif isinstance(supervised_distill_temporal_diff_lags_raw, (list, tuple)):
+        supervised_distill_temporal_diff_lags = [int(x) for x in supervised_distill_temporal_diff_lags_raw]
+    else:
+        raise TypeError("model.losses.supervised_distill.temporal_diff_lags must be an int or list of ints.")
+    if not supervised_distill_temporal_diff_lags:
+        raise ValueError("model.losses.supervised_distill.temporal_diff_lags must be non-empty.")
+    if any(int(x) < 1 for x in supervised_distill_temporal_diff_lags):
+        raise ValueError("model.losses.supervised_distill.temporal_diff_lags values must be >= 1.")
+
+    supervised_distill_temporal_diff_lag_weights_raw = supervised_distill_cfg.get(
+        "temporal_diff_lag_weights",
+        None,
+    )
+    if supervised_distill_temporal_diff_lag_weights_raw is None:
+        supervised_distill_temporal_diff_lag_weights = [
+            1.0 / float(len(supervised_distill_temporal_diff_lags))
+            for _ in supervised_distill_temporal_diff_lags
+        ]
+    else:
+        if not isinstance(supervised_distill_temporal_diff_lag_weights_raw, (list, tuple)):
+            raise TypeError(
+                "model.losses.supervised_distill.temporal_diff_lag_weights must be a list of numbers."
+            )
+        supervised_distill_temporal_diff_lag_weights = [
+            float(x) for x in supervised_distill_temporal_diff_lag_weights_raw
+        ]
+        if len(supervised_distill_temporal_diff_lag_weights) != len(supervised_distill_temporal_diff_lags):
+            raise ValueError(
+                "model.losses.supervised_distill.temporal_diff_lag_weights must match temporal_diff_lags length."
+            )
+        if any(w < 0 for w in supervised_distill_temporal_diff_lag_weights):
+            raise ValueError(
+                "model.losses.supervised_distill.temporal_diff_lag_weights values must be >= 0."
+            )
+        lag_w_sum = float(sum(supervised_distill_temporal_diff_lag_weights))
+        if lag_w_sum <= 0:
+            raise ValueError(
+                "model.losses.supervised_distill.temporal_diff_lag_weights must sum to > 0."
+            )
+        supervised_distill_temporal_diff_lag_weights = [
+            float(w) / lag_w_sum for w in supervised_distill_temporal_diff_lag_weights
+        ]
+
+    supervised_arrival_weight_cfg = supervised_distill_cfg.get("arrival_weighting", {})
+    if supervised_arrival_weight_cfg is None:
+        supervised_arrival_weight_cfg = {}
+    if isinstance(supervised_arrival_weight_cfg, bool):
+        supervised_arrival_weight_cfg = {
+            "enable": bool(supervised_arrival_weight_cfg),
+            "baseline_frames": int(supervised_distill_baseline_frames),
+            "arrival_fraction": 0.15,
+            "pre_scale": 1.0,
+            "arrival_to_peak_scale": 2.0,
+            "post_scale": 1.0,
+        }
+    if not isinstance(supervised_arrival_weight_cfg, dict):
+        raise TypeError("model.losses.supervised_distill.arrival_weighting must be a mapping.")
+    supervised_arrival_weight_cfg = {
+        "enable": bool(supervised_arrival_weight_cfg.get("enable", False)),
+        "baseline_frames": int(
+            supervised_arrival_weight_cfg.get("baseline_frames", supervised_distill_baseline_frames)
+        ),
+        "arrival_fraction": float(supervised_arrival_weight_cfg.get("arrival_fraction", 0.15)),
+        "pre_scale": float(supervised_arrival_weight_cfg.get("pre_scale", 1.0)),
+        "arrival_to_peak_scale": float(
+            supervised_arrival_weight_cfg.get(
+                "arrival_to_peak_scale",
+                supervised_arrival_weight_cfg.get("rise_scale", 2.0),
+            )
+        ),
+        "post_scale": float(supervised_arrival_weight_cfg.get("post_scale", 1.0)),
+    }
+
+    supervised_curriculum_cfg = supervised_distill_cfg.get("curriculum", {})
+    if supervised_curriculum_cfg is None:
+        supervised_curriculum_cfg = {}
+    if isinstance(supervised_curriculum_cfg, bool):
+        supervised_curriculum_cfg = {"enable": bool(supervised_curriculum_cfg)}
+    if not isinstance(supervised_curriculum_cfg, dict):
+        raise TypeError("model.losses.supervised_distill.curriculum must be a mapping.")
+    supervised_curriculum_cfg = {
+        "enable": bool(supervised_curriculum_cfg.get("enable", False)),
+        "early_mode": str(supervised_curriculum_cfg.get("early_mode", "baseline_subtracted")),
+        "late_mode": str(supervised_curriculum_cfg.get("late_mode", "absolute")),
+        "transition_start": int(supervised_curriculum_cfg.get("transition_start", 0)),
+        "transition_duration_steps": int(supervised_curriculum_cfg.get("transition_duration_steps", 0)),
+    }
+
+    supervised_freq_cfg = supervised_distill_cfg.get("frequency_loss", {})
+    if supervised_freq_cfg is None:
+        supervised_freq_cfg = {}
+    if isinstance(supervised_freq_cfg, bool):
+        supervised_freq_cfg = {"enable": bool(supervised_freq_cfg), "weight": 0.05}
+    if not isinstance(supervised_freq_cfg, dict):
+        raise TypeError("model.losses.supervised_distill.frequency_loss must be a mapping.")
+    supervised_freq_cfg = {
+        "enable": bool(supervised_freq_cfg.get("enable", False)),
+        "weight": float(supervised_freq_cfg.get("weight", 0.0)),
+        "metric": str(supervised_freq_cfg.get("metric", supervised_distill_metric_name)),
+        "temporal_mode": str(supervised_freq_cfg.get("temporal_mode", "baseline_subtracted")),
+        "baseline_frames": int(
+            supervised_freq_cfg.get("baseline_frames", supervised_distill_baseline_frames)
+        ),
+        "percent_enhancement_eps": float(
+            supervised_freq_cfg.get("percent_enhancement_eps", supervised_distill_percent_eps)
+        ),
+        "low_bin": int(supervised_freq_cfg.get("low_bin", 1)),
+        "high_bin": _parse_optional_int(supervised_freq_cfg.get("high_bin", None)),
+        "log_magnitude": bool(supervised_freq_cfg.get("log_magnitude", True)),
+        "window": str(supervised_freq_cfg.get("window", "hann")),
+        "fft_norm": str(supervised_freq_cfg.get("fft_norm", "ortho")),
+    }
+
+    if supervised_distill_warmup < 0:
+        raise ValueError("model.losses.supervised_distill.warmup must be >= 0.")
+    if supervised_distill_duration_steps < 0:
+        raise ValueError("model.losses.supervised_distill.duration_steps must be >= 0.")
+    if supervised_distill_stop_step is not None and supervised_distill_stop_step < 1:
+        raise ValueError("model.losses.supervised_distill.stop_step must be >= 1 when set.")
+    if supervised_distill_target_w < 0:
+        raise ValueError("model.losses.supervised_distill.weight must be >= 0.")
+    valid_temporal_modes = {
+        "absolute",
+        "baseline_subtracted",
+        "percent_enhancement",
+        "temporal_difference",
+    }
+    if str(supervised_distill_temporal_mode).strip().lower() not in valid_temporal_modes:
+        raise ValueError(
+            "model.losses.supervised_distill.temporal_mode must be one of: "
+            "absolute, baseline_subtracted, percent_enhancement, temporal_difference."
+        )
+    if str(supervised_curriculum_cfg["early_mode"]).strip().lower() not in valid_temporal_modes:
+        raise ValueError(
+            "model.losses.supervised_distill.curriculum.early_mode must be one of: "
+            "absolute, baseline_subtracted, percent_enhancement, temporal_difference."
+        )
+    if str(supervised_curriculum_cfg["late_mode"]).strip().lower() not in valid_temporal_modes:
+        raise ValueError(
+            "model.losses.supervised_distill.curriculum.late_mode must be one of: "
+            "absolute, baseline_subtracted, percent_enhancement, temporal_difference."
+        )
+    if str(supervised_freq_cfg["temporal_mode"]).strip().lower() not in valid_temporal_modes:
+        raise ValueError(
+            "model.losses.supervised_distill.frequency_loss.temporal_mode must be one of: "
+            "absolute, baseline_subtracted, percent_enhancement, temporal_difference."
+        )
+    if supervised_arrival_weight_cfg["baseline_frames"] < 1:
+        raise ValueError("model.losses.supervised_distill.arrival_weighting.baseline_frames must be >= 1.")
+    if not (0.0 < supervised_arrival_weight_cfg["arrival_fraction"] <= 1.0):
+        raise ValueError(
+            "model.losses.supervised_distill.arrival_weighting.arrival_fraction must be in (0, 1]."
+        )
+    if supervised_arrival_weight_cfg["pre_scale"] <= 0 or supervised_arrival_weight_cfg["arrival_to_peak_scale"] <= 0 or supervised_arrival_weight_cfg["post_scale"] <= 0:
+        raise ValueError(
+            "model.losses.supervised_distill.arrival_weighting scales must be > 0."
+        )
+    if supervised_curriculum_cfg["transition_start"] < 0 or supervised_curriculum_cfg["transition_duration_steps"] < 0:
+        raise ValueError(
+            "model.losses.supervised_distill.curriculum transition values must be >= 0."
+        )
+    if supervised_freq_cfg["weight"] < 0:
+        raise ValueError("model.losses.supervised_distill.frequency_loss.weight must be >= 0.")
+    if supervised_freq_cfg["enable"] and supervised_freq_cfg["weight"] == 0:
+        raise ValueError(
+            "model.losses.supervised_distill.frequency_loss.enable is true but weight is 0."
+        )
+    if supervised_freq_cfg["low_bin"] < 0:
+        raise ValueError("model.losses.supervised_distill.frequency_loss.low_bin must be >= 0.")
+    if supervised_freq_cfg["high_bin"] is not None and supervised_freq_cfg["high_bin"] < 0:
+        raise ValueError("model.losses.supervised_distill.frequency_loss.high_bin must be >= 0 when set.")
+    if str(supervised_freq_cfg["metric"]).strip().upper() not in {"MAE", "MSE"}:
+        raise ValueError(
+            "model.losses.supervised_distill.frequency_loss.metric must be one of: MAE, MSE."
+        )
+    if use_supervised_distill and use_teacher_distill:
+        raise ValueError("Enable only one distillation path: teacher_distill or supervised_distill.")
 
     activation_gate_cfg = losses_cfg.get("activation_gate", {})
     if activation_gate_cfg is None:
@@ -1202,6 +1711,14 @@ def main():
             slice_sampling_cache_workers=slice_sampling_cache_workers,
             slice_sampling_cache_rank=slice_sampling_cache_rank,
             slice_sampling_cache_rank_only=slice_sampling_cache_rank_only,
+            shuffle_buffer_enable=shuffle_buffer_enable,
+            shuffle_buffer_active_exams=shuffle_buffer_active_exams,
+            shuffle_buffer_slices_per_exam=shuffle_buffer_slices_per_exam,
+            shuffle_buffer_replace_fraction=shuffle_buffer_replace_fraction,
+            supervised_distill_enable=use_supervised_distill,
+            supervised_distill_target_root=grasp_target_root,
+            supervised_distill_force_target_slice=supervised_distill_force_target_slice,
+            supervised_distill_require_any_target=supervised_distill_require_any_target,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],
@@ -1227,6 +1744,14 @@ def main():
             slice_sampling_cache_workers=slice_sampling_cache_workers,
             slice_sampling_cache_rank=slice_sampling_cache_rank,
             slice_sampling_cache_rank_only=slice_sampling_cache_rank_only,
+            shuffle_buffer_enable=shuffle_buffer_enable,
+            shuffle_buffer_active_exams=shuffle_buffer_active_exams,
+            shuffle_buffer_slices_per_exam=shuffle_buffer_slices_per_exam,
+            shuffle_buffer_replace_fraction=shuffle_buffer_replace_fraction,
+            supervised_distill_enable=use_supervised_distill,
+            supervised_distill_target_root=grasp_target_root,
+            supervised_distill_force_target_slice=supervised_distill_force_target_slice,
+            supervised_distill_require_any_target=supervised_distill_require_any_target,
             N_time=N_time,
             N_coils=N_coils,
             spf_aug=config['data']['spf_aug'],
@@ -1260,6 +1785,17 @@ def main():
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
+    train_dataset_is_dynamic = (
+        getattr(train_dataset, "num_random_slices", None) is not None
+        or bool(getattr(train_dataset, "shuffle_buffer_enable", False))
+    )
+    train_loader_persistent_workers = (
+        bool(config["dataloader"]["num_workers"] > 0)
+        and not train_dataset_is_dynamic
+    )
+    if (global_rank == 0 or not config['training']['multigpu']) and train_dataset_is_dynamic:
+        print("[DataLoader] Disabling persistent_workers for train_loader (dataset resamples slices each step).")
+
     g = torch.Generator()
     g.manual_seed(12)
 
@@ -1271,7 +1807,7 @@ def main():
             sampler=train_sampler,
             num_workers=config["dataloader"]["num_workers"],
             pin_memory=True,
-            persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
+            persistent_workers=train_loader_persistent_workers,
             worker_init_fn=seed_worker,
             generator=g,
         )
@@ -1282,7 +1818,7 @@ def main():
             shuffle=config["dataloader"]["shuffle"],
             num_workers=config["dataloader"]["num_workers"],
             pin_memory=True,
-            persistent_workers=bool(config["dataloader"]["num_workers"] > 0),
+            persistent_workers=train_loader_persistent_workers,
             worker_init_fn=seed_worker,
             generator=g,
         )
@@ -1746,6 +2282,27 @@ def main():
         teacher_distill_metric_name = None
         teacher_checkpoint_path = None
 
+    if use_supervised_distill:
+        _, supervised_distill_metric_name = _build_pointwise_metric(
+            supervised_distill_metric_name,
+            "model.losses.supervised_distill",
+        )
+        if global_rank == 0 or not config['training']['multigpu']:
+            print(
+                "[SupervisedDistill] "
+                f"metric={supervised_distill_metric_name}, temporal_mode={supervised_distill_temporal_mode}, "
+                f"target_weight={supervised_distill_target_w}, warmup={supervised_distill_warmup}, "
+                f"duration_steps={supervised_distill_duration_steps}, stop_step={supervised_distill_stop_step}, "
+                f"target_root={grasp_target_root}, "
+                f"lags={supervised_distill_temporal_diff_lags}, "
+                f"lag_weights={supervised_distill_temporal_diff_lag_weights}, "
+                f"arrival_weighting={supervised_arrival_weight_cfg}, "
+                f"curriculum={supervised_curriculum_cfg}, "
+                f"frequency_loss={supervised_freq_cfg}"
+            )
+    else:
+        supervised_distill_metric_name = None
+
     if use_ei_loss and ei_gate.get("enable", False) and ei_gradnorm_transition_enable:
         ei_gradnorm_transition_enable = False
         if global_rank == 0 or not config['training']['multigpu']:
@@ -1800,9 +2357,8 @@ def main():
                 min_spf_target = min(initial_train_spokes_range) if initial_train_spokes_range else None
                 for i, batch in enumerate(iter(train_loader)):
                     if include_sample_indices:
-                        _, measured_kspace, csmap, N_samples, N_spokes, N_time = batch
-                    else:
-                        measured_kspace, csmap, N_samples, N_spokes, N_time = batch
+                        batch = batch[1:]
+                    measured_kspace, csmap, N_samples, N_spokes, N_time = batch[:5]
 
                     spf = _scalar_int(N_spokes, default=10**9)
                     if best_batch is None or spf < best_spf:
@@ -2067,12 +2623,30 @@ def main():
         weighted_train_rebin_losses = train_curves.get("weighted_train_rebin_losses", [])
         train_teacher_distill_losses = train_curves.get("train_teacher_distill_losses", [])
         weighted_train_teacher_distill_losses = train_curves.get("weighted_train_teacher_distill_losses", [])
+        train_supervised_distill_losses = train_curves.get("train_supervised_distill_losses", [])
+        weighted_train_supervised_distill_losses = train_curves.get("weighted_train_supervised_distill_losses", [])
+        train_supervised_distill_freq_losses = train_curves.get("train_supervised_distill_freq_losses", [])
+        weighted_train_supervised_distill_freq_losses = train_curves.get(
+            "weighted_train_supervised_distill_freq_losses",
+            [],
+        )
+        supervised_distill_valid_fraction_history = train_curves.get("supervised_distill_valid_fraction_history", [])
+        supervised_distill_curriculum_alpha_history = train_curves.get(
+            "supervised_distill_curriculum_alpha_history",
+            [],
+        )
+        supervised_distill_curriculum_alpha_steps = train_curves.get(
+            "supervised_distill_curriculum_alpha_steps",
+            [],
+        )
         lr_history = train_curves.get("lr_history", [])
         lr_steps = train_curves.get("lr_steps", [])
         ei_weight_history = train_curves.get("ei_weight_history", [])
         ei_weight_steps = train_curves.get("ei_weight_steps", [])
         teacher_distill_weight_history = train_curves.get("teacher_distill_weight_history", [])
         teacher_distill_weight_steps = train_curves.get("teacher_distill_weight_steps", [])
+        supervised_distill_weight_history = train_curves.get("supervised_distill_weight_history", [])
+        supervised_distill_weight_steps = train_curves.get("supervised_distill_weight_steps", [])
         ei_gradnorm_ratio_history = train_curves.get("ei_gradnorm_ratio_history", [])
         ei_gradnorm_ratio_steps = train_curves.get("ei_gradnorm_ratio_steps", [])
         rebin_weight_history = train_curves.get("rebin_weight_history", [])
@@ -2152,12 +2726,21 @@ def main():
         weighted_train_rebin_losses = []
         train_teacher_distill_losses = []
         weighted_train_teacher_distill_losses = []
+        train_supervised_distill_losses = []
+        weighted_train_supervised_distill_losses = []
+        train_supervised_distill_freq_losses = []
+        weighted_train_supervised_distill_freq_losses = []
+        supervised_distill_valid_fraction_history = []
+        supervised_distill_curriculum_alpha_history = []
+        supervised_distill_curriculum_alpha_steps = []
         lr_history = []
         lr_steps = []
         ei_weight_history = []
         ei_weight_steps = []
         teacher_distill_weight_history = []
         teacher_distill_weight_steps = []
+        supervised_distill_weight_history = []
+        supervised_distill_weight_steps = []
         ei_gradnorm_ratio_history = []
         ei_gradnorm_ratio_steps = []
         rebin_weight_history = []
@@ -2289,12 +2872,21 @@ def main():
             weighted_train_rebin_losses=weighted_train_rebin_losses,
             train_teacher_distill_losses=train_teacher_distill_losses,
             weighted_train_teacher_distill_losses=weighted_train_teacher_distill_losses,
+            train_supervised_distill_losses=train_supervised_distill_losses,
+            weighted_train_supervised_distill_losses=weighted_train_supervised_distill_losses,
+            train_supervised_distill_freq_losses=train_supervised_distill_freq_losses,
+            weighted_train_supervised_distill_freq_losses=weighted_train_supervised_distill_freq_losses,
+            supervised_distill_valid_fraction_history=supervised_distill_valid_fraction_history,
+            supervised_distill_curriculum_alpha_history=supervised_distill_curriculum_alpha_history,
+            supervised_distill_curriculum_alpha_steps=supervised_distill_curriculum_alpha_steps,
             lr_history=lr_history,
             lr_steps=lr_steps,
             ei_weight_history=ei_weight_history,
             ei_weight_steps=ei_weight_steps,
             teacher_distill_weight_history=teacher_distill_weight_history,
             teacher_distill_weight_steps=teacher_distill_weight_steps,
+            supervised_distill_weight_history=supervised_distill_weight_history,
+            supervised_distill_weight_steps=supervised_distill_weight_steps,
             ei_gradnorm_ratio_history=ei_gradnorm_ratio_history,
             ei_gradnorm_ratio_steps=ei_gradnorm_ratio_steps,
             ei_gradnorm_ratio_ema=ei_gradnorm_ratio_ema,
@@ -2393,6 +2985,8 @@ def main():
             _register_transition_checkpoint(rebin_warmup, "pre_rebin_loss")
         if use_teacher_distill and teacher_distill_warmup > 0:
             _register_transition_checkpoint(teacher_distill_warmup, "pre_teacher_distill")
+        if use_supervised_distill and supervised_distill_warmup > 0:
+            _register_transition_checkpoint(supervised_distill_warmup, "pre_supervised_distill")
 
         if global_rank == 0 or not config['training']['multigpu']:
             if loss_transition_checkpoints:
@@ -2556,7 +3150,10 @@ def main():
 
             # Evaluate on training data
             step0_train_batches = 0
-            for measured_kspace, csmap, N_samples, N_spokes, N_time in tqdm(train_loader, desc="Step 0 Training Evaluation"):
+            for batch in tqdm(train_loader, desc="Step 0 Training Evaluation"):
+                if include_sample_indices:
+                    batch = batch[1:]
+                measured_kspace, csmap, N_samples, N_spokes, N_time = batch[:5]
 
                 # prepare inputs
                 measured_kspace = to_torch_complex(measured_kspace).squeeze()
@@ -3247,6 +3844,11 @@ def main():
             running_adj_loss = 0.0
             running_rebin_loss = 0.0
             running_teacher_distill_loss = 0.0
+            running_supervised_distill_loss = 0.0
+            running_supervised_distill_freq_loss = 0.0
+            running_supervised_distill_batches = 0
+            running_supervised_distill_valid = 0
+            running_supervised_distill_total = 0
             epoch_eval_ssims = []
             epoch_eval_psnrs = []
             epoch_eval_mses = []
@@ -3591,6 +4193,33 @@ def main():
             teacher_distill_weight_history.append(teacher_distill_loss_weight)
             teacher_distill_weight_steps.append(epoch)
 
+            supervised_distill_loss_weight = 0.0
+            compute_supervised_distill_this_epoch = False
+            if use_supervised_distill:
+                if supervised_distill_stop_step is not None and epoch > int(supervised_distill_stop_step):
+                    supervised_distill_loss_weight = 0.0
+                else:
+                    supervised_distill_loss_weight = get_cosine_ei_weight(
+                        current_epoch=epoch,
+                        warmup_max_steps=supervised_distill_warmup,
+                        schedule_duration_steps=supervised_distill_duration_steps,
+                        target_weight=supervised_distill_target_w,
+                    )
+                compute_supervised_distill_this_epoch = supervised_distill_loss_weight > 0.0
+            supervised_distill_weight_history.append(supervised_distill_loss_weight)
+            supervised_distill_weight_steps.append(epoch)
+            if use_supervised_distill and supervised_curriculum_cfg.get("enable", False):
+                epoch_supervised_curriculum_alpha = _linear_ramp_alpha(
+                    int(epoch),
+                    int(supervised_curriculum_cfg["transition_start"]),
+                    int(supervised_curriculum_cfg["transition_duration_steps"]),
+                )
+            else:
+                epoch_supervised_curriculum_alpha = 0.0
+            if use_supervised_distill:
+                supervised_distill_curriculum_alpha_history.append(float(epoch_supervised_curriculum_alpha))
+                supervised_distill_curriculum_alpha_steps.append(int(epoch))
+
             # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
             t_img = None
             val_t_img = None
@@ -3600,14 +4229,29 @@ def main():
 
             for batch_idx, batch in enumerate(train_loader_tqdm):  # measured_kspace shape: (B, C, I, S, T)
                 if include_sample_indices:
-                    sample_indices, measured_kspace, csmap, N_samples, N_spokes, N_time = batch
+                    if use_supervised_distill:
+                        (
+                            sample_indices,
+                            measured_kspace,
+                            csmap,
+                            N_samples,
+                            N_spokes,
+                            N_time,
+                            grasp_target,
+                            grasp_target_valid,
+                        ) = batch
+                    else:
+                        sample_indices, measured_kspace, csmap, N_samples, N_spokes, N_time = batch
                     if sample_check_enabled and batch_idx < sample_check_batches:
                         if torch.is_tensor(sample_indices):
                             sample_indices = sample_indices.tolist()
                         for idx in sample_indices:
                             sample_check_ids.append(_format_sample_id(train_dataset, idx))
                 else:
-                    measured_kspace, csmap, N_samples, N_spokes, N_time = batch
+                    if use_supervised_distill:
+                        measured_kspace, csmap, N_samples, N_spokes, N_time, grasp_target, grasp_target_valid = batch
+                    else:
+                        measured_kspace, csmap, N_samples, N_spokes, N_time = batch
                 
                 start = time.time()
 
@@ -3649,6 +4293,9 @@ def main():
                 measured_kspace = measured_kspace.to(device, non_blocking=True)
 
                 csmap = csmap.to(device, non_blocking=True).to(measured_kspace.dtype)
+                if use_supervised_distill:
+                    grasp_target = grasp_target.to(device, non_blocking=True)
+                    grasp_target_valid = grasp_target_valid.to(device, non_blocking=True).bool()
 
                 # calculate acceleration factor
                 acceleration = torch.tensor([N_full / int(n_spokes_i)], dtype=torch.float, device=device)
@@ -3747,6 +4394,84 @@ def main():
                                 )
                             running_teacher_distill_loss += teacher_distill_loss.item()
 
+                        supervised_distill_loss = None
+                        if use_supervised_distill and compute_supervised_distill_this_epoch:
+                            valid_mask = grasp_target_valid.reshape(-1)
+                            running_supervised_distill_total += int(valid_mask.numel())
+                            valid_count = int(valid_mask.sum().item())
+                            running_supervised_distill_valid += valid_count
+                            if valid_count > 0:
+                                grasp_target_selected = grasp_target[valid_mask]
+                                pred_selected = x_recon[valid_mask]
+                                grasp_target_selected = grasp_target_selected.detach()
+
+                                def _mode_distill_loss(mode_name: str) -> torch.Tensor:
+                                    mode_norm = str(mode_name).strip().lower()
+                                    if mode_norm == "temporal_difference":
+                                        if len(supervised_distill_temporal_diff_lags) > 1:
+                                            return _compute_multi_lag_temporal_difference_loss(
+                                                pred_complex=pred_selected,
+                                                target_complex=grasp_target_selected,
+                                                metric_name=supervised_distill_metric_name,
+                                                baseline_frames=supervised_distill_baseline_frames,
+                                                percent_enhancement_eps=supervised_distill_percent_eps,
+                                                lags=supervised_distill_temporal_diff_lags,
+                                                lag_weights=supervised_distill_temporal_diff_lag_weights,
+                                                arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                            )
+                                        return _compute_temporal_loss_term(
+                                            pred_complex=pred_selected,
+                                            target_complex=grasp_target_selected,
+                                            metric_name=supervised_distill_metric_name,
+                                            temporal_mode=mode_norm,
+                                            baseline_frames=supervised_distill_baseline_frames,
+                                            percent_enhancement_eps=supervised_distill_percent_eps,
+                                            lag=int(supervised_distill_temporal_diff_lags[0]),
+                                            arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                        )
+                                    return _compute_temporal_loss_term(
+                                        pred_complex=pred_selected,
+                                        target_complex=grasp_target_selected,
+                                        metric_name=supervised_distill_metric_name,
+                                        temporal_mode=mode_norm,
+                                        baseline_frames=supervised_distill_baseline_frames,
+                                        percent_enhancement_eps=supervised_distill_percent_eps,
+                                        lag=1,
+                                        arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                    )
+
+                                if supervised_curriculum_cfg.get("enable", False):
+                                    early_mode = supervised_curriculum_cfg["early_mode"]
+                                    late_mode = supervised_curriculum_cfg["late_mode"]
+                                    early_loss = _mode_distill_loss(early_mode)
+                                    late_loss = _mode_distill_loss(late_mode)
+                                    alpha_t = float(epoch_supervised_curriculum_alpha)
+                                    supervised_distill_loss = (1.0 - alpha_t) * early_loss + alpha_t * late_loss
+                                else:
+                                    supervised_distill_loss = _mode_distill_loss(
+                                        supervised_distill_temporal_mode
+                                    )
+
+                                if supervised_freq_cfg.get("enable", False):
+                                    freq_loss = _compute_temporal_frequency_loss(
+                                        pred_complex=pred_selected,
+                                        target_complex=grasp_target_selected,
+                                        metric_name=supervised_freq_cfg["metric"],
+                                        temporal_mode=supervised_freq_cfg["temporal_mode"],
+                                        baseline_frames=int(supervised_freq_cfg["baseline_frames"]),
+                                        percent_enhancement_eps=float(supervised_freq_cfg["percent_enhancement_eps"]),
+                                        low_bin=int(supervised_freq_cfg["low_bin"]),
+                                        high_bin=supervised_freq_cfg["high_bin"],
+                                        log_magnitude=bool(supervised_freq_cfg["log_magnitude"]),
+                                        fft_window=supervised_freq_cfg["window"],
+                                        fft_norm=supervised_freq_cfg["fft_norm"],
+                                    )
+                                    supervised_distill_loss = supervised_distill_loss + float(supervised_freq_cfg["weight"]) * freq_loss
+                                    running_supervised_distill_freq_loss += float(freq_loss.item())
+
+                                running_supervised_distill_loss += supervised_distill_loss.item()
+                                running_supervised_distill_batches += 1
+
                         ei_loss = None
                         if use_ei_loss and compute_ei_this_epoch:
                             ei_loss, t_img = ei_loss_fn(
@@ -3825,6 +4550,8 @@ def main():
                             total_loss = total_loss + rebin_loss * rebin_loss_weight
                         if teacher_distill_loss is not None and teacher_distill_loss_weight > 0:
                             total_loss = total_loss + teacher_distill_loss * teacher_distill_loss_weight
+                        if supervised_distill_loss is not None and supervised_distill_loss_weight > 0:
+                            total_loss = total_loss + supervised_distill_loss * supervised_distill_loss_weight
 
                     if torch.isnan(total_loss):
                         print(
@@ -3980,6 +4707,32 @@ def main():
                     epoch_train_teacher_distill_loss * teacher_distill_loss_weight
                 )
 
+            if use_supervised_distill and compute_supervised_distill_this_epoch:
+                epoch_train_supervised_distill_loss = (
+                    running_supervised_distill_loss / max(1, running_supervised_distill_batches)
+                )
+                epoch_train_supervised_distill_freq_loss = (
+                    running_supervised_distill_freq_loss / max(1, running_supervised_distill_batches)
+                )
+            else:
+                epoch_train_supervised_distill_loss = 0.0
+                epoch_train_supervised_distill_freq_loss = 0.0
+            epoch_supervised_distill_valid_fraction = (
+                float(running_supervised_distill_valid) / max(1, int(running_supervised_distill_total))
+            )
+            if use_supervised_distill:
+                train_supervised_distill_losses.append(epoch_train_supervised_distill_loss)
+                weighted_train_supervised_distill_losses.append(
+                    epoch_train_supervised_distill_loss * supervised_distill_loss_weight
+                )
+                train_supervised_distill_freq_losses.append(epoch_train_supervised_distill_freq_loss)
+                weighted_train_supervised_distill_freq_losses.append(
+                    epoch_train_supervised_distill_freq_loss
+                    * float(supervised_freq_cfg.get("weight", 0.0))
+                    * supervised_distill_loss_weight
+                )
+                supervised_distill_valid_fraction_history.append(epoch_supervised_distill_valid_fraction)
+
 
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('Loss/Train_MC', epoch_train_mc_loss, epoch)
@@ -3995,6 +4748,36 @@ def main():
                     writer.add_scalar(
                         'Loss/Train_Weighted_Teacher_Distill',
                         epoch_train_teacher_distill_loss * teacher_distill_loss_weight,
+                        epoch,
+                    )
+                if use_supervised_distill:
+                    writer.add_scalar('Loss/Supervised_Distill_Weight', supervised_distill_loss_weight, epoch)
+                    writer.add_scalar('Loss/Train_Supervised_Distill', epoch_train_supervised_distill_loss, epoch)
+                    writer.add_scalar(
+                        'Loss/Train_Weighted_Supervised_Distill',
+                        epoch_train_supervised_distill_loss * supervised_distill_loss_weight,
+                        epoch,
+                    )
+                    writer.add_scalar(
+                        'Loss/Supervised_Distill_Valid_Fraction',
+                        epoch_supervised_distill_valid_fraction,
+                        epoch,
+                    )
+                    writer.add_scalar(
+                        'Loss/Train_Supervised_Distill_Freq',
+                        epoch_train_supervised_distill_freq_loss,
+                        epoch,
+                    )
+                    writer.add_scalar(
+                        'Loss/Train_Weighted_Supervised_Distill_Freq',
+                        epoch_train_supervised_distill_freq_loss
+                        * float(supervised_freq_cfg.get("weight", 0.0))
+                        * supervised_distill_loss_weight,
+                        epoch,
+                    )
+                    writer.add_scalar(
+                        'Loss/Supervised_Distill_Curriculum_Alpha',
+                        float(epoch_supervised_curriculum_alpha),
                         epoch,
                     )
 
@@ -5549,6 +6332,15 @@ def main():
                             "Step "
                             f"{epoch}: Training Teacher Distill Loss: {epoch_train_teacher_distill_loss:.6f} "
                             f"(weight={teacher_distill_loss_weight:.3g})"
+                        )
+                    if use_supervised_distill:
+                        print(
+                            "Step "
+                            f"{epoch}: Training Supervised Distill Loss: {epoch_train_supervised_distill_loss:.6f} "
+                            f"(weight={supervised_distill_loss_weight:.3g}, "
+                            f"valid_fraction={epoch_supervised_distill_valid_fraction:.3f}, "
+                            f"freq_term={epoch_train_supervised_distill_freq_loss:.6f}, "
+                            f"curriculum_alpha={float(epoch_supervised_curriculum_alpha):.3f})"
                         )
                     print(f"--- Evaluation Metrics: Step {epoch} ---")
                     print(f"Recon SSIM: {epoch_eval_ssim:.4f} ± {np.std(epoch_eval_ssims):.4f}")
