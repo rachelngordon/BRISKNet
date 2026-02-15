@@ -1049,3 +1049,13 @@ Current best BRISKNet in this sweep (`707694` at ep35): SSIM `0.872`, PSNR `39.2
 - Action for next resubmit:
   - exclude bad node: `--exclude k003`
   - keep same configs/job names and queue split.
+
+### 2026-02-15 Resubmission after ECC node failure
+- Resubmitted the same 6 LOO runs with `--exclude k003` to avoid repeated ECC failures.
+- New job IDs:
+  - `712878` `m36_supdist_loo1_full_2n4g` (general)
+  - `712879` `m36_supdist_loo2_nomultilag_2n4g` (general)
+  - `712880` `m36_supdist_loo3_noarrival_2n4g` (general)
+  - `712881` `m36_supdist_loo4_nocurriculum_2n4g` (general)
+  - `712882` `m36_supdist_loo5_nofreq_2n4g_burst` (burst)
+  - `712883` `m36_supdist_loo6_freqw010_2n4g_burst` (burst)
