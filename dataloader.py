@@ -889,14 +889,43 @@ class ZFSliceDataset(Dataset):
             patient_dir = os.path.join(self.supervised_distill_target_root, patient_id)
             if not os.path.isdir(patient_dir):
                 continue
+            packed_h5_path = os.path.join(
+                patient_dir,
+                f"grasp_recon_{expected_spf}spf_{expected_frames}frames.h5",
+            )
+            slice_to_path = {}
+            if os.path.isfile(packed_h5_path):
+                # Packed GRASP targets may be written concurrently by generation jobs.
+                # Disable HDF5 locking for read-only access to avoid startup lock contention.
+                with h5py.File(packed_h5_path, "r", locking=False) as f:
+                    if "recon" not in f or "valid" not in f:
+                        raise RuntimeError(
+                            f"Packed GRASP target missing required datasets at {packed_h5_path}."
+                        )
+                    recon_ds = f["recon"]
+                    valid_ds = f["valid"]
+                    if recon_ds.ndim != 4:
+                        raise RuntimeError(
+                            f"Packed GRASP recon dataset must be 4D, got shape {recon_ds.shape} at {packed_h5_path}."
+                        )
+                    if int(recon_ds.shape[-1]) != expected_frames:
+                        raise RuntimeError(
+                            f"Packed GRASP frame mismatch at {packed_h5_path}: expected {expected_frames}, got {recon_ds.shape[-1]}."
+                        )
+                    valid_mask = np.asarray(valid_ds[:], dtype=bool)
+                    if int(recon_ds.shape[0]) != int(valid_mask.shape[0]):
+                        raise RuntimeError(
+                            f"Packed GRASP recon/valid length mismatch at {packed_h5_path}: "
+                            f"{recon_ds.shape[0]} vs {valid_mask.shape[0]}."
+                        )
+                    valid_slices = np.where(valid_mask)[0].tolist()
+                    for slice_idx in valid_slices:
+                        slice_to_path[int(slice_idx)] = packed_h5_path
             pattern = os.path.join(
                 patient_dir,
                 f"grasp_recon_{expected_spf}spf_{expected_frames}frames_slice*.npy",
             )
             matches = sorted(glob.glob(pattern))
-            if not matches:
-                continue
-            slice_to_path = {}
             for target_path in matches:
                 match = re.search(r"slice(\d+)\.npy$", os.path.basename(target_path))
                 if match is None:
@@ -909,9 +938,7 @@ class ZFSliceDataset(Dataset):
                     invalid_target_files += 1
                     continue
                 if slice_idx in slice_to_path:
-                    raise RuntimeError(
-                        f"Duplicate GRASP target for patient={patient_id}, slice={slice_idx}."
-                    )
+                    continue
                 slice_to_path[slice_idx] = target_path
             if not slice_to_path:
                 dropped_exams_no_finite_targets += 1
@@ -1440,7 +1467,22 @@ class ZFSliceDataset(Dataset):
         if target_path is None:
             empty = torch.zeros((2, expected_h, expected_w, expected_t), dtype=torch.float32)
             return empty, torch.tensor(False)
-        grasp_complex = np.load(target_path)
+        if str(target_path).endswith(".h5"):
+            with h5py.File(target_path, "r", locking=False) as f:
+                if "recon" not in f or "valid" not in f:
+                    empty = torch.zeros((2, expected_h, expected_w, expected_t), dtype=torch.float32)
+                    return empty, torch.tensor(False)
+                valid_ds = f["valid"]
+                recon_ds = f["recon"]
+                if int(slice_idx) >= int(valid_ds.shape[0]) or int(slice_idx) >= int(recon_ds.shape[0]):
+                    empty = torch.zeros((2, expected_h, expected_w, expected_t), dtype=torch.float32)
+                    return empty, torch.tensor(False)
+                if not bool(valid_ds[int(slice_idx)]):
+                    empty = torch.zeros((2, expected_h, expected_w, expected_t), dtype=torch.float32)
+                    return empty, torch.tensor(False)
+                grasp_complex = np.asarray(recon_ds[int(slice_idx)])
+        else:
+            grasp_complex = np.load(target_path)
         if not np.isfinite(grasp_complex).all():
             empty = torch.zeros((2, expected_h, expected_w, expected_t), dtype=torch.float32)
             return empty, torch.tensor(False)

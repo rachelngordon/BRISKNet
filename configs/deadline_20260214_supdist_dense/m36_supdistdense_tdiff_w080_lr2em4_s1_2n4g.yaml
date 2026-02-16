@@ -1,0 +1,203 @@
+data:
+  coils: 16
+  dataset_key: kspace
+  eval_spokes: 36
+  eval_timeframes: 8
+  flip_kspace: false
+  fpg: 36
+  height: 320
+  root_dir: /net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace
+  grasp_target_root: /net/scratch2/rachelgordon/zf_data_192_slices
+  samples: 640
+  slices: 192
+  slices_to_eval: 1
+  spf_aug: false
+  split_file: /home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json
+  timeframes: 8
+  total_spokes: 288
+  train_spokes_per_frame: 36
+  traj_method: get_traj
+  val_split_ratio: 0.2
+  weight_accelerations: false
+  width: 320
+  eval_every_steps: 20
+dataloader:
+  batch_size: 1
+  max_subjects: 300
+  num_random_slices: null
+  num_workers: 2
+  shuffle: true
+  slice_idx: 41
+  slice_range_end: None
+  slice_range_start: None
+  slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
+  slice_sampling_cache_workers: 4
+  slice_sampling_filter_quantile: 0.3
+  slice_sampling_mode: uniform
+  slice_sampling_no_replacement: false
+  slice_sampling_uniform_fraction: 1.0
+  shuffle_buffer_enable: true
+  shuffle_buffer_active_exams: 60
+  shuffle_buffer_slices_per_exam: 1
+  shuffle_buffer_replace_fraction: 0.1
+  supervised_distill_force_target_slice: true
+  supervised_distill_require_any_target: false
+debugging:
+  calc_step_0: false
+  calc_step_0_val: false
+  distributed_sample_check: false
+  enable_gradient_monitoring: false
+  monitoring_interval: 100
+  rebin_diagnostic:
+    baseline_frames: 4
+    enable: false
+    factor: 4
+    mask_fraction: 0.01
+    out_subdir: rebin_diagnostics
+    search_batches: 8
+    start_time_index: middle
+    time_index_mode: none
+evaluation:
+  chunk_overlap: 4
+  chunk_size: 8
+  deterministic_val_ei: true
+  deterministic_val_ei_seed: 1234
+  distributed_eval: true
+  num_samples: 15
+  rescale: false
+  simulated_dataset_path: /net/scratch2/rachelgordon/dro_dataset_frontpad
+  val_noise_level: 0.05
+experiment:
+  cluster: DSI
+  output_dir: /net/projects2/annawoodard/experiments
+  init_checkpoint: /net/projects2/annawoodard/experiments/m36_supdist_abs_w020_noei_2n4g/m36_supdist_abs_w020_noei_2n4g_best_model.pth
+model:
+  name: MambaTemporal
+  norm: both
+  encode_acceleration: false
+  encode_time_index: true
+  losses:
+    use_ei_loss: false
+    mc_loss:
+      metric: MIXED
+      weight: 1
+      mae_weight: 1.0
+      mse_weight: 0.05
+    ei_loss:
+      metric: MSE
+      no_grad: false
+      spatial_transform: diffeo
+      temporal_transform: arrival_shift_enh_scale
+      warmup: 35
+      duration_steps: 80
+      weight: 1500
+      rotate_range: 0
+      warp_ratio_min: 0.6
+      warp_ratio_max: 0.95
+      subsample_ratio_min: 0.7
+      subsample_ratio_max: 0.95
+      arrival_shift_max_shift: 1
+      arrival_shift_percentile: 0.95
+      arrival_shift_baseline_k: 2.0
+      arrival_method: threshold
+      arrival_fraction: 0.15
+      pre_contrast_baseline: m_seconds
+      baseline_seconds: 20.0
+      total_seconds: 150.0
+      enh_scale_start: arrival
+      enh_scale_min: 0.85
+      enh_scale_max: 1.15
+    rebin_loss:
+      enable: false
+      metric: MAE
+      weight: 0
+      warmup: 90
+      duration_steps: 40
+      factor: 4
+      offset_mode: random
+      teacher_branch: lo
+      teacher_stopgrad: true
+      temporal_mode: temporal_difference
+      time_index_mode: none
+      baseline_frames: 4
+      dynamic_mask:
+        enable: true
+        fraction: 0.01
+        stop_grad: true
+        smooth_kernel: 5
+        clip_min: 0.0
+        clip_max: 1.0
+        warmup_max_steps: 4
+    supervised_distill:
+      enable: true
+      metric: MAE
+      temporal_mode: temporal_difference
+      baseline_frames: 4
+      percent_enhancement_eps: 0.0001
+      weight: 0.8
+      warmup: 0
+      duration_steps: 80
+      stop_step: null
+  mamba:
+    variant: temporal
+    in_chans: 2
+    patch_size: 4
+    hidden_dim: 128
+    num_blocks: 6
+    block_depth: 2
+    d_state: 32
+    temporal_d_conv: 4
+    temporal_expand: 2
+    temporal_bidirectional: true
+    spatial_mixer_kernel_size: 3
+    use_spatial_mixer: true
+    token_chunk_size: full
+    use_checkpoint: false
+    checkpoint_use_reentrant: false
+    use_fast_path: true
+    use_relative_temporal_pos: true
+    relative_temporal_pos_mode: linear_quadratic
+    relative_temporal_pos_scale: 1.0
+    dc_interval: 1
+    learnable_dc_step: true
+    dc_step: 1.0
+    dc_step_min: 0.01
+    dc_step_max: 2.0
+    predict_residual: true
+    residual_scale: 1.0
+    drop_rate: 0.0
+    attn_drop_rate: 0.0
+    drop_path_rate: 0.0
+    patch_norm: true
+  optimizer:
+    name: Adam
+    lr: 0.0002
+    b1: 0.9
+    b2: 0.999
+    eps: 1.0e-09
+    weight_decay: 0.0
+training:
+  device: cuda
+  multigpu: true
+  ddp_find_unused_parameters: false
+  save_every_steps: 20
+  plot_every_steps: 80
+  edge_time_index_sampling: false
+  lr_schedule:
+    warmup_mode: cosine
+    warmup_max_steps: 5
+    min_lr_factor: 0.2
+  amp:
+    enabled: true
+    dtype: bf16
+    use_grad_scaler: false
+  curriculum_learning:
+    enabled: false
+    phases:
+    - name: 'Phase 1: 36 SPF Sweep'
+      start_step: 1
+      train_spokes_range:
+      - 36
+      eval_spokes_per_frame: 36
+      eval_num_frames: 8
+  max_steps: 360

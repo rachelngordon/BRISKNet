@@ -18,33 +18,107 @@ import seaborn as sns
 
 
 EVAL_PANEL_LAYOUT = [
-    ("eval_ssims", "DRO SSIM", "SSIM", "avg_grasp_ssim", (0, 0)),
-    ("eval_psnrs", "DRO PSNR", "PSNR", "avg_grasp_psnr", (0, 1)),
-    ("eval_mses", "DRO Image MSE", "MSE", "avg_grasp_mse", (0, 2)),
-    ("eval_raw_dc_maes", "Non-DRO k-space MAE", "MAE", "avg_grasp_raw_dc_mae", (0, 3)),
-    ("eval_raw_dc_mses", "Non-DRO k-space MSE", "MSE", "avg_grasp_raw_dc_mse", (0, 4)),
-    ("eval_lpipses", "DRO LPIPS", "LPIPS", "avg_grasp_lpips", (1, 0)),
-    ("eval_curve_corrs", "DRO Curve Correlation", "Pearson Correlation Coefficient", "avg_grasp_curve_corr", (1, 1)),
-    ("eval_dl_dc_mae_bestfits", "DRO k-space MAE (best-fit gain)", "MAE", "avg_grasp_dc_mae_bestfit", (1, 2)),
-    ("eval_raw_ssdu_nmses", "Non-DRO SSDU NMSE", "NMSE", "avg_grasp_raw_ssdu_nmse", (1, 3)),
-    ("eval_raw_dc_psnrs", "Non-DRO k-space Relative PSNR", "PSNR", "avg_grasp_raw_dc_psnr", (1, 4)),
-    ("eval_raw_dyn_dce_maes", "Non-DRO Dynamic DCE MAE (wtd top%)", "MAE", "avg_grasp_raw_dyn_dce_mae", (2, 0)),
-    ("eval_raw_dc_rel_l2s", "Non-DRO k-space Relative L2", "||Ex-y||2 / ||y||2", "avg_grasp_raw_dc_rel_l2", (2, 1)),
-    ("eval_raw_dc_rel_l2_lows", "Non-DRO k-space Relative L2 (Low)", "Relative L2", "avg_grasp_raw_dc_rel_l2_low", (2, 2)),
-    ("eval_raw_dc_rel_l2_mids", "Non-DRO k-space Relative L2 (Mid)", "Relative L2", "avg_grasp_raw_dc_rel_l2_mid", (2, 3)),
-    ("eval_raw_dc_rel_l2_highs", "Non-DRO k-space Relative L2 (High)", "Relative L2", "avg_grasp_raw_dc_rel_l2_high", (2, 4)),
+    ("eval_ssims", "Student vs DRO SSIM", "SSIM", "avg_grasp_ssim", (0, 0), "eval"),
+    ("eval_psnrs", "Student vs DRO PSNR", "PSNR", "avg_grasp_psnr", (0, 1), "eval"),
+    ("eval_mses", "Student vs DRO Image MSE", "MSE", "avg_grasp_mse", (0, 2), "eval"),
+    ("eval_lpipses", "Student vs DRO LPIPS", "LPIPS", "avg_grasp_lpips", (0, 3), "eval"),
+    (
+        "eval_curve_corrs",
+        "Student vs DRO Curve Correlation",
+        "Pearson Correlation Coefficient",
+        "avg_grasp_curve_corr",
+        (0, 4),
+        "eval",
+    ),
+    (
+        "eval_dc_maes",
+        "Student vs DRO k-space MAE (sim)",
+        "MAE",
+        "avg_grasp_dc_mae",
+        (1, 0),
+        "eval",
+    ),
+    (
+        "eval_dl_dc_mae_bestfits",
+        "Student vs DRO k-space MAE (best-fit gain)",
+        "MAE",
+        "avg_grasp_dc_mae_bestfit",
+        (1, 1),
+        "eval",
+    ),
+    ("eval_raw_dc_maes", "Non-DRO k-space MAE", "MAE", "avg_grasp_raw_dc_mae", (1, 2), "eval"),
+    ("eval_raw_dc_mses", "Non-DRO k-space MSE", "MSE", "avg_grasp_raw_dc_mse", (1, 3), "eval"),
+    ("eval_raw_dc_psnrs", "Non-DRO k-space Relative PSNR", "PSNR", "avg_grasp_raw_dc_psnr", (1, 4), "eval"),
+    (
+        "eval_raw_dc_rel_l2s",
+        "Non-DRO k-space Relative L2",
+        "||Ex-y||2 / ||y||2",
+        "avg_grasp_raw_dc_rel_l2",
+        (2, 0),
+        "eval",
+    ),
+    (
+        "eval_raw_dc_rel_l2_lows",
+        "Non-DRO k-space Relative L2 (Low)",
+        "Relative L2",
+        "avg_grasp_raw_dc_rel_l2_low",
+        (2, 1),
+        "eval",
+    ),
+    (
+        "eval_raw_dc_rel_l2_mids",
+        "Non-DRO k-space Relative L2 (Mid)",
+        "Relative L2",
+        "avg_grasp_raw_dc_rel_l2_mid",
+        (2, 2),
+        "eval",
+    ),
+    (
+        "eval_raw_dc_rel_l2_highs",
+        "Non-DRO k-space Relative L2 (High)",
+        "Relative L2",
+        "avg_grasp_raw_dc_rel_l2_high",
+        (2, 3),
+        "eval",
+    ),
+    (
+        "eval_raw_dyn_dce_maes",
+        "Non-DRO Dynamic DCE MAE (wtd top%)",
+        "MAE",
+        "avg_grasp_raw_dyn_dce_mae",
+        (2, 4),
+        "eval",
+    ),
+    ("eval_student_vs_grasp_ssims", "Student vs GRASP SSIM", "SSIM", None, (3, 0), "eval"),
+    ("eval_student_vs_grasp_psnrs", "Student vs GRASP PSNR", "PSNR", None, (3, 1), "eval"),
+    ("eval_student_vs_grasp_mses", "Student vs GRASP Image MSE", "MSE", None, (3, 2), "eval"),
+    ("eval_student_vs_grasp_lpipses", "Student vs GRASP LPIPS", "LPIPS", None, (3, 3), "eval"),
+    ("eval_raw_ssdu_nmses", "Non-DRO SSDU NMSE", "NMSE", "avg_grasp_raw_ssdu_nmse", (3, 4), "eval"),
+    ("lr_history", "Learning Rate", "LR", None, (4, 0), "train"),
 ]
 
-TEMPORAL_METRICS = [
-    ("eval_rho_fulls", "ρ_full", "Pearson Correlation"),
-    ("eval_curve_maes", "MAE_full", "MAE"),
-    ("eval_early_corrs", "ρ_early", "Pearson Correlation"),
-    ("eval_early_maes", "MAE_early", "MAE"),
-    ("eval_ttae_secs", "t_arr Error", "Seconds"),
-    ("eval_washin_maes", "MAE_wash-in", "MAE"),
-    ("eval_iauc10_errs", "iAUC_10 Error", "Error"),
-    ("eval_peak_errs", "MAE_peak", "MAE"),
-    ("eval_ttpeak_err_secs", "t_peak Error", "Seconds"),
+TEMPORAL_METRICS_STUDENT_VS_DRO = [
+    ("eval_rho_fulls", "Student vs DRO ρ_full", "Pearson Correlation"),
+    ("eval_curve_maes", "Student vs DRO MAE_full", "MAE"),
+    ("eval_early_corrs", "Student vs DRO ρ_early", "Pearson Correlation"),
+    ("eval_early_maes", "Student vs DRO MAE_early", "MAE"),
+    ("eval_ttae_secs", "Student vs DRO t_arr Error", "Seconds"),
+    ("eval_washin_maes", "Student vs DRO MAE_wash-in", "MAE"),
+    ("eval_iauc10_errs", "Student vs DRO iAUC_10 Error", "Error"),
+    ("eval_peak_errs", "Student vs DRO MAE_peak", "MAE"),
+    ("eval_ttpeak_err_secs", "Student vs DRO t_peak Error", "Seconds"),
+]
+
+TEMPORAL_METRICS_STUDENT_VS_GRASP = [
+    ("eval_student_vs_grasp_rho_fulls", "Student vs GRASP ρ_full", "Pearson Correlation"),
+    ("eval_student_vs_grasp_curve_maes", "Student vs GRASP MAE_full", "MAE"),
+    ("eval_student_vs_grasp_early_corrs", "Student vs GRASP ρ_early", "Pearson Correlation"),
+    ("eval_student_vs_grasp_early_maes", "Student vs GRASP MAE_early", "MAE"),
+    ("eval_student_vs_grasp_ttae_secs", "Student vs GRASP t_arr Error", "Seconds"),
+    ("eval_student_vs_grasp_washin_maes", "Student vs GRASP MAE_wash-in", "MAE"),
+    ("eval_student_vs_grasp_iauc10_errs", "Student vs GRASP iAUC_10 Error", "Error"),
+    ("eval_student_vs_grasp_peak_errs", "Student vs GRASP MAE_peak", "MAE"),
+    ("eval_student_vs_grasp_ttpeak_err_secs", "Student vs GRASP t_peak Error", "Seconds"),
 ]
 
 TEMPORAL_GRASP_BASELINE_KEYS = {
@@ -61,12 +135,34 @@ TEMPORAL_GRASP_BASELINE_KEYS = {
 
 TRAIN_METRICS = [
     ("train_mc_losses", "Train MC Loss", "Loss"),
+    ("train_ssdu_losses", "Train SSDU Loss", "Loss"),
+    ("train_adj_losses", "Train Adj Loss", "Loss"),
     ("train_ei_losses", "Train EI Loss", "Loss"),
+    ("weighted_train_mc_losses", "Train Weighted MC Loss", "Loss"),
+    ("weighted_train_ssdu_losses", "Train Weighted SSDU Loss", "Loss"),
     ("weighted_train_ei_losses", "Train Weighted EI Loss", "Loss"),
+    ("weighted_train_adj_losses", "Train Weighted Adj Loss", "Loss"),
     ("train_rebin_losses", "Train Rebin Loss", "Loss"),
+    ("weighted_train_rebin_losses", "Train Weighted Rebin Loss", "Loss"),
+    ("train_teacher_distill_losses", "Train Teacher Distill Loss", "Loss"),
+    ("weighted_train_teacher_distill_losses", "Train Weighted Teacher Distill Loss", "Loss"),
+    ("train_supervised_distill_losses", "Train Supervised Distill Loss", "Loss"),
+    ("weighted_train_supervised_distill_losses", "Train Weighted Supervised Distill Loss", "Loss"),
+    ("train_supervised_distill_image_losses", "Train Distill Image Loss", "Loss"),
+    ("weighted_train_supervised_distill_image_losses", "Train Weighted Distill Image Loss", "Loss"),
+    ("train_supervised_distill_temporal_losses", "Train Distill Temporal Loss", "Loss"),
+    ("weighted_train_supervised_distill_temporal_losses", "Train Weighted Distill Temporal Loss", "Loss"),
+    ("train_supervised_distill_freq_losses", "Train Distill Freq Loss", "Loss"),
+    ("weighted_train_supervised_distill_freq_losses", "Train Weighted Distill Freq Loss", "Loss"),
+    ("supervised_multiobj_temporal_scale_history", "Distill MultiObj Temporal Scale", "Scale"),
+    ("supervised_distill_valid_fraction_history", "Distill Valid Fraction", "Fraction"),
+    ("supervised_distill_curriculum_alpha_history", "Distill Curriculum Alpha", "Alpha"),
+    ("teacher_distill_weight_history", "Teacher Distill Weight", "Weight"),
+    ("supervised_distill_weight_history", "Supervised Distill Weight", "Weight"),
+    ("ssdu_weight_history", "SSDU Weight", "Weight"),
     ("val_mc_losses", "Val MC Loss", "Loss"),
-    ("val_ei_losses", "Val EI Loss", "Loss"),
     ("val_adj_losses", "Val Adj Loss", "Loss"),
+    ("val_ei_losses", "Val EI Loss", "Loss"),
     ("lr_history", "Learning Rate", "LR"),
 ]
 
@@ -76,6 +172,20 @@ GRASP_LINE_STYLE = {
     "alpha": 0.8,
     "linewidth": 1.8,
 }
+
+GRASP_DRO_BASELINE_LABEL = "GRASP vs DRO baseline"
+GRASP_NONDRO_BASELINE_LABEL = "GRASP non-DRO reference"
+
+
+def _is_noisy_train_loss_key(metric_key: str) -> bool:
+    """Per-step losses are noisy; histories/val curves are not."""
+    if metric_key.startswith("val_"):
+        return False
+    return metric_key.startswith("train_") or metric_key.startswith("weighted_train_")
+
+
+def _all_temporal_metric_defs() -> List[Tuple[str, str, str]]:
+    return TEMPORAL_METRICS_STUDENT_VS_DRO + TEMPORAL_METRICS_STUDENT_VS_GRASP
 
 
 def _as_list(value) -> List[float]:
@@ -388,6 +498,31 @@ def _resolve_train_axis(
         if len(lr_steps) >= n and n > 0:
             return [int(round(float(v))) for v in lr_steps[:n]]
         return _build_train_step_axis(n)
+    if key == "supervised_distill_weight_history":
+        sd_steps = _as_list(curves.get("supervised_distill_weight_steps", []))
+        if len(sd_steps) >= n and n > 0:
+            return [int(round(float(v))) for v in sd_steps[:n]]
+        return _build_train_step_axis(n)
+    if key == "teacher_distill_weight_history":
+        td_steps = _as_list(curves.get("teacher_distill_weight_steps", []))
+        if len(td_steps) >= n and n > 0:
+            return [int(round(float(v))) for v in td_steps[:n]]
+        return _build_train_step_axis(n)
+    if key == "ssdu_weight_history":
+        ssdu_steps = _as_list(curves.get("ssdu_weight_steps", []))
+        if len(ssdu_steps) >= n and n > 0:
+            return [int(round(float(v))) for v in ssdu_steps[:n]]
+        return _build_train_step_axis(n)
+    if key == "supervised_distill_curriculum_alpha_history":
+        alpha_steps = _as_list(curves.get("supervised_distill_curriculum_alpha_steps", []))
+        if len(alpha_steps) >= n and n > 0:
+            return [int(round(float(v))) for v in alpha_steps[:n]]
+        return _build_train_step_axis(n)
+    if key == "supervised_multiobj_temporal_scale_history":
+        scale_steps = _as_list(curves.get("supervised_multiobj_temporal_scale_steps", []))
+        if len(scale_steps) >= n and n > 0:
+            return [int(round(float(v))) for v in scale_steps[:n]]
+        return _build_train_step_axis(n)
     if key.startswith("val_"):
         return _resolve_eval_axis(curves, eval_every_steps, n)
     return _build_train_step_axis(n)
@@ -427,6 +562,68 @@ def _resolve_metric_series(
         return _resolve_train_axis(curves, key, eval_every_steps, n), values
 
     raise ValueError(f"Unsupported metric kind: {kind}")
+
+
+def _finite_xy(x: List[int], y: List[float]) -> Tuple[List[int], List[float]]:
+    x_out: List[int] = []
+    y_out: List[float] = []
+    for x_i, y_i in zip(x, y):
+        try:
+            y_f = float(y_i)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(y_f):
+            continue
+        x_out.append(int(x_i))
+        y_out.append(y_f)
+    return x_out, y_out
+
+
+def _ema(values: List[float], window: int) -> List[float]:
+    if window <= 1 or len(values) <= 1:
+        return list(values)
+    alpha = 2.0 / (float(window) + 1.0)
+    ema_vals: List[float] = []
+    prev = float(values[0])
+    ema_vals.append(prev)
+    for v in values[1:]:
+        prev = alpha * float(v) + (1.0 - alpha) * prev
+        ema_vals.append(prev)
+    return ema_vals
+
+
+def _window_mean_series(
+    x: List[int],
+    values: List[float],
+    window: int,
+) -> Tuple[List[int], List[float]]:
+    if window <= 1 or len(values) == 0:
+        return list(x), list(values)
+    x_out: List[int] = []
+    y_out: List[float] = []
+    n = min(len(x), len(values))
+    idx = 0
+    while idx < n:
+        end = min(idx + window, n)
+        chunk = values[idx:end]
+        if chunk:
+            x_out.append(int(x[end - 1]))
+            y_out.append(sum(chunk) / float(len(chunk)))
+        idx = end
+    return x_out, y_out
+
+
+def _all_series_effectively_zero(
+    series_list: List[List[float]],
+    zero_tol: float = 1e-15,
+) -> bool:
+    has_any = False
+    for values in series_list:
+        for v in values:
+            has_any = True
+            if abs(float(v)) > zero_tol:
+                return False
+    return has_any
 
 
 def _resolve_grasp_baselines(
@@ -498,7 +695,7 @@ def _add_legend_entry(
 
 def _experiment_has_any_data(exp: Dict) -> bool:
     metric_keys = [key for key, *_ in EVAL_PANEL_LAYOUT]
-    metric_keys.extend([key for key, _, _ in TEMPORAL_METRICS])
+    metric_keys.extend([key for key, _, _ in _all_temporal_metric_defs()])
     metric_keys.extend([key for key, _, _ in TRAIN_METRICS])
     for key in metric_keys:
         if _has_finite(exp["curves"].get(key, [])):
@@ -515,8 +712,8 @@ def _plot_six_panel(
     dpi: int,
 ) -> bool:
     sns.set_style("whitegrid")
-    nrows = max(pos[0] for *_, pos in EVAL_PANEL_LAYOUT) + 1
-    ncols = max(pos[1] for *_, pos in EVAL_PANEL_LAYOUT) + 1
+    nrows = max(position[0] for _, _, _, _, position, _ in EVAL_PANEL_LAYOUT) + 1
+    ncols = max(position[1] for _, _, _, _, position, _ in EVAL_PANEL_LAYOUT) + 1
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6 + 10, nrows * 5))
     if nrows == 1 and ncols == 1:
         axes = [[axes]]
@@ -524,7 +721,7 @@ def _plot_six_panel(
         axes = [axes]
     elif ncols == 1:
         axes = [[ax] for ax in axes]
-    used_positions = {pos for *_, pos in EVAL_PANEL_LAYOUT}
+    used_positions = {position for _, _, _, _, position, _ in EVAL_PANEL_LAYOUT}
     for r in range(nrows):
         for c in range(ncols):
             if (r, c) not in used_positions:
@@ -538,11 +735,17 @@ def _plot_six_panel(
 
     plotted_panels = 0
     legend_entries: Dict[str, object] = {}
-    for key, panel_title, ylabel, baseline_key, (row, col) in EVAL_PANEL_LAYOUT:
+
+    def _baseline_label_for_eval_key(metric_key: str) -> str:
+        if metric_key.startswith("eval_raw_"):
+            return GRASP_NONDRO_BASELINE_LABEL
+        return GRASP_DRO_BASELINE_LABEL
+
+    for key, panel_title, ylabel, baseline_key, (row, col), metric_kind in EVAL_PANEL_LAYOUT:
         ax = axes[row][col]
         plotted = False
         for color, exp in zip(palette, experiments):
-            x, values = _resolve_metric_series(exp, key=key, kind="eval")
+            x, values = _resolve_metric_series(exp, key=key, kind=metric_kind)
             if not _has_finite(values):
                 continue
             n = min(len(x), len(values))
@@ -568,11 +771,12 @@ def _plot_six_panel(
         if not plotted:
             ax.axis("off")
             continue
-        if show_baseline:
+        if show_baseline and baseline_key:
             baseline = grasp_baselines.get(baseline_key)
             if _is_finite(baseline):
-                baseline_line = ax.axhline(y=baseline, label="GRASP", **GRASP_LINE_STYLE)
-                _add_legend_entry(legend_entries, "GRASP", baseline_line)
+                baseline_label = _baseline_label_for_eval_key(key)
+                baseline_line = ax.axhline(y=baseline, label=baseline_label, **GRASP_LINE_STYLE)
+                _add_legend_entry(legend_entries, baseline_label, baseline_line)
         plotted_panels += 1
         ax.set_title(panel_title)
         ax.set_xlabel("Step")
@@ -601,9 +805,12 @@ def _plot_temporal(
     grasp_baselines: Dict[str, Optional[float]],
     title: str,
     dpi: int,
+    metric_defs: List[Tuple[str, str, str]],
+    baseline_key_map: Optional[Dict[str, str]] = None,
+    baseline_label: str = GRASP_DRO_BASELINE_LABEL,
 ) -> bool:
     sns.set_style("whitegrid")
-    n_metrics = len(TEMPORAL_METRICS)
+    n_metrics = len(metric_defs)
     ncols = 3
     nrows = int(math.ceil(n_metrics / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6 + 8, nrows * 4.8))
@@ -617,7 +824,8 @@ def _plot_temporal(
 
     plotted_panels = 0
     legend_entries: Dict[str, object] = {}
-    for idx, (key, panel_title, ylabel) in enumerate(TEMPORAL_METRICS):
+    baseline_key_map = baseline_key_map or {}
+    for idx, (key, panel_title, ylabel) in enumerate(metric_defs):
         ax = axes[idx]
         plotted = False
         for color, exp in zip(palette, experiments):
@@ -648,12 +856,12 @@ def _plot_temporal(
             ax.axis("off")
             continue
         if show_baseline:
-            baseline_key = TEMPORAL_GRASP_BASELINE_KEYS.get(key)
+            baseline_key = baseline_key_map.get(key)
             if baseline_key:
                 baseline = grasp_baselines.get(baseline_key)
                 if _is_finite(baseline):
-                    baseline_line = ax.axhline(y=baseline, label="GRASP", **GRASP_LINE_STYLE)
-                    _add_legend_entry(legend_entries, "GRASP", baseline_line)
+                    baseline_line = ax.axhline(y=baseline, label=baseline_label, **GRASP_LINE_STYLE)
+                    _add_legend_entry(legend_entries, baseline_label, baseline_line)
         plotted_panels += 1
         ax.set_title(panel_title)
         ax.set_xlabel("Step")
@@ -682,22 +890,19 @@ def _plot_training(
     experiments: List[Dict],
     title: str,
     dpi: int,
+    train_ema_window: int,
+    add_eval_window_average: bool,
+    hide_inactive_zero_panels: bool,
 ) -> bool:
     sns.set_style("whitegrid")
-    fig, axes = plt.subplots(2, 4, figsize=(32, 10))
-    fig.suptitle(title, fontsize=20)
-
     if len(experiments) <= 10:
         palette = sns.color_palette("tab10", n_colors=len(experiments))
     else:
         palette = sns.color_palette("husl", n_colors=len(experiments))
 
-    plotted_panels = 0
-    legend_entries: Dict[str, object] = {}
-    for idx, (key, panel_title, ylabel) in enumerate(TRAIN_METRICS):
-        row, col = divmod(idx, 4)
-        ax = axes[row][col]
-        plotted = False
+    active_panels = []
+    for key, panel_title, ylabel in TRAIN_METRICS:
+        panel_data = []
         for color, exp in zip(palette, experiments):
             epochs, values = _resolve_metric_series(exp, key=key, kind="train")
             if not _has_finite(values):
@@ -707,6 +912,49 @@ def _plot_training(
                 continue
             epochs = epochs[:n]
             values = values[:n]
+            x_finite, y_finite = _finite_xy(epochs, values)
+            if len(y_finite) == 0:
+                continue
+            panel_data.append(
+                {
+                    "exp": exp,
+                    "color": color,
+                    "x": x_finite,
+                    "y": y_finite,
+                }
+            )
+
+        if len(panel_data) == 0:
+            continue
+
+        if hide_inactive_zero_panels:
+            if _all_series_effectively_zero([item["y"] for item in panel_data]):
+                continue
+
+        active_panels.append((key, panel_title, ylabel, panel_data))
+
+    if len(active_panels) == 0:
+        return False
+
+    n_metrics = len(active_panels)
+    ncols = min(4, n_metrics)
+    nrows = int(math.ceil(n_metrics / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 8, nrows * 4.8))
+    axes = list(axes.flat) if hasattr(axes, "flat") else [axes]
+    fig.suptitle(title, fontsize=20)
+
+    plotted_panels = 0
+    legend_entries: Dict[str, object] = {}
+    style_note_used = False
+    for idx, (key, panel_title, ylabel, panel_data) in enumerate(active_panels):
+        ax = axes[idx]
+        plotted = False
+        for item in panel_data:
+            exp = item["exp"]
+            color = item["color"]
+            epochs = item["x"]
+            values = item["y"]
+
             if len(values) == 1:
                 line = ax.plot(
                     epochs,
@@ -717,18 +965,58 @@ def _plot_training(
                     marker="o",
                     markersize=5,
                 )[0]
+                _add_legend_entry(legend_entries, exp["label"], line)
+                plotted = True
+                continue
+
+            draw_smoothed = _is_noisy_train_loss_key(key) and train_ema_window > 1
+            if draw_smoothed:
+                style_note_used = True
+                ax.plot(
+                    epochs,
+                    values,
+                    color=color,
+                    linewidth=0.9,
+                    alpha=0.22,
+                )
+                ema_values = _ema(values, train_ema_window)
+                line = ax.plot(
+                    epochs,
+                    ema_values,
+                    label=exp["label"],
+                    color=color,
+                    linewidth=1.9,
+                )[0]
             else:
                 line = ax.plot(epochs, values, label=exp["label"], color=color, linewidth=1.8)[0]
             _add_legend_entry(legend_entries, exp["label"], line)
+
+            if add_eval_window_average and _is_noisy_train_loss_key(key):
+                window = max(2, int(exp.get("eval_every_steps", 1)))
+                x_avg, y_avg = _window_mean_series(epochs, values, window=window)
+                if len(y_avg) >= 2:
+                    style_note_used = True
+                    ax.plot(
+                        x_avg,
+                        y_avg,
+                        color=color,
+                        linestyle="--",
+                        linewidth=1.2,
+                        alpha=0.85,
+                    )
             plotted = True
 
         if not plotted:
             ax.axis("off")
             continue
+
         plotted_panels += 1
         ax.set_title(panel_title)
         ax.set_xlabel("Step")
         ax.set_ylabel(ylabel)
+
+    for idx in range(n_metrics, len(axes)):
+        axes[idx].axis("off")
 
     if plotted_panels == 0:
         plt.close(fig)
@@ -741,6 +1029,16 @@ def _plot_training(
         legend_ax.axis("off")
         legend_ax.legend(handles, labels, loc="upper left", frameon=False, fontsize=9)
 
+    if style_note_used:
+        fig.text(
+            0.05,
+            0.02,
+            f"Noisy train losses: faint raw step, solid EMA({train_ema_window}), dashed mean over eval window.",
+            ha="left",
+            va="bottom",
+            fontsize=10,
+        )
+
     fig.subplots_adjust(left=0.05, right=0.67, bottom=0.10, top=0.88, wspace=0.30, hspace=0.35)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -749,11 +1047,24 @@ def _plot_training(
 
 def _metric_table_specs() -> List[Tuple[str, str, str]]:
     specs: List[Tuple[str, str, str]] = []
-    for key, title, _, _, _ in EVAL_PANEL_LAYOUT:
-        specs.append(("eval", key, title))
-    for key, title, _ in TEMPORAL_METRICS:
+    seen = set()
+    for key, title, _, _, _, kind in EVAL_PANEL_LAYOUT:
+        ident = (kind, key)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        specs.append((kind, key, title))
+    for key, title, _ in _all_temporal_metric_defs():
+        ident = ("temporal", key)
+        if ident in seen:
+            continue
+        seen.add(ident)
         specs.append(("temporal", key, title))
     for key, title, _ in TRAIN_METRICS:
+        ident = ("train", key)
+        if ident in seen:
+            continue
+        seen.add(ident)
         specs.append(("train", key, title))
     return specs
 
@@ -776,11 +1087,19 @@ def _metric_sort_goal(metric_key: str) -> str:
     maximize_keys = {
         "eval_ssims",
         "eval_psnrs",
+        "eval_student_vs_grasp_ssims",
+        "eval_student_vs_grasp_psnrs",
         "eval_raw_dc_psnrs",
         "eval_curve_corrs",
         "eval_rho_fulls",
         "eval_early_corrs",
+        "eval_student_vs_grasp_rho_fulls",
+        "eval_student_vs_grasp_early_corrs",
         "lr_history",
+        "supervised_distill_valid_fraction_history",
+        "supervised_distill_weight_history",
+        "teacher_distill_weight_history",
+        "supervised_distill_curriculum_alpha_history",
     }
     return "max" if metric_key in maximize_keys else "min"
 
@@ -931,6 +1250,27 @@ def main() -> None:
     ap.add_argument("--no-temporal", action="store_true", help="Skip temporal metrics plot.")
     ap.add_argument("--no-training", action="store_true", help="Skip training metrics plot.")
     ap.add_argument(
+        "--train-ema-window",
+        type=int,
+        default=50,
+        help="EMA window for noisy per-step train losses in training overlay (default: 50).",
+    )
+    ap.add_argument(
+        "--no-train-ema",
+        action="store_true",
+        help="Disable EMA smoothing in training overlay.",
+    )
+    ap.add_argument(
+        "--no-train-eval-average",
+        action="store_true",
+        help="Disable train-loss mean-over-eval-window overlays.",
+    )
+    ap.add_argument(
+        "--show-inactive-training-panels",
+        action="store_true",
+        help="Show training metric panels that are all-zero (hidden by default).",
+    )
+    ap.add_argument(
         "--show-grasp-baseline",
         action="store_true",
         help="Overlay dashed GRASP baselines from avg_grasp_* (if present).",
@@ -967,8 +1307,8 @@ def main() -> None:
         job_id: Optional[str],
         run_state_status: Optional[str],
     ) -> Dict:
-        curves = {key: _as_list(ckpt.get(key, [])) for key, _, _, _, _ in EVAL_PANEL_LAYOUT}
-        for key, _, _ in TEMPORAL_METRICS:
+        curves = {key: _as_list(ckpt.get(key, [])) for key, _, _, _, _, _ in EVAL_PANEL_LAYOUT}
+        for key, _, _ in _all_temporal_metric_defs():
             curves[key] = _as_list(ckpt.get(key, []))
         for key, _, _ in TRAIN_METRICS:
             curves[key] = _as_list(ckpt.get(key, []))
@@ -1118,7 +1458,7 @@ def main() -> None:
     if len(experiments) < 2:
         raise SystemExit("Need at least two experiments with data to compare.")
 
-    baseline_keys = [baseline_key for _, _, _, baseline_key, _ in EVAL_PANEL_LAYOUT]
+    baseline_keys = [baseline_key for _, _, _, baseline_key, _, _ in EVAL_PANEL_LAYOUT if baseline_key]
     baseline_keys.extend(list(TEMPORAL_GRASP_BASELINE_KEYS.values()))
     grasp_baselines = _resolve_grasp_baselines(experiments, baseline_keys)
 
@@ -1133,7 +1473,7 @@ def main() -> None:
             experiments,
             show_baseline=show_grasp_baseline,
             grasp_baselines=grasp_baselines,
-            title="evaluation metrics",
+            title="evaluation metrics (student vs DRO, student vs GRASP, non-DRO)",
             dpi=args.dpi,
         )
         if wrote:
@@ -1142,27 +1482,54 @@ def main() -> None:
             print("Skipped eval metrics overlay: no data points for any eval metric.")
 
     if not args.no_temporal:
-        temporal_path = os.path.join(args.out_dir, "eval_temporal_metrics_overlay.png")
+        temporal_dro_path = os.path.join(args.out_dir, "eval_temporal_metrics_overlay.png")
         wrote = _plot_temporal(
-            temporal_path,
+            temporal_dro_path,
             experiments,
             show_baseline=show_grasp_baseline,
             grasp_baselines=grasp_baselines,
-            title="temporal metrics",
+            title="temporal metrics (student vs DRO)",
             dpi=args.dpi,
+            metric_defs=TEMPORAL_METRICS_STUDENT_VS_DRO,
+            baseline_key_map=TEMPORAL_GRASP_BASELINE_KEYS,
+            baseline_label=GRASP_DRO_BASELINE_LABEL,
         )
         if wrote:
-            print(f"Wrote {temporal_path}")
+            print(f"Wrote {temporal_dro_path}")
         else:
-            print("Skipped temporal metrics overlay: no data points for any temporal metric.")
+            print("Skipped student-vs-DRO temporal overlay: no data points.")
+
+        temporal_grasp_path = os.path.join(
+            args.out_dir,
+            "eval_temporal_metrics_student_vs_grasp_overlay.png",
+        )
+        wrote = _plot_temporal(
+            temporal_grasp_path,
+            experiments,
+            show_baseline=False,
+            grasp_baselines=grasp_baselines,
+            title="temporal metrics (student vs GRASP)",
+            dpi=args.dpi,
+            metric_defs=TEMPORAL_METRICS_STUDENT_VS_GRASP,
+            baseline_key_map=None,
+            baseline_label="",
+        )
+        if wrote:
+            print(f"Wrote {temporal_grasp_path}")
+        else:
+            print("Skipped student-vs-GRASP temporal overlay: no data points.")
 
     if not args.no_training:
         training_path = os.path.join(args.out_dir, "training_metrics_overlay.png")
+        train_ema_window = 1 if args.no_train_ema else max(1, int(args.train_ema_window))
         wrote = _plot_training(
             training_path,
             experiments,
             title="training metrics",
             dpi=args.dpi,
+            train_ema_window=train_ema_window,
+            add_eval_window_average=not args.no_train_eval_average,
+            hide_inactive_zero_panels=not args.show_inactive_training_panels,
         )
         if wrote:
             print(f"Wrote {training_path}")

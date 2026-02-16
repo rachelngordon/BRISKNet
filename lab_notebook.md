@@ -1059,3 +1059,774 @@ Current best BRISKNet in this sweep (`707694` at ep35): SSIM `0.872`, PSNR `39.2
   - `712881` `m36_supdist_loo4_nocurriculum_2n4g` (general)
   - `712882` `m36_supdist_loo5_nofreq_2n4g_burst` (burst)
   - `712883` `m36_supdist_loo6_freqw010_2n4g_burst` (burst)
+
+### 2026-02-15 GRASP layout change (metadata reduction)
+- Changed GRASP target storage from per-slice `.npy` files to packed per-patient/per-SPF files:
+  - new path: `<target_root>/<patient>/grasp_recon_<spf>spf_<frames>frames.h5`
+  - datasets: `recon` `[num_slices, H, W, T]`, `valid` `[num_slices]`
+- Generator now:
+  - skips and logs per-slice failures instead of aborting shard
+  - writes detailed failure JSONL and summary under `<target_root>/_grasp_failures/`
+  - writes `<...>.skipped_slices.tsv` for triage
+- Dataloader updated to index/load both packed H5 targets and legacy per-slice `.npy` targets.
+- Pending jobs using patched generator:
+  - `712896` (`grasp_train_spf2_2n4g_j1`)
+  - `712897` (`grasp_train_spf2_2n4g_j0`)
+
+### 2026-02-15 GRASP relaunch to packed root + migration job
+- Canceled stale pending SPF=2 jobs:
+  - `712896`, `712897`
+- Fixed `generate_grasp_targets_split.py`:
+  - repaired syntax/indentation regression in phase loop
+  - made lock handling `try/finally` safe (always releases lock)
+  - switched to `fcntl.flock` file locking to avoid stale lockfiles and multi-writer collisions
+  - standardized recon layout to canonical `H,W,T` before writing packed H5
+- Updated defaults to packed root:
+  - `grasp_recon.sh` and `grasp_recon_train_split.sbatch` now default `TARGET_ROOT=/net/scratch2/annawoodard/grasp_targets_fastmri_train_packed`
+- Submitted fresh generation jobs (2 jobs/SPF, 2 nodes x 4 GPUs/node, exclude `k003`):
+  - `712898` `grasp_train_spf36_2n4g_j0`
+  - `712899` `grasp_train_spf36_2n4g_j1`
+  - `712900` `grasp_train_spf2_2n4g_j0`
+  - `712901` `grasp_train_spf2_2n4g_j1`
+- Added migration tooling:
+  - `pack_grasp_targets_to_packed.py`
+  - `grasp_pack_legacy_to_packed.sbatch`
+  - migration writes packed H5 with per-file lock, shard support, and optional delete-on-success.
+- Submitted migration job (currently **non-destructive** to avoid breaking running matrix still reading old root):
+  - `712902` `grasp_pack_train_to_packed` (2 nodes, 8 tasks/node, `DELETE_SOURCE=0`)
+
+### 2026-02-15 Overnight data-first queue pivot
+- Goal: maximize GRASP target coverage overnight.
+- Canceled matrix jobs to free slots:
+  - `712878`, `712879`, `712880`, `712881`, `712882`, `712883`
+- Canceled earlier 2-per-SPF GRASP pending jobs:
+  - `712898`, `712899`, `712900`, `712901`
+- Kept migration running:
+  - `712902` `grasp_pack_train_to_packed` (RUNNING)
+- Submitted fresh GRASP generation at 4 jobs/SPF (8 jobs total), each `2 nodes x 4 GPUs/node`, packed root, `--exclude k003`:
+  - SPF 36: `712907`, `712908`, `712909`, `712910`
+  - SPF 2: `712911`, `712912`, `712913`, `712914`
+- Migration mode switch:
+  - canceled copy-only migration `712902` (`DELETE_SOURCE=0`)
+  - resubmitted delete-after-pack migration as `712915` (`grasp_pack_train_to_packed_del`, `DELETE_SOURCE=1`)
+
+### 2026-02-15 36spf matrix relaunch after distill data expansion
+- Updated 36spf LOO configs to use packed distill target root:
+  - `data.grasp_target_root: /net/scratch2/annawoodard/grasp_targets_fastmri_train_packed`
+- Submitted 5 runs (2 nodes x 4 GPUs/node, `exclude=k003`, env=`brisknet`):
+  - General:
+    - `713113` `m36_supdist_loo1_full_2n4g`
+    - `713114` `m36_supdist_loo2_nomultilag_2n4g`
+    - `713115` `m36_supdist_loo3_noarrival_2n4g`
+  - Burst:
+    - `713116` `m36_supdist_loo5_nofreq_2n4g_burst` (`timeout=230`)
+    - `713117` `m36_supdist_loo6_freqw010_2n4g_burst` (`timeout=230`)
+- Immediate launcher failure on first attempt:
+  - jobs `713113`..`713117` failed because `submit.py` was given `--micromamba-path /tmp/codex_mamba_init.sh`, which does not exist on compute nodes.
+  - error: `FileNotFoundError: Micromamba init script not found: /tmp/codex_mamba_init.sh`
+- Fix:
+  - created persistent shared init script: `/home/annawoodard/.codex_mamba_init.sh`
+  - resubmitted same 5 runs:
+    - General: `713118` (loo1 full), `713119` (loo2 nomultilag), `713120` (loo3 noarrival)
+    - Burst: `713121` (loo5 nofreq), `713122` (loo6 freqw010)
+- Follow-up crash diagnosis:
+  - `713120`, `713121`, `713122` failed at startup due packed HDF5 lock contention while GRASP writers were still active.
+  - Error signature: `BlockingIOError: unable to lock file, errno = 11` from `h5py.File(..., "r")` in `dataloader.py::_build_supervised_distill_index`.
+- Code fix:
+  - updated packed target read paths in `dataloader.py` to open with `locking=False`:
+    - `_build_supervised_distill_index` packed H5 scan
+    - `_load_supervised_distill_target` packed H5 slice read
+- Resubmitted failed trio after patch:
+  - `713131` (loo3 noarrival, general)
+  - `713132` (loo5 nofreq, burst)
+  - `713133` (loo6 freqw010, burst)
+
+### 2026-02-15 Distill mismatch cleanup + clean resubmits
+- Issue observed:
+  - `m36_supdist_loo1_full_2n4g` and `m36_supdist_loo2_nomultilag_2n4g` were running with `valid_fraction=0.000` (effectively no supervised distill active).
+  - Logs showed they were still tied to stale non-packed target context from older run state.
+- Action taken:
+  - Canceled non-distill / stale runs and pending stale variants:
+    - canceled: `713118`, `713119`, `713132`, `713133`
+  - Deleted stale output dirs to force clean state:
+    - `/net/projects2/annawoodard/experiments/m36_supdist_loo1_full_2n4g`
+    - `/net/projects2/annawoodard/experiments/m36_supdist_loo2_nomultilag_2n4g`
+    - `/net/projects2/annawoodard/experiments/m36_supdist_loo5_nofreq_2n4g_burst`
+    - `/net/projects2/annawoodard/experiments/m36_supdist_loo6_freqw010_2n4g_burst`
+- Clean resubmits (same experiment names, fresh dirs):
+  - `713160` `m36_supdist_loo1_full_2n4g`
+  - `713161` `m36_supdist_loo2_nomultilag_2n4g`
+  - `713162` `m36_supdist_loo5_nofreq_2n4g_burst`
+  - `713163` `m36_supdist_loo6_freqw010_2n4g_burst`
+- Verification:
+  - `713160` startup log now shows packed-target distill coverage:
+    - `[SupervisedDistill] target_coverage=258/258 exams, target_slices=45624, spf=36, frames=8`
+  - checkpoint behavior: clean start (`No existing checkpoint found; starting new run.`)
+
+### 2026-02-15 Warm-start pivot for ablations (keep one clean scratch proof)
+- Strategy agreed:
+  - keep one clean scratch run as proof-of-method (`m36_supdist_loo3_noarrival_2n4g`, job `713131`)
+  - warm-start all other active ablations to accelerate iteration under deadline.
+- Warm-start source checkpoint selected:
+  - `/net/projects2/annawoodard/experiments/m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g/m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g_best_model.pth`
+  - source run best PSNR in `run_state.json`: `42.5133`.
+- Config updates:
+  - set `experiment.init_checkpoint` to the path above in:
+    - `configs/deadline_20260215_supdist_temporal_loo/m36_supdist_loo1_full_2n4g.yaml`
+    - `configs/deadline_20260215_supdist_temporal_loo/m36_supdist_loo2_nomultilag_2n4g.yaml`
+    - `configs/deadline_20260215_supdist_temporal_loo/m36_supdist_loo5_nofreq_2n4g_burst.yaml`
+    - `configs/deadline_20260215_supdist_temporal_loo/m36_supdist_loo6_freqw010_2n4g_burst.yaml`
+- Recycle for clean run dirs:
+  - canceled stale jobs: `713160`, `713161`, `713162`, `713163`
+  - deleted stale dirs for those 4 experiments to avoid residual state
+  - resubmitted fresh jobs:
+    - `713166` `m36_supdist_loo1_full_2n4g`
+    - `713167` `m36_supdist_loo2_nomultilag_2n4g`
+    - `713168` `m36_supdist_loo5_nofreq_2n4g_burst`
+    - `713169` `m36_supdist_loo6_freqw010_2n4g_burst`
+- Startup verification (`713166`):
+  - warm-start confirmed:
+    - `[Checkpoint] No run checkpoint found; warm-starting from experiment.init_checkpoint: ...m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g_best_model.pth`
+  - distill target indexing confirmed:
+    - `[SupervisedDistill] target_coverage=258/258 exams, target_slices=45699, spf=36, frames=8`
+
+### 2026-02-15 Queue status check (post warm-start resubmit)
+- User question: why only 8 jobs visible.
+- Current queue snapshot:
+  - RUNNING: `713166`, `713167`, `712911`, `712912`, `712913`, `712914`
+  - PENDING: `713168`, `713169`
+- Missing two are not crashes:
+  - `712909` (`grasp_train_spf36_2n4g_j2`) -> `COMPLETED`, exit `0:0`
+  - `713131` (`m36_supdist_loo3_noarrival_2n4g`) -> `COMPLETED`, exit `0:0`
+- No new crash among currently active jobs.
+
+### 2026-02-15 Completed-run analysis: m36_supdist_loo3_noarrival_2n4g
+- Run: `m36_supdist_loo3_noarrival_2n4g` (`713131`)
+- Status: `COMPLETED`
+- Config: `configs/deadline_20260215_supdist_temporal_loo/m36_supdist_loo3_noarrival_2n4g.yaml`
+- Key setup notes:
+  - `init_checkpoint: null` (clean scratch)
+  - supervised distill enabled with packed targets (`target_coverage=258/258`)
+  - no arrival weighting (`arrival_weighting.enable: false`)
+  - distill stop at step 306
+- Best metrics:
+  - SSIM: `0.8911` @ step `260`
+  - PSNR: `35.1912` @ step `360`
+  - LPIPS: `0.1408` @ step `360`
+  - CurveCorr: `0.9952` @ step `40` (final `0.9947`)
+- Final metrics (step 360):
+  - SSIM `0.8555`, PSNR `35.1912`, LPIPS `0.1408`, CurveCorr `0.9947`
+  - Temporal: `rho_full=0.9910`, `rho_early=0.5410`, `MAE_full=1.626`, `MAE_early=2.488`, `t_arr_err=9.563s`, `t_peak_err=15.45s`
+- Runtime:
+  - wall time (attempt 3): `7205s` (~2.00h), cumulative `7241s`
+  - mean iteration time: `7.13s` (n=360)
+  - eval inference time/sample: mean `3.158s` (n=15 per eval)
+- Overlay artifacts written:
+  - `/net/projects2/annawoodard/experiments/m36_loo3_analysis_overlay_20260215/eval_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_loo3_analysis_overlay_20260215/eval_temporal_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_loo3_analysis_overlay_20260215/training_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_loo3_analysis_overlay_20260215/overlay_metric_tables.txt`
+- Comparison takeaway vs prior strong dense-distill runs (`m36_supdistdense_*`):
+  - This run is much worse on DRO image quality (PSNR ~35 vs ~42.3-42.5, LPIPS ~0.141 vs ~0.026).
+  - Temporal metrics are also much worse (e.g., early correlation ~0.54 vs ~0.60; t_peak error ~15.5s vs ~13.7s).
+  - Non-DRO raw k-space MAE/MSE remain "good" (beats GRASP), reinforcing that these metrics alone are weak indicators of DRO-domain quality.
+  - Main confounder: this ablation was scratch while dense baselines were warm-started; cannot attribute gap solely to `noarrival`.
+- Behavior around distill stop:
+  - Distill active through step 306 (`valid_fraction=1.0`), then zero by schedule.
+  - After distill-off, SSIM declines (~0.88 -> ~0.86), PSNR flat/slight up, LPIPS slight improvement; temporal metrics mostly flat/poor.
+- Decision:
+  - Do not treat this as evidence against arrival-weighting yet.
+  - Evaluate `noarrival` only in warm-start matched A/B (currently queued as warm-start runs).
+
+### 2026-02-15 Warm-start lineage + distill plateau diagnosis
+- Question: "Do we remember how warm-start checkpoints were obtained, and does warm-start explain distill plateau?"
+- Warm-start lineage (from `run_state.json` chain):
+  1. `m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g` (best PSNR 42.513) 
+     <- init from
+  2. `m36_supdist_abs_w020_noei_2n4g` (best PSNR 41.670)
+     <- init from
+  3. `m36_dline_timeenc_mixmc005_ctrl_2n4g` (best PSNR 41.369)
+     <- init from
+  4. `m36_deadline_late_ei_rebin_frombest_2n4g` (best PSNR 41.048)
+     <- init from
+  5. `mamba_36spf_sweepB_early_ei_archfix_lr5em4_minlf6_wu5_ep160_archtune_dconv4_2n4g` (best PSNR 39.188)
+- So checkpoint provenance is recoverable and explicit.
+
+- Distill pressure findings:
+  - `m36_supdist_loo3_noarrival_2n4g` (scratch):
+    - distill active 306/360 steps (`vf_mean=0.85`, stop at step 306)
+    - weighted distill(+freq) / weighted MC ratio when active: mean ~0.655 (substantial)
+  - `m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g` (warm chain):
+    - distill valid on 81/360 steps (`vf_mean=0.225`) in that historical run
+    - ratio when active also substantial: mean ~0.684
+- Interpretation:
+  - Warm-start explains large baseline quality gap vs scratch.
+  - Plateau is not only warm-start-related; it is also consistent with distill-target coverage/schedule and objective mismatch with temporal metrics on DRO.
+  - In prior dense runs, distill was active only intermittently (low `valid_fraction`), so improvements were largely inherited from lineage + MC, not persistent full-run dense distill.
+
+- Additional trend signals:
+  - `dense_tdiff` PSNR still rising late (slope ~+0.0031 per step), while early-correlation drifts down late.
+  - `loo3` after distill stop (step>306): PSNR roughly flat, SSIM declines, temporal metrics stay poor/flat.
+- Decision implication:
+  - Need warm-start + high, consistent distill coverage in the same run (current requeued jobs aim for this) to answer whether dense distill truly moves temporal fidelity, independent of lineage.
+
+### 2026-02-15 Plateau-break matrix submission (early-stopping-on by default)
+- User request:
+  - submit a new matrix to break the 36spf plateau,
+  - include one higher-capacity run,
+  - enforce early stopping for new runs moving forward.
+
+- Code update relevant to this matrix:
+  - `train_zf.py` now supports config-native
+    - `training.auto_actions.early_stopping`
+    - `training.auto_actions.lr_restart_on_plateau`
+
+- Previous LOO jobs handled:
+  - `713166` `m36_supdist_loo1_full_2n4g` -> `COMPLETED` (`0:0`, elapsed `01:53:34`)
+  - `713167` `m36_supdist_loo2_nomultilag_2n4g` -> `CANCELLED by 22734`
+  - `713168` `m36_supdist_loo5_nofreq_2n4g_burst` -> `CANCELLED by 22734`
+  - `713169` `m36_supdist_loo6_freqw010_2n4g_burst` -> `CANCELLED by 22734`
+
+- New config set created:
+  - `configs/deadline_20260215_plateau_break_es/m36_plateau_full_esr_2n4g.yaml`
+  - `configs/deadline_20260215_plateau_break_es/m36_plateau_distillrelease_esr_2n4g.yaml`
+  - `configs/deadline_20260215_plateau_break_es/m36_plateau_mixmc010_esr_2n4g.yaml`
+  - `configs/deadline_20260215_plateau_break_es/m36_plateau_lateei_esr_2n4g.yaml`
+  - `configs/deadline_20260215_plateau_break_es/m36_plateau_highcap160x8x48_esr_2n4g.yaml`
+
+- Shared settings across all five:
+  - warm-start checkpoint: `/net/projects2/annawoodard/experiments/m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g/m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g_best_model.pth`
+  - `training.auto_actions.early_stopping.enabled: true`
+  - `training.auto_actions.lr_restart_on_plateau.enabled: true`
+  - 2 nodes x 4 GPUs/node, general queue, brisknet env
+
+- Matrix hypotheses:
+  1. `m36_plateau_full_esr_2n4g` (`713243`):
+     - long baseline with persistent distill (`stop_step=440`, `max_steps=520`) + restart-on-plateau should beat the prior ~step-150 flattening.
+  2. `m36_plateau_distillrelease_esr_2n4g` (`713246`):
+     - earlier distill release (`stop_step=320`) should allow post-teacher adaptation and potentially improve DRO PSNR late.
+  3. `m36_plateau_mixmc010_esr_2n4g` (`713242`):
+     - stronger MSE pressure (`mc mse_weight=0.10`, lr `2.5e-4`) should push PSNR trajectory upward if current plateau is MC-objective-limited.
+  4. `m36_plateau_lateei_esr_2n4g` (`713244`):
+     - delayed EI (`warmup=360`) + delayed rebin (`warmup=420`) tests whether adding temporal regularization only after strong MC/distill fit improves temporal metrics without early degradation.
+  5. `m36_plateau_highcap160x8x48_esr_2n4g` (`713245`):
+     - conservative higher-capacity speculative slot (`hidden_dim=160`, `num_blocks=8`, `d_state=48`) to test under-capacity as a plateau driver.
+
+- Submission status at submit time:
+  - `713242`, `713243`, `713244`, `713245`, `713246` all `PENDING (Priority)`.
+- Startup verification (`713242`, `m36_plateau_mixmc010_esr_2n4g`):
+  - warm-start confirmed from `m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g_best_model.pth`
+  - distill coverage confirmed: `target_coverage=258/258`
+  - auto-actions confirmed in log:
+    - `[AutoActions] early_stopping enabled: rules=2, require=all, min_step=180`
+    - `[AutoActions] lr_restart_on_plateau enabled: metric=dro_psnr ...`
+
+### 2026-02-15 LOO1 vs LOO3 overlay analysis (requested)
+- Overlay bundle generated:
+  - `/net/projects2/annawoodard/experiments/m36_loo13_overlay_20260215/eval_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_loo13_overlay_20260215/eval_temporal_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_loo13_overlay_20260215/training_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_loo13_overlay_20260215/overlay_metric_tables.txt`
+
+- Runs compared:
+  - `m36_supdist_loo1_full_2n4g` (`713166`, warm-started)
+  - `m36_supdist_loo3_noarrival_2n4g` (`713131`, from scratch)
+
+- Key observed values from overlay tables:
+  - `loo1` best/final regime:
+    - SSIM peaks ~`0.965`; PSNR reaches ~`42.7`; LPIPS best ~`0.023`; `rho_early` peaks ~`0.64`.
+    - `t_arr` error reaches low ~`6.16s`; `t_peak` error ~`13.0s` best.
+  - `loo3` best/final regime:
+    - SSIM peaks ~`0.891` and final ~`0.855`; PSNR final ~`35.2`; LPIPS ~`0.141`; `rho_early` ~`0.54`.
+    - `t_arr` error degrades late to ~`9-10s`; `t_peak` error ~`15.4s`.
+
+- Interpretation:
+  - This specific comparison is confounded by init condition (`loo1` warm-start vs `loo3` scratch), so it does **not** isolate arrival-weighting effect.
+  - Non-DRO k-space raw metrics are relatively close across the two runs while DRO and temporal metrics are very far apart, reinforcing that raw non-DRO metrics alone are weak for selecting 36spf temporal-fidelity settings.
+  - Practical takeaway: use matched warm-start + matched scheduler for LOO attribution.
+
+### 2026-02-15 LOO follow-up submission with early-stopping/restart (fair warm-start)
+- New config directory:
+  - `configs/deadline_20260215_supdist_temporal_loo_es/`
+- Changes applied to all six LOO configs:
+  - unified warm-start checkpoint:
+    - `/net/projects2/annawoodard/experiments/m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g/m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g_best_model.pth`
+  - added:
+    - `training.auto_actions.early_stopping`
+    - `training.auto_actions.lr_restart_on_plateau`
+
+- Submitted jobs (exp name = output dir = slurm name):
+  - General (2 nodes x 4 gpus):
+    - `713280` `m36_supdist_loo1_full_esr_2n4g`
+    - `713283` `m36_supdist_loo2_nomultilag_esr_2n4g`
+    - `713294` `m36_supdist_loo3_noarrival_esr_2n4g`
+    - `713299` `m36_supdist_loo4_nocurriculum_esr_2n4g`
+  - Burst (1 node x 4 gpus):
+    - `713302` `m36_supdist_loo5_nofreq_esr_1n4g_burst`
+    - `713303` `m36_supdist_loo6_freqw010_esr_1n4g_burst`
+
+- Note:
+  - First burst submission attempt (`713300`, `713301`) was blocked by burst walltime limit and was replaced with `240 min` jobs (`713302`, `713303`).
+
+### 2026-02-16 Overlay refresh + plateau interpretation (mixmc010 vs dense_tdiff)
+- Refreshed overlay bundles after plotting updates:
+  - `/net/projects2/annawoodard/experiments/m36_overlay_mixmc010_vs_tdiff080_20260215/`
+  - `/net/projects2/annawoodard/experiments/m36_loo13_overlay_20260215/`
+- `overlay_metrics.py` updates used for this refresh:
+  - eval overlay now includes LR in `eval_metrics_overlay.png`
+  - training overlay now includes distill and weighted-loss traces:
+    - supervised distill losses (+weighted +freq),
+    - teacher distill losses (+weighted),
+    - distill valid fraction, distill weights, curriculum alpha,
+    - weighted MC/EI/Adj/Rebin losses
+
+- Comparison takeaway (`m36_plateau_mixmc010_esr_2n4g` vs `m36_supdistdense_tdiff_w080_lr3em4_s1_2n4g`):
+  - Not a pure "needs one LR kick" story.
+  - LR restarts happened in `mixmc010` and gave temporary PSNR recovery (best PSNR ~`42.40` at step `320`), but late image-quality collapse still occurred by step `480` (PSNR ~`41.64`, SSIM ~`0.901`).
+  - Temporal early-correlation improved late in `mixmc010` (`rho_early` up to ~`0.659`), while SSIM/PSNR dropped, indicating objective tradeoff rather than simple optimization stall.
+  - Practical implication:
+    - LR restart is useful but insufficient alone.
+    - Need guardrails around post-distill phase (release timing, EI/rebin timing/weights, and stopping rules tied to DRO image metrics and temporal metrics jointly).
+
+### 2026-02-16 Running m36 overlay snapshot (user-requested)
+- Overlay regenerated from currently running m36 jobs:
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_now_latest/eval_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_now_latest/eval_temporal_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_now_latest/training_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_now_latest/overlay_metric_tables.txt`
+
+- Included in overlay (has checkpoints):
+  - `m36_plateau_full_esr_2n4g` (`713243`)
+  - `m36_plateau_lateei_esr_2n4g` (`713244`)
+  - `m36_plateau_distillrelease_esr_2n4g` (`713246`)
+  - `m36_plateau_highcap160x8x48_esr_2n4g` (`713245`)
+- Not yet included (no checkpoint written yet):
+  - `m36_supdist_loo1_full_esr_2n4g` (`713280`)
+
+- Current quantitative snapshot vs GRASP baseline (best observed in each run so far):
+  - `m36_plateau_full_esr_2n4g`:
+    - DRO PSNR `42.34` (GRASP `48.58`), SSIM `0.955` (`0.979`), LPIPS `0.026` (`0.0021`)
+    - temporal: `rho_early=0.616` (`0.736`), `t_arr=6.22s` (`4.73s`), `t_peak=12.85s` (`9.66s`)
+  - `m36_plateau_lateei_esr_2n4g`:
+    - DRO PSNR `42.27`, SSIM `0.944`, LPIPS `0.026`
+    - temporal: `rho_early=0.611`, `t_arr=6.31s`, `t_peak=13.16s`
+  - `m36_plateau_distillrelease_esr_2n4g`:
+    - Early good point at step 20 then degraded by step 60 (SSIM `0.939 -> 0.888`, PSNR `42.11 -> 41.56`)
+  - `m36_plateau_highcap160x8x48_esr_2n4g`:
+    - still far behind at this stage (best PSNR `35.21`, SSIM `0.823`, `rho_early=0.553`)
+
+- Takeaways:
+  - Full and late-EI tracks are currently strongest and close to each other; neither is yet close to GRASP on temporal timing metrics.
+  - `distillrelease` looks unstable when releasing teacher pressure early (at least in this early window).
+  - The high-capacity run is not competitive in early trajectory; likely needs either different optimization or should be treated as speculative only.
+  - Non-DRO raw k-space metrics remain nearly flat across these runs and are not useful for ranking progress at this stage.
+
+### 2026-02-16 Why `m36_plateau_full_esr_2n4g` / `m36_plateau_lateei_esr_2n4g` did not stop early
+- Runtime confirmation from logs:
+  - `m36_plateau_full_esr_2n4g` log shows:
+    - `[AutoActions] early_stopping enabled: rules=2, require=all, min_step=180`
+    - stop criteria were threshold-based (`dro_psnr < 41.0` AND `dro_ssim < 0.92`).
+  - `m36_plateau_lateei_esr_2n4g` log shows:
+    - `[AutoActions] early_stopping enabled: rules=3, require=all, min_step=180`
+    - stop criteria were threshold-based (`dro_psnr < 41.0` AND `dro_ssim < 0.90` AND `rho_early < 0.56`).
+- Therefore these runs do not early-stop when plateaued near PSNR~42 and SSIM~0.94; they only stop if they drop below those floor thresholds.
+- Both runs did trigger one LR restart (`full` at step 220, `lateei` at step 200), but no sustained improvement followed.
+- Decision implication:
+  - Treat these as exhausted for current objective; keep best checkpoint and branch to a stronger distill-focused continuation recipe rather than waiting for threshold-based stop.
+
+### 2026-02-16 Cancel + running-overlay refresh (user-requested)
+- Actions:
+  - Cancelled plateaued jobs:
+    - `713243` `m36_plateau_full_esr_2n4g`
+    - `713244` `m36_plateau_lateei_esr_2n4g`
+  - Remaining running m36 jobs at refresh time:
+    - `713246` `m36_plateau_distillrelease_esr_2n4g`
+    - `713280` `m36_supdist_loo1_full_esr_2n4g`
+    - `713283` `m36_supdist_loo2_nomultilag_esr_2n4g`
+    - `713294` `m36_supdist_loo3_noarrival_esr_2n4g`
+
+- New overlay artifacts:
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_postcancel/eval_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_postcancel/eval_temporal_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_postcancel/training_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_postcancel/overlay_metric_tables.txt`
+
+- Quantitative snapshot (best so far, vs GRASP):
+  - `m36_plateau_distillrelease_esr_2n4g` (step 160):
+    - PSNR `42.22` (gap `-6.36`), SSIM `0.946` (gap `-0.033`), `rho_early 0.618` (gap `-0.118`), `t_arr 6.25s` (gap `+1.52s`)
+  - `m36_supdist_loo1_full_esr_2n4g` (step 140):
+    - PSNR `42.16` (gap `-6.42`), SSIM `0.943` (gap `-0.037`), `rho_early 0.603` (gap `-0.133`), `t_arr 6.45s` (gap `+1.72s`)
+  - `m36_supdist_loo2_nomultilag_esr_2n4g` (step 60):
+    - PSNR `41.91` (gap `-6.67`), SSIM `0.924` (gap `-0.056`), `rho_early 0.595` (gap `-0.141`), `t_arr 6.49s` (gap `+1.76s`)
+  - `m36_supdist_loo3_noarrival_esr_2n4g` (step 40):
+    - PSNR `42.02` (gap `-6.56`), SSIM `0.938` (gap `-0.042`), `rho_early 0.566` (gap `-0.170`), `t_arr 6.34s` (gap `+1.62s`)
+
+- Takeaways:
+  - Current survivors are clustered in the same basin; none is closing the temporal gap quickly enough yet.
+  - `loo3_noarrival` is currently weakest on `rho_early`, suggesting arrival weighting is helping early-temporal behavior.
+  - `loo2_nomultilag` is trailing both image and temporal metrics so far, suggesting multi-lag temporal-diff still looks beneficial.
+  - `distillrelease` is currently best among active runs but still far from GRASP on temporal timing metrics.
+- Refresh note:
+  - Re-ran `m36_overlay_running_postcancel` including currently running `m36_supdist_loo4_nocurriculum_esr_2n4g`.
+  - It was skipped by `overlay_metrics.py` because no checkpoint exists yet.
+
+### 2026-02-16 Plateau diagnosis from training overlays/checkpoints
+- Checked current running m36 checkpoints (`m36_plateau_distillrelease_esr_2n4g`, `m36_supdist_loo1_full_esr_2n4g`, `m36_supdist_loo2_nomultilag_esr_2n4g`, `m36_supdist_loo3_noarrival_esr_2n4g`).
+- Observed trend:
+  - `train_mc_losses` roughly flat around `~1.3e-5` (no sustained downward trend).
+  - `train_supervised_distill_losses` roughly flat around `~1.1e-5` (also no sustained downward trend).
+  - `weighted_train_supervised_distill_losses` increases mainly because `supervised_distill_weight_history` ramps from near `0` to `0.8` by ~step 80.
+  - `val_mc_losses` also mostly flat (`~0.072-0.075`).
+  - Eval PSNR/SSIM flatten near `~42 / ~0.93-0.95`.
+- Interpretation:
+  - These runs are in a true optimization plateau (not just noisy train-loss plots).
+  - Early SSIM dip aligns with aggressive distill-weight ramp; objective transitions are dominating early behavior.
+
+### 2026-02-16 Plateau-attack action: cancel low-performing LOO + submit PSNR-first distill run
+- User request:
+  - cancel low-performing LOO runs,
+  - submit a new run with plateau-break plan,
+  - record takeaways.
+
+- Cancellations executed:
+  - `713283` `m36_supdist_loo2_nomultilag_esr_2n4g` (low PSNR/SSIM trend among active LOO)
+  - `713294` `m36_supdist_loo3_noarrival_esr_2n4g` (low early-temporal trend among active LOO)
+  - `713302` `m36_supdist_loo5_nofreq_esr_1n4g_burst` (pending low-priority LOO)
+  - `713303` `m36_supdist_loo6_freqw010_esr_1n4g_burst` (pending low-priority LOO)
+  - `713509` `m36_meetgrasp_distillonly_abs_w120_2n4g` (replaced by improved config variant)
+
+- New config created:
+  - `configs/deadline_20260216_meet_grasp/m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g.yaml`
+- Key changes vs previous meet-GRASP config:
+  - stronger MC MSE pressure: `model.losses.mc_loss.mse_weight: 0.2` (from `0.05`)
+  - stronger but slower-ramped distill: `weight: 1.5`, `duration_steps: 120`, absolute mode, EI/rebin still off
+  - flatter LR schedule: `training.lr_schedule.min_lr_factor: 1.0`
+  - true patience stop active: `training.early_stopping.enabled: true` with `min_step=220`, `patience_evals=5`, `min_delta=0.02`
+  - longer budget to allow escape if learning resumes: `training.max_steps: 640`
+
+- Submission:
+  - job id `713540`
+  - exp/job: `m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g`
+  - 2 nodes x 4 GPUs, general queue
+  - logs: `/net/projects2/annawoodard/experiments/m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g/submitit_logs`
+
+- Consolidated takeaways recorded for this decision:
+  - Active runs show true optimization plateau: MC/distill raw losses are flat while PSNR stagnates near ~42.
+  - Early SSIM drop aligns with aggressive distill-weight ramp (objective transition effect), not with MC collapse.
+  - Prior stop rules were failure-threshold guards, not plateau detection; switched to simple patience-based early stopping for this new run.
+  - Multi-lag and arrival weighting looked directionally useful from active LOO ranking; weakest LOO variants were canceled to free slots for a direct PSNR-first push.
+
+### 2026-02-16 Monitoring refresh + running overlay (post new plateau-attack run)
+- Current standard-slot occupancy snapshot:
+  - Running: 4 (`713246`, `713540`, `713469`, `713299`)
+  - Pending: 0
+  - Occupancy: `4/8` standard slots currently filled.
+
+- Fresh overlay generated for currently running m36 jobs:
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_20260216_latest/eval_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_20260216_latest/eval_temporal_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_20260216_latest/training_metrics_overlay.png`
+  - `/net/projects2/annawoodard/experiments/m36_overlay_running_20260216_latest/overlay_metric_tables.txt`
+
+- Running m36 quantitative snapshot:
+  - `m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g` (`713540`):
+    - step `160/640` (25.0%)
+    - best PSNR `43.01`, SSIM `0.9682`, LPIPS `0.0201`
+    - temporal still weak: best `rho_early=0.6058`, best `t_arr=6.60s`
+  - `m36_supdist_loo4_nocurriculum_esr_2n4g` (`713299`):
+    - step `260/360` (72.2%)
+    - best PSNR `42.59`, SSIM `0.9672`
+    - temporal: best `rho_early=0.6128`, best `t_arr=6.14s`
+  - `m36_plateau_distillrelease_esr_2n4g` (`713246`):
+    - step `420/520` (80.8%)
+    - best PSNR `42.47` (at step 320), but current degraded to `41.46`
+    - temporal mixed: `rho_early` improved late (best `0.6682`) but iAUC error worsened badly late (current `17.49`).
+
+- Consolidated interpretation:
+  - New PSNR-first run is the best image-quality trajectory so far in active set.
+  - Temporal metrics are still the bottleneck; PSNR gains are not automatically translating to `rho_early`/timing gains.
+  - Distill-release run now looks unstable post-release and appears low value to continue versus new config lineage.
+- Recommended immediate decisions (pending user confirmation):
+  - Kill candidate: `m36_plateau_distillrelease_esr_2n4g` (late degradation after distill release, low remaining value).
+  - Keep: `m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g` (best active PSNR/SSIM trajectory).
+  - Keep (near-term): `m36_supdist_loo4_nocurriculum_esr_2n4g` until next 2-3 evals to confirm final trend.
+  - Keep data pipeline job: `grasp_train_spf2_2n4g_j2`.
+- Suggested next fills to restore standard-slot occupancy to 8:
+  - derivatives of `m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g` focused on temporal improvement while preserving PSNR lead.
+
+### 2026-02-16 Student-vs-GRASP metric plumbing + disambiguated labeling (code + overlays)
+- Goal:
+  - Remove DRO/GRASP ambiguity in logs/plots and make student-vs-GRASP progress first-class for model selection.
+- Code updates:
+  - `eval.py`
+    - Added explicit `student_vs_grasp_*` image metrics (`ssim/psnr/mse/lpips`) into `temporal_metrics` for DRO and non-DRO eval branches.
+    - Added explicit `student_vs_grasp_*` temporal metrics for malignant/benign ROI (e.g., `student_vs_grasp_all_curve_corr`, `student_vs_grasp_all_early_corr`, timing errors).
+  - `train_zf.py`
+    - Added checkpoint curve storage/loading/logging for student-vs-GRASP image + temporal metrics.
+    - Added TensorBoard logging for student-vs-GRASP metrics.
+    - Renamed console reporting to explicit references:
+      - `Student-vs-DRO ...`
+      - `Student-vs-GRASP ...`
+      - `GRASP-vs-DRO baseline ...`
+      - `GRASP-vs-NonDRO ...`
+    - Added run-local plot output `eval_temporal_metrics_student_vs_grasp.png`.
+    - Updated eval CSV row labels to explicit references (`Student_vs_DRO`, `GRASP_vs_DRO_baseline`).
+  - `overlay_metrics.py`
+    - Renamed panel titles to explicit reference framing (`Student vs DRO ...`, `Student vs GRASP ...`).
+    - Added student-vs-GRASP eval panels (SSIM/PSNR/MSE/LPIPS).
+    - Split temporal overlays into:
+      - `eval_temporal_metrics_overlay.png` (student-vs-DRO, with GRASP-vs-DRO baselines)
+      - `eval_temporal_metrics_student_vs_grasp_overlay.png` (student-vs-GRASP)
+    - Baseline legend labels now differentiate DRO vs non-DRO references.
+- Validation:
+  - `python -m py_compile eval.py train_zf.py overlay_metrics.py` passed.
+  - Smoke overlay run passed and wrote new overlay artifacts under `/tmp/overlay_metric_smoke/`.
+
+### 2026-02-16 Distill-first meet-GRASP matrix submission (user-requested)
+- Strategy:
+  - Keep EI/rebin off, maximize supervised distill pressure while retaining MC as constraint.
+  - Use the current best warm-start checkpoint and vary distill pressure/temporal mode/MC MSE mix.
+- New config directory:
+  - `configs/deadline_20260216_meet_grasp_matrix/`
+- Submitted jobs (2 nodes x 4 GPUs, general):
+  - `713639` `m36_meetgrasp_abs_w220_mcmse010_flatlr_2n4g`
+    - config: `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_abs_w220_mcmse010_flatlr_2n4g.yaml`
+  - `713640` `m36_meetgrasp_tdiff_w150_mcmse020_flatlr_2n4g`
+    - config: `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_tdiff_w150_mcmse020_flatlr_2n4g.yaml`
+  - `713641` `m36_meetgrasp_abs_w180_mcmse020_flatlr_2n4g`
+    - config: `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_abs_w180_mcmse020_flatlr_2n4g.yaml`
+  - `713642` `m36_meetgrasp_abs_w150_mcmse000_flatlr_2n4g`
+    - config: `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_abs_w150_mcmse000_flatlr_2n4g.yaml`
+  - `713643` `m36_meetgrasp_curric_abs2tdiff_w180_mcmse020_flatlr_2n4g`
+    - config: `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_curric_abs2tdiff_w180_mcmse020_flatlr_2n4g.yaml`
+  - `713645` `m36_meetgrasp_tdiff_w180_arrw300_mcmse020_flatlr_2n4g`
+    - config: `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_tdiff_w180_arrw300_mcmse020_flatlr_2n4g.yaml`
+- Queue occupancy after submission:
+  - Standard slots: `8/8` (`RUNNING+PENDING`).
+  - Active queue set also includes existing: `713540` and `713469`.
+
+### 2026-02-15 Recent m36 overlay refresh + high-capacity status check
+- User ask:
+  - verify whether larger-capacity model has results or is still queued,
+  - generate overlays for recent experiments.
+- Queue/history status:
+  - Larger-capacity run `m36_plateau_highcap160x8x48_esr_2n4g` (`713245`) is **COMPLETED** (not queued).
+  - No active/pending high-capacity m36 run currently in queue.
+- Overlay generated:
+  - output dir: `/net/projects2/annawoodard/experiments/m36_overlay_recent_20260215_205713/`
+  - files:
+    - `eval_metrics_overlay.png`
+    - `eval_temporal_metrics_overlay.png`
+    - `eval_temporal_metrics_student_vs_grasp_overlay.png`
+    - `training_metrics_overlay.png`
+    - `overlay_metric_tables.txt`
+  - inputs used:
+    - running: `m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g`, `m36_meetgrasp_abs_w220_mcmse010_flatlr_2n4g`, `m36_meetgrasp_tdiff_w150_mcmse020_flatlr_2n4g`
+    - completed context: `m36_plateau_highcap160x8x48_esr_2n4g`
+    - pending/new runs without checkpoints were skipped automatically.
+- Snapshot from `overlay_metric_tables.txt`:
+  - High-capacity (`713245`) best observed:
+    - Student-vs-DRO PSNR ~`35.6`, SSIM ~`0.861`, LPIPS ~`0.130`, `rho_early` ~`0.581`.
+  - Current stronger run (`713540`) best observed:
+    - Student-vs-DRO PSNR ~`43.3`, SSIM ~`0.970`, LPIPS ~`0.0182`.
+  - Newly started runs (`713639`, `713640`) have early points only (up to step 60).
+- Takeaway:
+  - Existing high-capacity attempt underperformed substantially and is not a current queue consumer.
+  - Near-term decision signal should come from the new meet-GRASP matrix once additional eval steps land.
+
+### 2026-02-15 High-capacity continuation swap (user-requested)
+- User request:
+  - continue high-capacity trajectory (or warm-start from high-capacity checkpoint) and run longer with best current strategy.
+- Action:
+  - canceled lower-priority pending run: `713642` `m36_meetgrasp_abs_w150_mcmse000_flatlr_2n4g`.
+  - submitted high-capacity warm-start continuation:
+    - job `713715`
+    - exp/job name: `m36_meetgrasp_highcap160x8x48_abs_w240_mcmse010_flatlr_2n4g`
+    - config: `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_highcap160x8x48_abs_w240_mcmse010_flatlr_2n4g.yaml`
+    - resources: 2 nodes x 4 gpus/node, partition `general`.
+- Continuation design details:
+  - warm start source:
+    - `/net/projects2/annawoodard/experiments/m36_plateau_highcap160x8x48_esr_2n4g/m36_plateau_highcap160x8x48_esr_2n4g_best_model.pth`
+  - architecture retained high-capacity:
+    - `hidden_dim=160`, `num_blocks=8`, `d_state=48`, `use_checkpoint=true`.
+  - recipe aligned to stronger current insights:
+    - EI/rebin off,
+    - supervised distill `absolute`, `weight=2.0`, `duration_steps=240`, `stop_step=720`,
+    - MC mixed with `mse_weight=0.1`,
+    - flatter LR schedule (`min_lr_factor=1.0`),
+    - longer budget `max_steps=840` with patience stop.
+- Queue occupancy after swap:
+  - standard slots: `8/8` (`running+pending`).
+
+### 2026-02-16 Multiobjective supervised distill implementation + burst probe submissions
+- User request:
+  - implement multiobjective distill to improve PSNR/image quality without sacrificing temporal behavior,
+  - submit runs using the new objective.
+
+- Code changes:
+  - `train_zf.py`
+    - fully wired `model.losses.supervised_distill.multiobjective` into runtime training (previously parse-only):
+      - image + temporal distill components are computed separately and combined as:
+        - `L_sd = w_img * L_img + (temporal_scale * w_temp * L_temp) [+ optional frequency term]`
+      - supports temporal multi-lag + arrival-weighting for the temporal component.
+      - added adaptive temporal scale controller (optional) with EMA guardrail on image loss.
+      - added fail-fast validation:
+        - multiobjective and curriculum are mutually exclusive.
+        - adaptive mode requires positive image weight.
+      - added checkpoint persistence/resume for multiobjective state:
+        - `supervised_multiobj_temporal_scale`, `supervised_multiobj_image_ema`, `supervised_multiobj_image_best`, and history/step arrays.
+      - added TensorBoard + console logging for:
+        - image/temporal distill component losses,
+        - weighted component losses,
+        - temporal scale + adaptive EMA/best diagnostics.
+  - `overlay_metrics.py`
+    - added training overlay panels for:
+      - `train_supervised_distill_image_losses`
+      - `weighted_train_supervised_distill_image_losses`
+      - `train_supervised_distill_temporal_losses`
+      - `weighted_train_supervised_distill_temporal_losses`
+      - `supervised_multiobj_temporal_scale_history`
+    - added train-axis support for `supervised_multiobj_temporal_scale_steps`.
+
+- Validation:
+  - `python -m py_compile train_zf.py overlay_metrics.py` passed.
+
+- New configs:
+  - `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_multiobj_adapt_absimg_tdiff_1n4g_burst.yaml`
+    - multiobjective enabled, adaptive temporal scale enabled.
+  - `configs/deadline_20260216_meet_grasp_matrix/m36_meetgrasp_multiobj_fixed_absimg_tdiff_1n4g_burst.yaml`
+    - multiobjective enabled, fixed temporal scale (adaptive disabled).
+
+- Submissions (burst QoS):
+  - `713875` `m36_meetgrasp_multiobj_adapt_absimg_tdiff_1n4g_burst`
+    - 1 node x 4 GPUs, timeout 240 min.
+  - `713876` `m36_meetgrasp_multiobj_fixed_absimg_tdiff_1n4g_burst`
+    - 1 node x 4 GPUs, timeout 240 min.
+
+- Notes:
+  - Initial submissions `713873/713874` were canceled and resubmitted as `713875/713876` due burst walltime limit (`QOSMaxWallDurationPerJobLimit` with 480 min).
+  - Standard-slot occupancy remains filled (`8/8` running+pending); burst probes are additional.
+
+- Hypothesis:
+  - Multiobjective supervision will hold/improve image-space optimization pressure (PSNR proxy) while preserving temporal-difference learning, and adaptive temporal scaling should avoid over-penalizing image quality early.
+- Decision trigger:
+  - compare first 2-3 evals of `713875` vs `713876`; keep whichever gives better PSNR trend at matched/better early-temporal metrics.
+
+### 2026-02-16 Monitoring refresh + consolidated recent overlay (meet-GRASP set)
+- User request:
+  - update monitoring,
+  - assess current run status,
+  - regenerate overlays for recent experiments,
+  - summarize takeaways and highest-ROI next step.
+
+- Queue snapshot (at refresh):
+  - `RUNNING`: `713715` (`m36_meetgrasp_highcap160x8x48_abs_w240_mcmse010_flatlr_2n4g`)
+  - `PENDING`: none
+  - Burst probes from prior turn:
+    - `713876` (`m36_meetgrasp_multiobj_fixed_absimg_tdiff_1n4g_burst`) `COMPLETED`
+    - `713875` (`m36_meetgrasp_multiobj_adapt_absimg_tdiff_1n4g_burst`) `FAILED`
+      - root cause: resumed same exp dir with completed schedule; fail-fast error `ValueError("Full training max_steps already complete.")`.
+
+- Consolidated overlay generated:
+  - output dir: `/net/projects2/annawoodard/experiments/m36_meetgrasp_overlay_20260216_status/`
+  - files:
+    - `eval_metrics_overlay.png`
+    - `eval_temporal_metrics_overlay.png`
+    - `eval_temporal_metrics_student_vs_grasp_overlay.png`
+    - `training_metrics_overlay.png`
+    - `overlay_metric_tables.txt`
+
+- Best metric summary from recent `m36_meetgrasp_*` checkpoints:
+  - `m36_meetgrasp_abs_w220_mcmse010_flatlr_2n4g`
+    - best PSNR `43.572@660`, SSIM `0.9712@600`, LPIPS `0.0162@660`
+    - temporal: `rho_early 0.6373@640`, `t_arr 6.338s@560`
+    - student-vs-GRASP: PSNR `43.867@660`, `rho_early 0.7166@640`
+  - `m36_meetgrasp_abs_w180_mcmse020_flatlr_2n4g`
+    - best PSNR `43.540@600`, SSIM `0.9721@600`, LPIPS `0.0165@560`
+    - temporal: `rho_early 0.6451@580`, `t_arr 6.316s@560`
+    - student-vs-GRASP: PSNR `43.899@600`, `rho_early 0.7070@580`
+  - `m36_meetgrasp_distillonly_abs_w120_mcmse020_flatlr_2n4g`
+    - best PSNR `43.404@520`, SSIM `0.9709@420`, LPIPS `0.0170@500`
+    - temporal: `rho_early 0.6372@380`, `t_arr 6.336s@400`
+  - `m36_meetgrasp_multiobj_fixed_absimg_tdiff_1n4g_burst`
+    - best PSNR `42.659@580`, SSIM `0.9495@400`, LPIPS `0.0228@580`
+    - temporal: `rho_early 0.6272@300`, `t_arr 5.810s@540`
+  - `m36_meetgrasp_highcap160x8x48_abs_w240_mcmse010_flatlr_2n4g` (running)
+    - best so far PSNR `38.111@720`, SSIM `0.9384@640`, LPIPS `0.0803@720`
+    - temporal weak (`rho_early 0.5596@80`) and still far below 128-dim runs.
+
+- GRASP-vs-DRO baseline (from checkpoints):
+  - PSNR `48.58`, SSIM `0.9795`, LPIPS `0.0021`, curve corr `0.9993`, `rho_early 0.7360`, `t_arr 4.729s`.
+
+- Additional runtime observation from running high-capacity log:
+  - at step 800, supervised distill weight is `0` (distill stop reached), metrics are poor (`PSNR 37.65`, `rho_early 0.5226`).
+  - This run is effectively in post-distill drift mode and not competitive.
+
+- Takeaways:
+  - Best image-quality regime remains absolute distill with 128-dim model (`abs_w220` / `abs_w180`).
+  - Temporal-diff heavy variants and current multiobjective probes did not beat the best absolute-distill image trajectory.
+  - High-capacity warm-start trajectory is materially worse and currently low ROI.
+  - Distill-release (weight going to 0 before end) appears harmful for this regime; keeping distill active through end is safer.
+
+- Highest-ROI next action recommendation:
+  - Stop `713715` high-capacity run and allocate slots to fresh 128-dim warm-start continuations from `m36_meetgrasp_abs_w220_mcmse010_flatlr_2n4g_best_model.pth` with:
+    - no distill release (`stop_step >= max_steps` or unset),
+    - long/fixed high distill pressure,
+    - only small MC constraint,
+    - one clean multiobjective variant with a new exp name (no resume collision).
+  - Rationale: maximizes probability of closing remaining gap quickly while avoiding proven low-yield branches.
+
+### 2026-02-16 Follow-up: plateau interpretation + new 8-slot break-plateau matrix launched
+- User feedback:
+  - do not abandon high-capacity too early if it has non-plateau trend,
+  - verify whether multiobjective was truly active,
+  - require substantive objective changes (not only “keep distill on”).
+
+- Additional analysis completed:
+  - Distill coverage at 36spf is **not** the bottleneck: `supervised_distill_valid_fraction_history` is `1.0` for all recent m36 meet-GRASP runs.
+  - Multiobjective was active in multiobjective runs:
+    - `m36_meetgrasp_multiobj_adapt_absimg_tdiff_1n4g_burst`: non-empty scale history, temporal scale ranged `1.224 -> 0.25`.
+    - `m36_meetgrasp_multiobj_fixed_absimg_tdiff_1n4g_burst`: scale fixed at `1.0`.
+  - Interpretation: adaptive multiobjective likely over-suppressed temporal term (collapsed to min scale), so failure is more likely settings/balance than a broken implementation.
+
+- High-capacity decision:
+  - Canceled prior high-cap run `713715` and replaced with a high-cap continuation variant using:
+    - warm start from high-cap checkpoint,
+    - MSE distill,
+    - no distill release (`stop_step=2000`),
+    - longer horizon (`max_steps=1600`).
+
+- New config matrix created (all in `configs/deadline_20260216_break_plateau_matrix/`):
+  - `m36_bk_absmse_nomc_w1_long_2n4g.yaml`
+  - `m36_bk_absmse_mc005_w1_long_2n4g.yaml`
+  - `m36_bk_absmae_nomc_w3_long_2n4g.yaml`
+  - `m36_bk_absmse_nomc_freq005_2n4g.yaml`
+  - `m36_bk_mobjfix_nomc_imgmse_tdw04_2n4g.yaml`
+  - `m36_bk_mobjada_nomc_imgmse_tdw06_2n4g.yaml`
+  - `m36_bk_absmse_mc010_lr5e5_2n4g.yaml`
+  - `m36_bk_highcap_mse_norelease_2n4g.yaml`
+
+- Submission actions:
+  - initial submissions: `714035`..`714042`.
+  - observed hardware failures on `k002/k003` (no GPU detected or ECC errors):
+    - `714035` failed (`ProcessGroupNCCL ... no GPUs found`).
+    - `714037` failed (`CUDA error: uncorrectable ECC error encountered`).
+  - resubmitted failed jobs with GPU constraints (`a100|h100|h200`):
+    - `714043` replacement for `m36_bk_absmae_nomc_w3_long_2n4g`
+    - `714044` replacement for `m36_bk_absmse_mc010_lr5e5_2n4g`
+  - proactively canceled and resubmitted unconstrained pending/running jobs with same constraint:
+    - `714045` `m36_bk_absmse_nomc_freq005_2n4g`
+    - `714046` `m36_bk_absmse_nomc_w1_long_2n4g`
+    - `714047` `m36_bk_highcap_mse_norelease_2n4g`
+    - `714048` `m36_bk_mobjada_nomc_imgmse_tdw06_2n4g`
+    - `714049` `m36_bk_mobjfix_nomc_imgmse_tdw04_2n4g`
+
+- Current queue occupancy after recovery:
+  - standard slots: `8/8` (`RUNNING+PENDING`).
+  - running at log time: `714036` (healthy early training logs), plus remaining jobs pending by priority/resources.
+
+- Next decision trigger:
+  - first eval at step 20 for at least 3 variants, then compare:
+    - PSNR/SSIM trend vs best prior (`43.57 / 0.971`),
+    - temporal `rho_early` and `t_arr` behavior,
+    - whether multiobjective variants avoid early image collapse under new settings.

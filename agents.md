@@ -56,6 +56,38 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - For any recommendation, include tradeoffs (what is gained, what is sacrificed, and viable alternatives).
 - Be proactive toward the big-picture objective: do not wait for explicit prompts to identify obvious unblockers (for example, failed shards, stalled queues, missing artifacts). Propose and execute the highest-value safe next step, then report what was done and why.
 
+## Big-Picture Autocorrect
+- Think in terms of final outcomes, not local task completion.
+- Be curious and skeptical by default; question assumptions (including your own) and call out uncertainty explicitly.
+- If behavior looks off, investigate immediately instead of continuing on plan.
+- Use an intent check before major actions:
+  - What is the real goal?
+  - What constraints dominate (time/compute/quality/reproducibility)?
+  - What strategy best serves that goal now?
+- Run a generic preflight before submit/resubmit:
+  - Confirm run intent matches the requested strategy.
+  - Confirm required data/targets/paths are valid and non-empty.
+  - Confirm naming/output layout is unambiguous and easy to manage.
+  - Confirm the run will produce decision-useful signal quickly.
+- If results are unexpectedly poor, run a mistake audit before proposing new ideas:
+  - Verify intended settings are actually active at runtime.
+  - Verify key losses/metrics/signals are not silently inactive.
+  - Check for stale state/config drift/resume artifacts.
+  - Check eval/logging consistency so comparisons are valid.
+  - Check queue/restart/resource effects that may confound interpretation.
+- Default correction behavior when mismatch is found:
+  - Stop spending compute on misconfigured runs.
+  - Clean stale/confusing artifacts when safe and requested.
+  - Resubmit corrected runs.
+  - Verify startup evidence in logs and cite exact proof lines.
+- In status updates include:
+  - running/pending/failed state,
+  - confidence that key runs are doing what we intend,
+  - earliest next decision point,
+  - one recommended next action.
+- End major actions with a short decision record:
+  - Goal, Hypothesis, Action, Evidence, Next Trigger.
+
 ## Lab Notebook & Logging
 - Maintain a canonical experiment notebook at `lab_notebook.md`.
 - Notebook maintenance is mandatory for every experiment-management action in the same turn (submit/cancel/resubmit/complete/fail).
@@ -92,17 +124,25 @@ The sensitivity maps are in /net/scratch2/rachelgordon/zf_data_192_slices/, each
 - Prefer hardcoding stable behavior over proliferating optional flags.
 - Do not retroactively edit configs for completed runs; create new configs for new behavior.
 - Keep reproducibility explicit: seeds and effective schedule settings should be logged for each run.
+- For new training experiments, enable `training.auto_actions.early_stopping` by default unless explicitly running a no-early-stop control ablation.
 
 ## Submitting Jobs (SLURM via submit.py)
 - Use `submit.py` for distributed launches with `torchrun` + `submitit`.
 - Environment default: run project Python commands from `brisknet`.
+  - Mamba root on this cluster: `/net/projects/annawoodard/micromamba`.
   - Preferred Python executable: `/net/projects/annawoodard/micromamba/envs/brisknet/bin/python`.
   - Preferred micromamba init script: `/net/projects/annawoodard/micromamba/etc/profile.d/micromamba.sh`.
+  - Preferred activation in non-interactive shells:
+    - `eval "$(/net/projects/annawoodard/micromamba/bin/micromamba shell hook -s bash)" && micromamba activate brisknet`
+  - Avoid stale paths like `/home/.../micromamba/.../mamba.sh` unless explicitly validated on the current machine.
 - Run `submit.py` from `brisknet` and pass `--env-name brisknet` unless explicitly overridden.
 - Required flags: `--config`, `--exp-name`, `--nodes`, `--gpus-per-node`, `--micromamba-path`, `--env-name`.
 - Naming invariant: `--exp-name` must equal `--job-name` and must match the run output directory name. Keep all three identical for every submission.
 - Slot policy:
   - Standard slots: assume 8 non-burst SLURM job slots are available; keep them utilized with the highest-value active experiments unless explicitly directed otherwise.
+  - Hard invariant: keep at least 8 total standard jobs in `RUNNING+PENDING` whenever possible.
+  - If canceling standard jobs, submit replacement standard jobs in the same turn so post-action standard queue depth remains `>= 8`.
+  - Before ending a turn after experiment management actions, report standard-slot occupancy as `running + pending / 8`.
   - Burst slots: assume 2 additional `qos=burst` slots are available; treat burst as preemptible and use it for debugging/probes/sanity checks rather than long critical runs.
   - When proposing experiment plans, default to filling all standard slots first, then optionally use burst for short-turnaround diagnostics.
 - Typical 1 node / 4 GPU submission:

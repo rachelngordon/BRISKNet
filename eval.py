@@ -2517,6 +2517,26 @@ def eval_sample(
             )
             temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
             temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
+            student_vs_grasp_metrics = compute_temporal_metrics(
+                grasp_mag_np,
+                recon_mag_np,
+                masks_np['malignant'],
+                aif_time_points,
+                baseline_mode=baseline_mode,
+                baseline_seconds=baseline_seconds,
+                baseline_fraction=baseline_fraction,
+                baseline_min_frames=baseline_min_frames,
+                baseline_max_frames=baseline_max_frames,
+                arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
+                early_seconds=early_seconds,
+                early_min_frames=early_min_frames,
+                early_max_frames=early_max_frames,
+            )
+            temporal_metrics.update(
+                {f"student_vs_grasp_{key}": val for key, val in student_vs_grasp_metrics.items()}
+            )
         if 'benign' in masks_np and masks_np.get('benign', None) is not None and masks_np['benign'].any():
             dl_metrics = compute_temporal_metrics(
                 gt_mag_np,
@@ -2554,6 +2574,53 @@ def eval_sample(
             )
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
+            benign_student_vs_grasp_metrics = compute_temporal_metrics(
+                grasp_mag_np,
+                recon_mag_np,
+                masks_np['benign'],
+                aif_time_points,
+                baseline_mode=baseline_mode,
+                baseline_seconds=baseline_seconds,
+                baseline_fraction=baseline_fraction,
+                baseline_min_frames=baseline_min_frames,
+                baseline_max_frames=baseline_max_frames,
+                arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
+                early_seconds=early_seconds,
+                early_min_frames=early_min_frames,
+                early_max_frames=early_max_frames,
+            )
+            temporal_metrics.update(
+                {
+                    f"benign_student_vs_grasp_{key}": val
+                    for key, val in benign_student_vs_grasp_metrics.items()
+                }
+            )
+
+        # Explicitly track student-vs-GRASP image metrics to disambiguate references.
+        grasp_mag_for_metric = torch.from_numpy(grasp_mag_np).to(device=device, dtype=recon_mag_scaled.dtype)
+        grasp_mag_for_metric = rearrange(grasp_mag_for_metric, "h w t -> 1 1 t h w").contiguous()
+        sg_min = min(float(torch.min(recon_mag_scaled).item()), float(torch.min(grasp_mag_for_metric).item()))
+        sg_max = max(float(torch.max(recon_mag_scaled).item()), float(torch.max(grasp_mag_for_metric).item()))
+        if sg_max <= sg_min:
+            sg_max = sg_min + 1e-6
+        student_vs_grasp_ssim, student_vs_grasp_psnr, student_vs_grasp_mse, student_vs_grasp_lpips = (
+            calc_image_metrics(
+                recon_mag_scaled.contiguous(),
+                grasp_mag_for_metric,
+                (sg_min, sg_max),
+                device,
+            )
+        )
+        temporal_metrics.update(
+            {
+                "student_vs_grasp_ssim": float(student_vs_grasp_ssim),
+                "student_vs_grasp_psnr": float(student_vs_grasp_psnr),
+                "student_vs_grasp_mse": float(student_vs_grasp_mse),
+                "student_vs_grasp_lpips": float(student_vs_grasp_lpips),
+            }
+        )
 
         if foreground_mask is not None:
             data_range = float(gt_mag_np.max() - gt_mag_np.min())
@@ -2836,6 +2903,26 @@ def eval_sample(
             )
             temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
             temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
+            student_vs_grasp_metrics = compute_temporal_metrics(
+                grasp_mag_np,
+                recon_mag_np,
+                masks_np['malignant'],
+                aif_time_points,
+                baseline_mode=baseline_mode,
+                baseline_seconds=baseline_seconds,
+                baseline_fraction=baseline_fraction,
+                baseline_min_frames=baseline_min_frames,
+                baseline_max_frames=baseline_max_frames,
+                arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
+                early_seconds=early_seconds,
+                early_min_frames=early_min_frames,
+                early_max_frames=early_max_frames,
+            )
+            temporal_metrics.update(
+                {f"student_vs_grasp_{key}": val for key, val in student_vs_grasp_metrics.items()}
+            )
         if 'benign' in masks_np and masks_np.get('benign', None) is not None and masks_np['benign'].any():
             dl_metrics = compute_temporal_metrics(
                 gt_mag_np,
@@ -2873,6 +2960,53 @@ def eval_sample(
             )
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
+            benign_student_vs_grasp_metrics = compute_temporal_metrics(
+                grasp_mag_np,
+                recon_mag_np,
+                masks_np['benign'],
+                aif_time_points,
+                baseline_mode=baseline_mode,
+                baseline_seconds=baseline_seconds,
+                baseline_fraction=baseline_fraction,
+                baseline_min_frames=baseline_min_frames,
+                baseline_max_frames=baseline_max_frames,
+                arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
+                early_seconds=early_seconds,
+                early_min_frames=early_min_frames,
+                early_max_frames=early_max_frames,
+            )
+            temporal_metrics.update(
+                {
+                    f"benign_student_vs_grasp_{key}": val
+                    for key, val in benign_student_vs_grasp_metrics.items()
+                }
+            )
+
+        # Explicitly track student-vs-GRASP image metrics to disambiguate references.
+        grasp_mag_for_metric = torch.from_numpy(grasp_mag_np).to(device=device, dtype=recon_mag_scaled.dtype)
+        grasp_mag_for_metric = rearrange(grasp_mag_for_metric, "h w t -> 1 1 t h w").contiguous()
+        sg_min = min(float(torch.min(recon_mag_scaled).item()), float(torch.min(grasp_mag_for_metric).item()))
+        sg_max = max(float(torch.max(recon_mag_scaled).item()), float(torch.max(grasp_mag_for_metric).item()))
+        if sg_max <= sg_min:
+            sg_max = sg_min + 1e-6
+        student_vs_grasp_ssim, student_vs_grasp_psnr, student_vs_grasp_mse, student_vs_grasp_lpips = (
+            calc_image_metrics(
+                recon_mag_scaled.contiguous(),
+                grasp_mag_for_metric,
+                (sg_min, sg_max),
+                device,
+            )
+        )
+        temporal_metrics.update(
+            {
+                "student_vs_grasp_ssim": float(student_vs_grasp_ssim),
+                "student_vs_grasp_psnr": float(student_vs_grasp_psnr),
+                "student_vs_grasp_mse": float(student_vs_grasp_mse),
+                "student_vs_grasp_lpips": float(student_vs_grasp_lpips),
+            }
+        )
         if extra_metrics:
             temporal_metrics.update(extra_metrics)
 

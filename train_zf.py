@@ -23,7 +23,7 @@ from transform import (
     BaselineEnhancementScale,
 )
 from ei import EILoss
-from mc import MCLoss, WeightedMAEMSELoss
+from mc import MCLoss, SSDULoss, WeightedMAEMSELoss
 from model_factory import build_recon_model, is_lsfp_model
 from radial_lsfp import MCNUFFT
 from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, GRASPRecon, sliding_window_inference, set_seed, save_csmap_png
@@ -234,6 +234,65 @@ def _as_int_scalar(val, default: int = 0) -> int:
         return int(val)
     except Exception:
         return int(default)
+
+
+def _normalize_metric_key(name) -> str:
+    return str(name).strip().lower().replace(" ", "_")
+
+
+def _resolve_early_stop_metric(metric_values: dict, metric_name: str):
+    key = _normalize_metric_key(metric_name)
+    aliases = {
+        "ssim": "dro_ssim",
+        "eval_ssim": "dro_ssim",
+        "psnr": "dro_psnr",
+        "eval_psnr": "dro_psnr",
+        "mse": "dro_mse",
+        "eval_mse": "dro_mse",
+        "lpips": "dro_lpips",
+        "eval_lpips": "dro_lpips",
+        "curve_corr": "dro_curve_corr",
+        "rho_full": "rho_full",
+        "mae_full": "mae_full",
+        "rho_early": "rho_early",
+        "mae_early": "mae_early",
+        "t_arr_error": "t_arr_error",
+        "mae_washin": "mae_washin",
+        "iauc10_error": "iauc10_error",
+        "mae_peak": "mae_peak",
+        "t_peak_error": "t_peak_error",
+        "non_dro_mae": "non_dro_mae",
+        "non_dro_mse": "non_dro_mse",
+        "val_mc": "val_mc_loss",
+        "val_ei": "val_ei_loss",
+        "val_adj": "val_adj_loss",
+        "train_mc": "train_mc_loss",
+        "ssdu": "train_ssdu_loss",
+        "train_ssdu": "train_ssdu_loss",
+        "train_ei": "train_ei_loss",
+        "train_rebin": "train_rebin_loss",
+        "train_sd": "train_supervised_distill_loss",
+    }
+    canonical = aliases.get(key, key)
+    if canonical not in metric_values:
+        return canonical, None
+    value = metric_values[canonical]
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return canonical, None
+    if not np.isfinite(value):
+        return canonical, None
+    return canonical, value
+
+
+def _metric_improved(new_value: float, best_value: float, mode: str, min_delta: float) -> bool:
+    mode_norm = str(mode).strip().lower()
+    if mode_norm == "max":
+        return new_value > (best_value + min_delta)
+    if mode_norm == "min":
+        return new_value < (best_value - min_delta)
+    raise ValueError("training.early_stopping.mode must be 'max' or 'min'.")
 
 
 def _build_nufft_getter(device, traj_method: str):
@@ -749,6 +808,7 @@ def _gate_compare(metric_value: float, threshold: float, mode: str) -> bool:
 def _resolve_gate_metric_value(
     metric_name: str,
     train_mc_losses,
+    train_ssdu_losses,
     val_mc_losses,
     train_ei_losses,
     val_ei_losses,
@@ -759,6 +819,8 @@ def _resolve_gate_metric_value(
     name = str(metric_name).strip().lower()
     if name == "train_mc_loss":
         return _latest_finite(train_mc_losses)
+    if name == "train_ssdu_loss":
+        return _latest_finite(train_ssdu_losses)
     if name == "val_mc_loss":
         return _latest_finite(val_mc_losses)
     if name == "train_ei_loss":
@@ -773,7 +835,8 @@ def _resolve_gate_metric_value(
         return _latest_finite(eval_curve_corrs)
     raise ValueError(
         f"Unsupported activation_gate metric '{metric_name}'. "
-        "Expected one of: train_mc_loss, val_mc_loss, train_ei_loss, val_ei_loss, eval_ssim, eval_psnr, eval_curve_corr."
+        "Expected one of: train_mc_loss, train_ssdu_loss, val_mc_loss, train_ei_loss, "
+        "val_ei_loss, eval_ssim, eval_psnr, eval_curve_corr."
     )
 
 
@@ -1178,6 +1241,33 @@ def main():
 
     losses_cfg = config["model"]["losses"]
     mc_loss_weight = float(losses_cfg["mc_loss"]["weight"])
+    ssdu_cfg = losses_cfg.get("ssdu_loss", {})
+    if ssdu_cfg is None:
+        ssdu_cfg = {}
+    if not isinstance(ssdu_cfg, dict):
+        raise TypeError("model.losses.ssdu_loss must be a mapping.")
+    use_ssdu_loss = bool(ssdu_cfg.get("enable", False))
+    ssdu_target_w = float(ssdu_cfg.get("weight", 0.0))
+    ssdu_warmup = int(ssdu_cfg.get("warmup", 0))
+    ssdu_duration_steps = int(ssdu_cfg.get("duration_steps", 0))
+    ssdu_metric_name = str(ssdu_cfg.get("metric", "MSE")).strip().upper()
+    ssdu_holdout_fraction = float(ssdu_cfg.get("holdout_fraction", 0.2))
+    ssdu_seed_mode = str(ssdu_cfg.get("seed_mode", "step")).strip().lower()
+    ssdu_seed_base = int(ssdu_cfg.get("seed_base", 0))
+    ssdu_min_heldout_spokes = int(ssdu_cfg.get("min_heldout_spokes", 1))
+    if ssdu_warmup < 0:
+        raise ValueError("model.losses.ssdu_loss.warmup must be >= 0.")
+    if ssdu_duration_steps < 0:
+        raise ValueError("model.losses.ssdu_loss.duration_steps must be >= 0.")
+    if ssdu_target_w < 0:
+        raise ValueError("model.losses.ssdu_loss.weight must be >= 0.")
+    if not (0.0 < ssdu_holdout_fraction < 1.0):
+        raise ValueError("model.losses.ssdu_loss.holdout_fraction must be in (0, 1).")
+    if ssdu_seed_mode not in {"step", "none"}:
+        raise ValueError("model.losses.ssdu_loss.seed_mode must be one of: step, none.")
+    if ssdu_min_heldout_spokes < 1:
+        raise ValueError("model.losses.ssdu_loss.min_heldout_spokes must be >= 1.")
+
     adj_loss_cfg = losses_cfg.get("adj_loss", {})
     if not isinstance(adj_loss_cfg, dict):
         raise TypeError(
@@ -1443,6 +1533,132 @@ def main():
         "fft_norm": str(supervised_freq_cfg.get("fft_norm", "ortho")),
     }
 
+    supervised_multiobj_cfg_raw = supervised_distill_cfg.get("multiobjective", {})
+    if supervised_multiobj_cfg_raw is None:
+        supervised_multiobj_cfg_raw = {}
+    if isinstance(supervised_multiobj_cfg_raw, bool):
+        supervised_multiobj_cfg_raw = {"enable": bool(supervised_multiobj_cfg_raw)}
+    if not isinstance(supervised_multiobj_cfg_raw, dict):
+        raise TypeError("model.losses.supervised_distill.multiobjective must be a mapping.")
+
+    multiobj_image_cfg_raw = supervised_multiobj_cfg_raw.get("image", {})
+    if multiobj_image_cfg_raw is None:
+        multiobj_image_cfg_raw = {}
+    if isinstance(multiobj_image_cfg_raw, bool):
+        multiobj_image_cfg_raw = {"enable": bool(multiobj_image_cfg_raw)}
+    if not isinstance(multiobj_image_cfg_raw, dict):
+        raise TypeError("model.losses.supervised_distill.multiobjective.image must be a mapping.")
+
+    multiobj_temporal_cfg_raw = supervised_multiobj_cfg_raw.get("temporal", {})
+    if multiobj_temporal_cfg_raw is None:
+        multiobj_temporal_cfg_raw = {}
+    if isinstance(multiobj_temporal_cfg_raw, bool):
+        multiobj_temporal_cfg_raw = {"enable": bool(multiobj_temporal_cfg_raw)}
+    if not isinstance(multiobj_temporal_cfg_raw, dict):
+        raise TypeError("model.losses.supervised_distill.multiobjective.temporal must be a mapping.")
+
+    multiobj_adaptive_cfg_raw = supervised_multiobj_cfg_raw.get("adaptive", {})
+    if multiobj_adaptive_cfg_raw is None:
+        multiobj_adaptive_cfg_raw = {}
+    if isinstance(multiobj_adaptive_cfg_raw, bool):
+        multiobj_adaptive_cfg_raw = {"enable": bool(multiobj_adaptive_cfg_raw)}
+    if not isinstance(multiobj_adaptive_cfg_raw, dict):
+        raise TypeError("model.losses.supervised_distill.multiobjective.adaptive must be a mapping.")
+
+    multiobj_temporal_lags_raw = multiobj_temporal_cfg_raw.get(
+        "lags",
+        multiobj_temporal_cfg_raw.get("temporal_diff_lags", supervised_distill_temporal_diff_lags),
+    )
+    if isinstance(multiobj_temporal_lags_raw, (int, np.integer)):
+        multiobj_temporal_lags = [int(multiobj_temporal_lags_raw)]
+    elif isinstance(multiobj_temporal_lags_raw, (list, tuple)):
+        multiobj_temporal_lags = [int(x) for x in multiobj_temporal_lags_raw]
+    else:
+        raise TypeError(
+            "model.losses.supervised_distill.multiobjective.temporal.lags must be an int or list of ints."
+        )
+    if not multiobj_temporal_lags:
+        raise ValueError("model.losses.supervised_distill.multiobjective.temporal.lags must be non-empty.")
+    if any(int(x) < 1 for x in multiobj_temporal_lags):
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.temporal.lags values must be >= 1."
+        )
+
+    multiobj_temporal_lag_weights_raw = multiobj_temporal_cfg_raw.get(
+        "lag_weights",
+        multiobj_temporal_cfg_raw.get("temporal_diff_lag_weights", None),
+    )
+    if multiobj_temporal_lag_weights_raw is None:
+        multiobj_temporal_lag_weights = [
+            1.0 / float(len(multiobj_temporal_lags))
+            for _ in multiobj_temporal_lags
+        ]
+    else:
+        if not isinstance(multiobj_temporal_lag_weights_raw, (list, tuple)):
+            raise TypeError(
+                "model.losses.supervised_distill.multiobjective.temporal.lag_weights must be a list of numbers."
+            )
+        multiobj_temporal_lag_weights = [float(x) for x in multiobj_temporal_lag_weights_raw]
+        if len(multiobj_temporal_lag_weights) != len(multiobj_temporal_lags):
+            raise ValueError(
+                "model.losses.supervised_distill.multiobjective.temporal.lag_weights "
+                "must match temporal.lags length."
+            )
+        if any(w < 0 for w in multiobj_temporal_lag_weights):
+            raise ValueError(
+                "model.losses.supervised_distill.multiobjective.temporal.lag_weights values must be >= 0."
+            )
+        lag_w_sum = float(sum(multiobj_temporal_lag_weights))
+        if lag_w_sum <= 0:
+            raise ValueError(
+                "model.losses.supervised_distill.multiobjective.temporal.lag_weights must sum to > 0."
+            )
+        multiobj_temporal_lag_weights = [
+            float(w) / lag_w_sum for w in multiobj_temporal_lag_weights
+        ]
+
+    multiobj_temporal_arrival_cfg = multiobj_temporal_cfg_raw.get("arrival_weighting", None)
+    if multiobj_temporal_arrival_cfg is None:
+        multiobj_temporal_arrival_cfg = supervised_arrival_weight_cfg
+    elif isinstance(multiobj_temporal_arrival_cfg, bool):
+        if multiobj_temporal_arrival_cfg:
+            multiobj_temporal_arrival_cfg = dict(supervised_arrival_weight_cfg)
+        else:
+            multiobj_temporal_arrival_cfg = dict(supervised_arrival_weight_cfg)
+            multiobj_temporal_arrival_cfg["enable"] = False
+    elif not isinstance(multiobj_temporal_arrival_cfg, dict):
+        raise TypeError(
+            "model.losses.supervised_distill.multiobjective.temporal.arrival_weighting "
+            "must be a bool or mapping."
+        )
+
+    supervised_multiobj_cfg = {
+        "enable": bool(supervised_multiobj_cfg_raw.get("enable", False)),
+        "image": {
+            "mode": str(multiobj_image_cfg_raw.get("mode", "absolute")),
+            "metric": str(multiobj_image_cfg_raw.get("metric", "MSE")),
+            "weight": float(multiobj_image_cfg_raw.get("weight", 1.0)),
+        },
+        "temporal": {
+            "mode": str(multiobj_temporal_cfg_raw.get("mode", "temporal_difference")),
+            "metric": str(multiobj_temporal_cfg_raw.get("metric", supervised_distill_metric_name)),
+            "weight": float(multiobj_temporal_cfg_raw.get("weight", 1.0)),
+            "lags": multiobj_temporal_lags,
+            "lag_weights": multiobj_temporal_lag_weights,
+            "arrival_weighting": multiobj_temporal_arrival_cfg,
+        },
+        "adaptive": {
+            "enable": bool(multiobj_adaptive_cfg_raw.get("enable", True)),
+            "start_step": int(multiobj_adaptive_cfg_raw.get("start_step", 1)),
+            "image_tolerance": float(multiobj_adaptive_cfg_raw.get("image_tolerance", 0.01)),
+            "up_mult": float(multiobj_adaptive_cfg_raw.get("up_mult", 1.05)),
+            "down_mult": float(multiobj_adaptive_cfg_raw.get("down_mult", 0.9)),
+            "min_scale": float(multiobj_adaptive_cfg_raw.get("min_scale", 0.25)),
+            "max_scale": float(multiobj_adaptive_cfg_raw.get("max_scale", 4.0)),
+            "ema_beta": float(multiobj_adaptive_cfg_raw.get("ema_beta", 0.8)),
+        },
+    }
+
     if supervised_distill_warmup < 0:
         raise ValueError("model.losses.supervised_distill.warmup must be >= 0.")
     if supervised_distill_duration_steps < 0:
@@ -1505,8 +1721,77 @@ def main():
         raise ValueError(
             "model.losses.supervised_distill.frequency_loss.metric must be one of: MAE, MSE."
         )
+    if str(supervised_multiobj_cfg["image"]["mode"]).strip().lower() not in valid_temporal_modes:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.image.mode must be one of: "
+            "absolute, baseline_subtracted, percent_enhancement, temporal_difference."
+        )
+    if str(supervised_multiobj_cfg["temporal"]["mode"]).strip().lower() not in valid_temporal_modes:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.temporal.mode must be one of: "
+            "absolute, baseline_subtracted, percent_enhancement, temporal_difference."
+        )
+    if str(supervised_multiobj_cfg["image"]["metric"]).strip().upper() not in {"MAE", "MSE"}:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.image.metric must be one of: MAE, MSE."
+        )
+    if str(supervised_multiobj_cfg["temporal"]["metric"]).strip().upper() not in {"MAE", "MSE"}:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.temporal.metric must be one of: MAE, MSE."
+        )
+    if float(supervised_multiobj_cfg["image"]["weight"]) < 0 or float(supervised_multiobj_cfg["temporal"]["weight"]) < 0:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective image/temporal weights must be >= 0."
+        )
+    if (
+        float(supervised_multiobj_cfg["image"]["weight"]) <= 0
+        and float(supervised_multiobj_cfg["temporal"]["weight"]) <= 0
+    ):
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective requires image.weight > 0 or temporal.weight > 0."
+        )
+    multiobj_adaptive_cfg = supervised_multiobj_cfg["adaptive"]
+    if int(multiobj_adaptive_cfg["start_step"]) < 0:
+        raise ValueError("model.losses.supervised_distill.multiobjective.adaptive.start_step must be >= 0.")
+    if float(multiobj_adaptive_cfg["image_tolerance"]) < 0:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.adaptive.image_tolerance must be >= 0."
+        )
+    if float(multiobj_adaptive_cfg["up_mult"]) <= 0 or float(multiobj_adaptive_cfg["down_mult"]) <= 0:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.adaptive up_mult/down_mult must be > 0."
+        )
+    if float(multiobj_adaptive_cfg["min_scale"]) <= 0 or float(multiobj_adaptive_cfg["max_scale"]) <= 0:
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.adaptive min_scale/max_scale must be > 0."
+        )
+    if float(multiobj_adaptive_cfg["min_scale"]) > float(multiobj_adaptive_cfg["max_scale"]):
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.adaptive.min_scale must be <= max_scale."
+        )
+    if not (0.0 <= float(multiobj_adaptive_cfg["ema_beta"]) < 1.0):
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.adaptive.ema_beta must be in [0, 1)."
+        )
+    if (
+        bool(supervised_multiobj_cfg.get("enable", False))
+        and
+        bool(multiobj_adaptive_cfg.get("enable", False))
+        and float(supervised_multiobj_cfg["image"]["weight"]) <= 0
+    ):
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.adaptive.enable=true requires "
+            "model.losses.supervised_distill.multiobjective.image.weight > 0."
+        )
     if use_supervised_distill and use_teacher_distill:
         raise ValueError("Enable only one distillation path: teacher_distill or supervised_distill.")
+    use_supervised_multiobjective = bool(use_supervised_distill and supervised_multiobj_cfg.get("enable", False))
+    if use_supervised_multiobjective and supervised_curriculum_cfg.get("enable", False):
+        raise ValueError(
+            "model.losses.supervised_distill.multiobjective.enable=true is not compatible with "
+            "model.losses.supervised_distill.curriculum.enable=true. "
+            "Disable one path to avoid ambiguous temporal supervision."
+        )
 
     activation_gate_cfg = losses_cfg.get("activation_gate", {})
     if activation_gate_cfg is None:
@@ -1572,6 +1857,26 @@ def main():
                 "training.progressive_unfreezing.keep_trainable_patterns is required when "
                 "training.progressive_unfreezing.enable=true for non-temporal-mamba models."
             )
+
+    early_stop_cfg = config.get("training", {}).get("early_stopping", {})
+    if early_stop_cfg is None:
+        early_stop_cfg = {}
+    if not isinstance(early_stop_cfg, dict):
+        raise TypeError("training.early_stopping must be a mapping.")
+    early_stop_enabled = bool(early_stop_cfg.get("enabled", False))
+    early_stop_metric = str(early_stop_cfg.get("metric", "dro_psnr"))
+    early_stop_mode = str(early_stop_cfg.get("mode", "max")).strip().lower()
+    if early_stop_mode not in {"max", "min"}:
+        raise ValueError("training.early_stopping.mode must be 'max' or 'min'.")
+    early_stop_min_step = int(early_stop_cfg.get("min_step", 0))
+    if early_stop_min_step < 0:
+        raise ValueError("training.early_stopping.min_step must be >= 0.")
+    early_stop_patience_evals = int(early_stop_cfg.get("patience_evals", 0))
+    if early_stop_patience_evals < 0:
+        raise ValueError("training.early_stopping.patience_evals must be >= 0.")
+    early_stop_min_delta = float(early_stop_cfg.get("min_delta", 0.0))
+    if early_stop_min_delta < 0:
+        raise ValueError("training.early_stopping.min_delta must be >= 0.")
 
     H, W = config["data"]["height"], config["data"]["width"]
     N_time, N_samples, N_coils = (
@@ -2054,6 +2359,13 @@ def main():
                 _save_run_state(run_state_path, run_state)
             print(f"[RunState] Total parameters: {total_params:,}")
             print(f"[RunState] Trainable parameters: {trainable_params:,}")
+        if early_stop_enabled:
+            print(
+                "[EarlyStopping] enabled: "
+                f"metric={early_stop_metric}, mode={early_stop_mode}, "
+                f"patience_evals={early_stop_patience_evals}, min_delta={early_stop_min_delta}, "
+                f"min_step={early_stop_min_step}"
+            )
 
 
     optimizer = torch.optim.AdamW(
@@ -2165,6 +2477,40 @@ def main():
         raise ValueError(
             f"Unsupported MC Loss Metric '{mc_metric_name}'. "
             "Expected one of: MSE, MAE, MIXED."
+        )
+
+    if ssdu_metric_name == "MSE":
+        ssdu_metric = torch.nn.MSELoss()
+    elif ssdu_metric_name == "MAE":
+        ssdu_metric = torch.nn.L1Loss()
+    elif ssdu_metric_name in {"MIXED", "MAE_MSE_MIX", "MIXED_MAE_MSE"}:
+        ssdu_metric = WeightedMAEMSELoss(
+            mae_weight=float(ssdu_cfg.get("mae_weight", 1.0)),
+            mse_weight=float(ssdu_cfg.get("mse_weight", 0.02)),
+        )
+    else:
+        raise ValueError(
+            f"Unsupported SSDU Loss Metric '{ssdu_metric_name}'. "
+            "Expected one of: MSE, MAE, MIXED."
+        )
+    ssdu_loss_fn = (
+        SSDULoss(
+            model_type=model_type,
+            holdout_fraction=ssdu_holdout_fraction,
+            metric=ssdu_metric,
+            seed_mode=ssdu_seed_mode,
+            seed_base=ssdu_seed_base,
+            min_heldout_spokes=ssdu_min_heldout_spokes,
+        )
+        if use_ssdu_loss
+        else None
+    )
+    if use_ssdu_loss and (global_rank == 0 or not config['training']['multigpu']):
+        print(
+            "[SSDU] "
+            f"metric={ssdu_metric_name}, holdout_fraction={ssdu_holdout_fraction}, "
+            f"weight={ssdu_target_w}, warmup={ssdu_warmup}, duration_steps={ssdu_duration_steps}, "
+            f"seed_mode={ssdu_seed_mode}, seed_base={ssdu_seed_base}"
         )
 
 
@@ -2287,6 +2633,18 @@ def main():
             supervised_distill_metric_name,
             "model.losses.supervised_distill",
         )
+        if use_supervised_multiobjective:
+            _, supervised_multiobj_image_metric_name = _build_pointwise_metric(
+                supervised_multiobj_cfg["image"]["metric"],
+                "model.losses.supervised_distill.multiobjective.image",
+            )
+            _, supervised_multiobj_temporal_metric_name = _build_pointwise_metric(
+                supervised_multiobj_cfg["temporal"]["metric"],
+                "model.losses.supervised_distill.multiobjective.temporal",
+            )
+        else:
+            supervised_multiobj_image_metric_name = None
+            supervised_multiobj_temporal_metric_name = None
         if global_rank == 0 or not config['training']['multigpu']:
             print(
                 "[SupervisedDistill] "
@@ -2300,8 +2658,24 @@ def main():
                 f"curriculum={supervised_curriculum_cfg}, "
                 f"frequency_loss={supervised_freq_cfg}"
             )
+            if use_supervised_multiobjective:
+                print(
+                    "[SupervisedDistill][MultiObjective] "
+                    f"image(mode={supervised_multiobj_cfg['image']['mode']}, "
+                    f"metric={supervised_multiobj_image_metric_name}, "
+                    f"weight={float(supervised_multiobj_cfg['image']['weight']):.4g}), "
+                    f"temporal(mode={supervised_multiobj_cfg['temporal']['mode']}, "
+                    f"metric={supervised_multiobj_temporal_metric_name}, "
+                    f"weight={float(supervised_multiobj_cfg['temporal']['weight']):.4g}, "
+                    f"lags={list(supervised_multiobj_cfg['temporal']['lags'])}, "
+                    f"lag_weights={list(supervised_multiobj_cfg['temporal']['lag_weights'])}, "
+                    f"arrival_weighting={supervised_multiobj_cfg['temporal']['arrival_weighting']}), "
+                    f"adaptive={supervised_multiobj_cfg['adaptive']}"
+                )
     else:
         supervised_distill_metric_name = None
+        supervised_multiobj_image_metric_name = None
+        supervised_multiobj_temporal_metric_name = None
 
     if use_ei_loss and ei_gate.get("enable", False) and ei_gradnorm_transition_enable:
         ei_gradnorm_transition_enable = False
@@ -2617,6 +2991,8 @@ def main():
         train_adj_losses = train_curves["train_adj_losses"]
         val_adj_losses = val_curves["val_adj_losses"]
         weighted_train_mc_losses = train_curves["weighted_train_mc_losses"]
+        train_ssdu_losses = train_curves.get("train_ssdu_losses", [])
+        weighted_train_ssdu_losses = train_curves.get("weighted_train_ssdu_losses", [])
         weighted_train_ei_losses = train_curves["weighted_train_ei_losses"]
         weighted_train_adj_losses = train_curves["weighted_train_adj_losses"]
         train_rebin_losses = train_curves.get("train_rebin_losses", [])
@@ -2625,6 +3001,16 @@ def main():
         weighted_train_teacher_distill_losses = train_curves.get("weighted_train_teacher_distill_losses", [])
         train_supervised_distill_losses = train_curves.get("train_supervised_distill_losses", [])
         weighted_train_supervised_distill_losses = train_curves.get("weighted_train_supervised_distill_losses", [])
+        train_supervised_distill_image_losses = train_curves.get("train_supervised_distill_image_losses", [])
+        weighted_train_supervised_distill_image_losses = train_curves.get(
+            "weighted_train_supervised_distill_image_losses",
+            [],
+        )
+        train_supervised_distill_temporal_losses = train_curves.get("train_supervised_distill_temporal_losses", [])
+        weighted_train_supervised_distill_temporal_losses = train_curves.get(
+            "weighted_train_supervised_distill_temporal_losses",
+            [],
+        )
         train_supervised_distill_freq_losses = train_curves.get("train_supervised_distill_freq_losses", [])
         weighted_train_supervised_distill_freq_losses = train_curves.get(
             "weighted_train_supervised_distill_freq_losses",
@@ -2643,10 +3029,20 @@ def main():
         lr_steps = train_curves.get("lr_steps", [])
         ei_weight_history = train_curves.get("ei_weight_history", [])
         ei_weight_steps = train_curves.get("ei_weight_steps", [])
+        ssdu_weight_history = train_curves.get("ssdu_weight_history", [])
+        ssdu_weight_steps = train_curves.get("ssdu_weight_steps", [])
         teacher_distill_weight_history = train_curves.get("teacher_distill_weight_history", [])
         teacher_distill_weight_steps = train_curves.get("teacher_distill_weight_steps", [])
         supervised_distill_weight_history = train_curves.get("supervised_distill_weight_history", [])
         supervised_distill_weight_steps = train_curves.get("supervised_distill_weight_steps", [])
+        supervised_multiobj_temporal_scale_history = train_curves.get(
+            "supervised_multiobj_temporal_scale_history",
+            [],
+        )
+        supervised_multiobj_temporal_scale_steps = train_curves.get(
+            "supervised_multiobj_temporal_scale_steps",
+            [],
+        )
         ei_gradnorm_ratio_history = train_curves.get("ei_gradnorm_ratio_history", [])
         ei_gradnorm_ratio_steps = train_curves.get("ei_gradnorm_ratio_steps", [])
         rebin_weight_history = train_curves.get("rebin_weight_history", [])
@@ -2668,10 +3064,44 @@ def main():
         ei_gradnorm_locked = bool(train_curves.get("ei_gradnorm_locked", False))
         ei_target_weight_base = float(train_curves.get("ei_target_weight_base", target_w_ei))
         ei_target_weight_effective = float(train_curves.get("ei_target_weight_effective", target_w_ei))
+        supervised_multiobj_temporal_scale = float(
+            train_curves.get("supervised_multiobj_temporal_scale", 1.0)
+        )
+        supervised_multiobj_image_ema_raw = train_curves.get("supervised_multiobj_image_ema", None)
+        if supervised_multiobj_image_ema_raw is None:
+            supervised_multiobj_image_ema = None
+        else:
+            supervised_multiobj_image_ema = float(supervised_multiobj_image_ema_raw)
+            if not np.isfinite(supervised_multiobj_image_ema):
+                supervised_multiobj_image_ema = None
+        supervised_multiobj_image_best_raw = train_curves.get("supervised_multiobj_image_best", None)
+        if supervised_multiobj_image_best_raw is None:
+            supervised_multiobj_image_best = None
+        else:
+            supervised_multiobj_image_best = float(supervised_multiobj_image_best_raw)
+            if not np.isfinite(supervised_multiobj_image_best):
+                supervised_multiobj_image_best = None
+        if (not np.isfinite(supervised_multiobj_temporal_scale)) or supervised_multiobj_temporal_scale <= 0:
+            supervised_multiobj_temporal_scale = 1.0
+        if (
+            "supervised_multiobj_temporal_scale" not in train_curves
+            and supervised_multiobj_temporal_scale_history
+        ):
+            last_scale = supervised_multiobj_temporal_scale_history[-1]
+            try:
+                last_scale = float(last_scale)
+                if np.isfinite(last_scale) and last_scale > 0:
+                    supervised_multiobj_temporal_scale = last_scale
+            except (TypeError, ValueError):
+                pass
         eval_ssims = eval_curves["eval_ssims"]
         eval_psnrs = eval_curves["eval_psnrs"]
         eval_mses = eval_curves["eval_mses"]
         eval_lpipses = eval_curves["eval_lpipses"]
+        eval_student_vs_grasp_ssims = eval_curves.get("eval_student_vs_grasp_ssims", [])
+        eval_student_vs_grasp_psnrs = eval_curves.get("eval_student_vs_grasp_psnrs", [])
+        eval_student_vs_grasp_mses = eval_curves.get("eval_student_vs_grasp_mses", [])
+        eval_student_vs_grasp_lpipses = eval_curves.get("eval_student_vs_grasp_lpipses", [])
         eval_dc_mses = eval_curves["eval_dc_mses"]
         eval_dc_maes = eval_curves["eval_dc_maes"]
         eval_raw_dc_mses = eval_curves.get("eval_raw_dc_mses", [])
@@ -2693,6 +3123,18 @@ def main():
         eval_iauc10_errs = eval_curves.get("eval_iauc10_errs", [])
         eval_peak_errs = eval_curves.get("eval_peak_errs", [])
         eval_ttpeak_err_secs = eval_curves.get("eval_ttpeak_err_secs", [])
+        eval_student_vs_grasp_rho_fulls = eval_curves.get("eval_student_vs_grasp_rho_fulls", [])
+        eval_student_vs_grasp_curve_maes = eval_curves.get("eval_student_vs_grasp_curve_maes", [])
+        eval_student_vs_grasp_early_corrs = eval_curves.get("eval_student_vs_grasp_early_corrs", [])
+        eval_student_vs_grasp_early_maes = eval_curves.get("eval_student_vs_grasp_early_maes", [])
+        eval_student_vs_grasp_ttae_secs = eval_curves.get("eval_student_vs_grasp_ttae_secs", [])
+        eval_student_vs_grasp_washin_maes = eval_curves.get("eval_student_vs_grasp_washin_maes", [])
+        eval_student_vs_grasp_iauc10_errs = eval_curves.get("eval_student_vs_grasp_iauc10_errs", [])
+        eval_student_vs_grasp_peak_errs = eval_curves.get("eval_student_vs_grasp_peak_errs", [])
+        eval_student_vs_grasp_ttpeak_err_secs = eval_curves.get(
+            "eval_student_vs_grasp_ttpeak_err_secs",
+            [],
+        )
         eval_dl_dc_mae_bestfits = eval_curves.get("eval_dl_dc_mae_bestfits", [])
         eval_raw_ssdu_nmses = eval_curves.get("eval_raw_ssdu_nmses", [])
         avg_grasp_rho_full = eval_curves.get("avg_grasp_rho_full", float("nan"))
@@ -2720,6 +3162,8 @@ def main():
         train_adj_losses = []
         val_adj_losses = []
         weighted_train_mc_losses = []
+        train_ssdu_losses = []
+        weighted_train_ssdu_losses = []
         weighted_train_ei_losses = []
         weighted_train_adj_losses = []
         train_rebin_losses = []
@@ -2728,6 +3172,10 @@ def main():
         weighted_train_teacher_distill_losses = []
         train_supervised_distill_losses = []
         weighted_train_supervised_distill_losses = []
+        train_supervised_distill_image_losses = []
+        weighted_train_supervised_distill_image_losses = []
+        train_supervised_distill_temporal_losses = []
+        weighted_train_supervised_distill_temporal_losses = []
         train_supervised_distill_freq_losses = []
         weighted_train_supervised_distill_freq_losses = []
         supervised_distill_valid_fraction_history = []
@@ -2737,10 +3185,14 @@ def main():
         lr_steps = []
         ei_weight_history = []
         ei_weight_steps = []
+        ssdu_weight_history = []
+        ssdu_weight_steps = []
         teacher_distill_weight_history = []
         teacher_distill_weight_steps = []
         supervised_distill_weight_history = []
         supervised_distill_weight_steps = []
+        supervised_multiobj_temporal_scale_history = []
+        supervised_multiobj_temporal_scale_steps = []
         ei_gradnorm_ratio_history = []
         ei_gradnorm_ratio_steps = []
         rebin_weight_history = []
@@ -2750,10 +3202,17 @@ def main():
         ei_gradnorm_locked = False
         ei_target_weight_base = float(target_w_ei)
         ei_target_weight_effective = float(target_w_ei)
+        supervised_multiobj_temporal_scale = 1.0
+        supervised_multiobj_image_ema = None
+        supervised_multiobj_image_best = None
         eval_ssims = []
         eval_lpipses = []
         eval_psnrs = []
         eval_mses = []
+        eval_student_vs_grasp_ssims = []
+        eval_student_vs_grasp_psnrs = []
+        eval_student_vs_grasp_mses = []
+        eval_student_vs_grasp_lpipses = []
         eval_dc_mses = []
         eval_dc_maes = []
         eval_raw_dc_mses = []
@@ -2775,6 +3234,15 @@ def main():
         eval_iauc10_errs = []
         eval_peak_errs = []
         eval_ttpeak_err_secs = []
+        eval_student_vs_grasp_rho_fulls = []
+        eval_student_vs_grasp_curve_maes = []
+        eval_student_vs_grasp_early_corrs = []
+        eval_student_vs_grasp_early_maes = []
+        eval_student_vs_grasp_ttae_secs = []
+        eval_student_vs_grasp_washin_maes = []
+        eval_student_vs_grasp_iauc10_errs = []
+        eval_student_vs_grasp_peak_errs = []
+        eval_student_vs_grasp_ttpeak_err_secs = []
         eval_dl_dc_mae_bestfits = []
         eval_raw_ssdu_nmses = []
         avg_grasp_rho_full = float("nan")
@@ -2847,6 +3315,8 @@ def main():
     best_checkpoint_path = os.path.join(output_dir, f'{exp_name}_best_model.pth')
     best_psnr = -np.inf
     best_step = None
+    early_stop_best_metric = None
+    early_stop_bad_evals = 0
     if resume_from_checkpoint:
         psnr_array = np.array(eval_psnrs, dtype=float)
         if psnr_array.size and np.isfinite(psnr_array).any():
@@ -2859,13 +3329,26 @@ def main():
         if global_rank == 0 or not config['training']['multigpu']:
             if best_step is not None:
                 print(f"[Checkpoint] Loaded best PSNR {best_psnr:.4f} from epoch {best_step}")
+        early_stop_best_metric_raw = train_curves.get("early_stop_best_metric", None)
+        if early_stop_best_metric_raw is not None:
+            try:
+                early_stop_best_metric = float(early_stop_best_metric_raw)
+            except (TypeError, ValueError):
+                early_stop_best_metric = None
+            if early_stop_best_metric is not None and not np.isfinite(early_stop_best_metric):
+                early_stop_best_metric = None
+        early_stop_bad_evals = int(train_curves.get("early_stop_bad_evals", 0))
+        if early_stop_bad_evals < 0:
+            early_stop_bad_evals = 0
 
     def _build_checkpoint_curves():
         train_curves = dict(
             train_mc_losses=train_mc_losses,
+            train_ssdu_losses=train_ssdu_losses,
             train_ei_losses=train_ei_losses,
             train_adj_losses=train_adj_losses,
             weighted_train_mc_losses=weighted_train_mc_losses,
+            weighted_train_ssdu_losses=weighted_train_ssdu_losses,
             weighted_train_ei_losses=weighted_train_ei_losses,
             weighted_train_adj_losses=weighted_train_adj_losses,
             train_rebin_losses=train_rebin_losses,
@@ -2874,6 +3357,10 @@ def main():
             weighted_train_teacher_distill_losses=weighted_train_teacher_distill_losses,
             train_supervised_distill_losses=train_supervised_distill_losses,
             weighted_train_supervised_distill_losses=weighted_train_supervised_distill_losses,
+            train_supervised_distill_image_losses=train_supervised_distill_image_losses,
+            weighted_train_supervised_distill_image_losses=weighted_train_supervised_distill_image_losses,
+            train_supervised_distill_temporal_losses=train_supervised_distill_temporal_losses,
+            weighted_train_supervised_distill_temporal_losses=weighted_train_supervised_distill_temporal_losses,
             train_supervised_distill_freq_losses=train_supervised_distill_freq_losses,
             weighted_train_supervised_distill_freq_losses=weighted_train_supervised_distill_freq_losses,
             supervised_distill_valid_fraction_history=supervised_distill_valid_fraction_history,
@@ -2883,10 +3370,17 @@ def main():
             lr_steps=lr_steps,
             ei_weight_history=ei_weight_history,
             ei_weight_steps=ei_weight_steps,
+            ssdu_weight_history=ssdu_weight_history,
+            ssdu_weight_steps=ssdu_weight_steps,
             teacher_distill_weight_history=teacher_distill_weight_history,
             teacher_distill_weight_steps=teacher_distill_weight_steps,
             supervised_distill_weight_history=supervised_distill_weight_history,
             supervised_distill_weight_steps=supervised_distill_weight_steps,
+            supervised_multiobj_temporal_scale_history=supervised_multiobj_temporal_scale_history,
+            supervised_multiobj_temporal_scale_steps=supervised_multiobj_temporal_scale_steps,
+            supervised_multiobj_temporal_scale=supervised_multiobj_temporal_scale,
+            supervised_multiobj_image_ema=supervised_multiobj_image_ema,
+            supervised_multiobj_image_best=supervised_multiobj_image_best,
             ei_gradnorm_ratio_history=ei_gradnorm_ratio_history,
             ei_gradnorm_ratio_steps=ei_gradnorm_ratio_steps,
             ei_gradnorm_ratio_ema=ei_gradnorm_ratio_ema,
@@ -2898,6 +3392,8 @@ def main():
             rebin_weight_steps=rebin_weight_steps,
             ei_gate_state=ei_gate,
             rebin_gate_state=rebin_gate,
+            early_stop_best_metric=early_stop_best_metric,
+            early_stop_bad_evals=early_stop_bad_evals,
         )
         val_curves = dict(
             val_mc_losses=val_mc_losses,
@@ -2909,6 +3405,10 @@ def main():
             eval_psnrs=eval_psnrs,
             eval_mses=eval_mses,
             eval_lpipses=eval_lpipses,
+            eval_student_vs_grasp_ssims=eval_student_vs_grasp_ssims,
+            eval_student_vs_grasp_psnrs=eval_student_vs_grasp_psnrs,
+            eval_student_vs_grasp_mses=eval_student_vs_grasp_mses,
+            eval_student_vs_grasp_lpipses=eval_student_vs_grasp_lpipses,
             eval_dc_mses=eval_dc_mses,
             eval_dc_maes=eval_dc_maes,
             eval_raw_dc_mses=eval_raw_dc_mses,
@@ -2930,6 +3430,15 @@ def main():
             eval_iauc10_errs=eval_iauc10_errs,
             eval_peak_errs=eval_peak_errs,
             eval_ttpeak_err_secs=eval_ttpeak_err_secs,
+            eval_student_vs_grasp_rho_fulls=eval_student_vs_grasp_rho_fulls,
+            eval_student_vs_grasp_curve_maes=eval_student_vs_grasp_curve_maes,
+            eval_student_vs_grasp_early_corrs=eval_student_vs_grasp_early_corrs,
+            eval_student_vs_grasp_early_maes=eval_student_vs_grasp_early_maes,
+            eval_student_vs_grasp_ttae_secs=eval_student_vs_grasp_ttae_secs,
+            eval_student_vs_grasp_washin_maes=eval_student_vs_grasp_washin_maes,
+            eval_student_vs_grasp_iauc10_errs=eval_student_vs_grasp_iauc10_errs,
+            eval_student_vs_grasp_peak_errs=eval_student_vs_grasp_peak_errs,
+            eval_student_vs_grasp_ttpeak_err_secs=eval_student_vs_grasp_ttpeak_err_secs,
             eval_dl_dc_mae_bestfits=eval_dl_dc_mae_bestfits,
             eval_raw_ssdu_nmses=eval_raw_ssdu_nmses,
             avg_grasp_rho_full=avg_grasp_rho_full,
@@ -2981,6 +3490,8 @@ def main():
     if checkpoint_before_loss_transitions:
         if use_ei_loss and warmup > 0:
             _register_transition_checkpoint(warmup, "pre_ei_loss")
+        if use_ssdu_loss and ssdu_warmup > 0:
+            _register_transition_checkpoint(ssdu_warmup, "pre_ssdu_loss")
         if use_rebin_loss and rebin_warmup > 0:
             _register_transition_checkpoint(rebin_warmup, "pre_rebin_loss")
         if use_teacher_distill and teacher_distill_warmup > 0:
@@ -3122,6 +3633,10 @@ def main():
         initial_eval_psnrs = []
         initial_eval_mses = []
         initial_eval_lpipses = []
+        initial_eval_student_vs_grasp_ssims = []
+        initial_eval_student_vs_grasp_psnrs = []
+        initial_eval_student_vs_grasp_mses = []
+        initial_eval_student_vs_grasp_lpipses = []
         initial_eval_dc_mses = []
         initial_eval_dc_maes = []
         initial_eval_curve_corrs = []
@@ -3142,6 +3657,15 @@ def main():
         initial_eval_iauc10_errs = []
         initial_eval_peak_errs = []
         initial_eval_ttpeak_err_secs = []
+        initial_eval_student_vs_grasp_rho_fulls = []
+        initial_eval_student_vs_grasp_curve_maes = []
+        initial_eval_student_vs_grasp_early_corrs = []
+        initial_eval_student_vs_grasp_early_maes = []
+        initial_eval_student_vs_grasp_ttae_secs = []
+        initial_eval_student_vs_grasp_washin_maes = []
+        initial_eval_student_vs_grasp_iauc10_errs = []
+        initial_eval_student_vs_grasp_peak_errs = []
+        initial_eval_student_vs_grasp_ttpeak_err_secs = []
         initial_eval_dl_dc_mae_bestfits = []
         initial_eval_raw_ssdu_nmses = []
 
@@ -3418,6 +3942,23 @@ def main():
                             grasp_iauc10_err = temporal_metrics.get("grasp_all_iauc10_err")
                             grasp_peak_err = temporal_metrics.get("grasp_all_peak_err")
                             grasp_ttpeak_err_sec = temporal_metrics.get("grasp_all_ttpeak_err_sec")
+                            student_vs_grasp_ssim = temporal_metrics.get("student_vs_grasp_ssim")
+                            student_vs_grasp_psnr = temporal_metrics.get("student_vs_grasp_psnr")
+                            student_vs_grasp_mse = temporal_metrics.get("student_vs_grasp_mse")
+                            student_vs_grasp_lpips = temporal_metrics.get("student_vs_grasp_lpips")
+                            student_vs_grasp_rho_full = temporal_metrics.get("student_vs_grasp_all_curve_corr")
+                            student_vs_grasp_curve_mae = temporal_metrics.get("student_vs_grasp_all_curve_mae")
+                            student_vs_grasp_early_corr = temporal_metrics.get("student_vs_grasp_all_early_corr")
+                            student_vs_grasp_early_mae = temporal_metrics.get("student_vs_grasp_all_early_mae")
+                            student_vs_grasp_ttae_sec = temporal_metrics.get("student_vs_grasp_all_ttae_sec")
+                            student_vs_grasp_washin_mae = temporal_metrics.get(
+                                "student_vs_grasp_all_wash_in_slope_err"
+                            )
+                            student_vs_grasp_iauc10_err = temporal_metrics.get("student_vs_grasp_all_iauc10_err")
+                            student_vs_grasp_peak_err = temporal_metrics.get("student_vs_grasp_all_peak_err")
+                            student_vs_grasp_ttpeak_err_sec = temporal_metrics.get(
+                                "student_vs_grasp_all_ttpeak_err_sec"
+                            )
                             dl_dc_mae_bestfit = temporal_metrics.get("dl_dc_mae_bestfit")
                             if rho_full is not None and np.isfinite(rho_full):
                                 initial_eval_rho_fulls.append(rho_full)
@@ -3437,6 +3978,61 @@ def main():
                                 initial_eval_peak_errs.append(peak_err)
                             if ttpeak_err_sec is not None and np.isfinite(ttpeak_err_sec):
                                 initial_eval_ttpeak_err_secs.append(ttpeak_err_sec)
+                            if student_vs_grasp_ssim is not None and np.isfinite(student_vs_grasp_ssim):
+                                initial_eval_student_vs_grasp_ssims.append(float(student_vs_grasp_ssim))
+                            if student_vs_grasp_psnr is not None and np.isfinite(student_vs_grasp_psnr):
+                                initial_eval_student_vs_grasp_psnrs.append(float(student_vs_grasp_psnr))
+                            if student_vs_grasp_mse is not None and np.isfinite(student_vs_grasp_mse):
+                                initial_eval_student_vs_grasp_mses.append(float(student_vs_grasp_mse))
+                            if student_vs_grasp_lpips is not None and np.isfinite(student_vs_grasp_lpips):
+                                initial_eval_student_vs_grasp_lpipses.append(float(student_vs_grasp_lpips))
+                            if (
+                                student_vs_grasp_rho_full is not None
+                                and np.isfinite(student_vs_grasp_rho_full)
+                            ):
+                                initial_eval_student_vs_grasp_rho_fulls.append(float(student_vs_grasp_rho_full))
+                            if (
+                                student_vs_grasp_curve_mae is not None
+                                and np.isfinite(student_vs_grasp_curve_mae)
+                            ):
+                                initial_eval_student_vs_grasp_curve_maes.append(float(student_vs_grasp_curve_mae))
+                            if (
+                                student_vs_grasp_early_corr is not None
+                                and np.isfinite(student_vs_grasp_early_corr)
+                            ):
+                                initial_eval_student_vs_grasp_early_corrs.append(float(student_vs_grasp_early_corr))
+                            if (
+                                student_vs_grasp_early_mae is not None
+                                and np.isfinite(student_vs_grasp_early_mae)
+                            ):
+                                initial_eval_student_vs_grasp_early_maes.append(float(student_vs_grasp_early_mae))
+                            if (
+                                student_vs_grasp_ttae_sec is not None
+                                and np.isfinite(student_vs_grasp_ttae_sec)
+                            ):
+                                initial_eval_student_vs_grasp_ttae_secs.append(float(student_vs_grasp_ttae_sec))
+                            if (
+                                student_vs_grasp_washin_mae is not None
+                                and np.isfinite(student_vs_grasp_washin_mae)
+                            ):
+                                initial_eval_student_vs_grasp_washin_maes.append(float(student_vs_grasp_washin_mae))
+                            if (
+                                student_vs_grasp_iauc10_err is not None
+                                and np.isfinite(student_vs_grasp_iauc10_err)
+                            ):
+                                initial_eval_student_vs_grasp_iauc10_errs.append(float(student_vs_grasp_iauc10_err))
+                            if (
+                                student_vs_grasp_peak_err is not None
+                                and np.isfinite(student_vs_grasp_peak_err)
+                            ):
+                                initial_eval_student_vs_grasp_peak_errs.append(float(student_vs_grasp_peak_err))
+                            if (
+                                student_vs_grasp_ttpeak_err_sec is not None
+                                and np.isfinite(student_vs_grasp_ttpeak_err_sec)
+                            ):
+                                initial_eval_student_vs_grasp_ttpeak_err_secs.append(
+                                    float(student_vs_grasp_ttpeak_err_sec)
+                                )
                             if grasp_rho_full is not None and np.isfinite(grasp_rho_full):
                                 grasp_rho_fulls.append(float(grasp_rho_full))
                             if grasp_curve_mae is not None and np.isfinite(grasp_curve_mae):
@@ -3640,6 +4236,71 @@ def main():
                 initial_eval_ttpeak_err_sec = (
                     np.mean(initial_eval_ttpeak_err_secs) if initial_eval_ttpeak_err_secs else np.nan
                 )
+                initial_eval_student_vs_grasp_ssim = (
+                    np.mean(initial_eval_student_vs_grasp_ssims)
+                    if initial_eval_student_vs_grasp_ssims
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_psnr = (
+                    np.mean(initial_eval_student_vs_grasp_psnrs)
+                    if initial_eval_student_vs_grasp_psnrs
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_mse = (
+                    np.mean(initial_eval_student_vs_grasp_mses)
+                    if initial_eval_student_vs_grasp_mses
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_lpips = (
+                    np.mean(initial_eval_student_vs_grasp_lpipses)
+                    if initial_eval_student_vs_grasp_lpipses
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_rho_full = (
+                    np.mean(initial_eval_student_vs_grasp_rho_fulls)
+                    if initial_eval_student_vs_grasp_rho_fulls
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_curve_mae = (
+                    np.mean(initial_eval_student_vs_grasp_curve_maes)
+                    if initial_eval_student_vs_grasp_curve_maes
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_early_corr = (
+                    np.mean(initial_eval_student_vs_grasp_early_corrs)
+                    if initial_eval_student_vs_grasp_early_corrs
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_early_mae = (
+                    np.mean(initial_eval_student_vs_grasp_early_maes)
+                    if initial_eval_student_vs_grasp_early_maes
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_ttae_sec = (
+                    np.mean(initial_eval_student_vs_grasp_ttae_secs)
+                    if initial_eval_student_vs_grasp_ttae_secs
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_washin_mae = (
+                    np.mean(initial_eval_student_vs_grasp_washin_maes)
+                    if initial_eval_student_vs_grasp_washin_maes
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_iauc10_err = (
+                    np.mean(initial_eval_student_vs_grasp_iauc10_errs)
+                    if initial_eval_student_vs_grasp_iauc10_errs
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_peak_err = (
+                    np.mean(initial_eval_student_vs_grasp_peak_errs)
+                    if initial_eval_student_vs_grasp_peak_errs
+                    else np.nan
+                )
+                initial_eval_student_vs_grasp_ttpeak_err_sec = (
+                    np.mean(initial_eval_student_vs_grasp_ttpeak_err_secs)
+                    if initial_eval_student_vs_grasp_ttpeak_err_secs
+                    else np.nan
+                )
                 initial_eval_dl_dc_mae_bestfit = (
                     np.mean(initial_eval_dl_dc_mae_bestfits) if initial_eval_dl_dc_mae_bestfits else np.nan
                 )
@@ -3651,6 +4312,10 @@ def main():
                 eval_psnrs.append(initial_eval_psnr)
                 eval_mses.append(initial_eval_mse)
                 eval_lpipses.append(initial_eval_lpips)
+                eval_student_vs_grasp_ssims.append(initial_eval_student_vs_grasp_ssim)
+                eval_student_vs_grasp_psnrs.append(initial_eval_student_vs_grasp_psnr)
+                eval_student_vs_grasp_mses.append(initial_eval_student_vs_grasp_mse)
+                eval_student_vs_grasp_lpipses.append(initial_eval_student_vs_grasp_lpips)
                 eval_dc_mses.append(initial_eval_dc_mse) 
                 eval_dc_maes.append(initial_eval_dc_mae) 
                 eval_raw_dc_mses.append(initial_eval_raw_dc_mse) 
@@ -3672,6 +4337,15 @@ def main():
                 eval_iauc10_errs.append(initial_eval_iauc10_err)
                 eval_peak_errs.append(initial_eval_peak_err)
                 eval_ttpeak_err_secs.append(initial_eval_ttpeak_err_sec)
+                eval_student_vs_grasp_rho_fulls.append(initial_eval_student_vs_grasp_rho_full)
+                eval_student_vs_grasp_curve_maes.append(initial_eval_student_vs_grasp_curve_mae)
+                eval_student_vs_grasp_early_corrs.append(initial_eval_student_vs_grasp_early_corr)
+                eval_student_vs_grasp_early_maes.append(initial_eval_student_vs_grasp_early_mae)
+                eval_student_vs_grasp_ttae_secs.append(initial_eval_student_vs_grasp_ttae_sec)
+                eval_student_vs_grasp_washin_maes.append(initial_eval_student_vs_grasp_washin_mae)
+                eval_student_vs_grasp_iauc10_errs.append(initial_eval_student_vs_grasp_iauc10_err)
+                eval_student_vs_grasp_peak_errs.append(initial_eval_student_vs_grasp_peak_err)
+                eval_student_vs_grasp_ttpeak_err_secs.append(initial_eval_student_vs_grasp_ttpeak_err_sec)
                 eval_dl_dc_mae_bestfits.append(initial_eval_dl_dc_mae_bestfit)
                 eval_raw_ssdu_nmses.append(initial_eval_raw_ssdu_nmse)
 
@@ -3691,6 +4365,14 @@ def main():
                     writer.add_scalar('Metric/PSNR', initial_eval_psnr, 0)
                     writer.add_scalar('Metric/MSE', initial_eval_mse, 0)
                     writer.add_scalar('Metric/LPIPS', initial_eval_lpips, 0)
+                    if np.isfinite(initial_eval_student_vs_grasp_ssim):
+                        writer.add_scalar('Metric/Student_vs_GRASP_SSIM', initial_eval_student_vs_grasp_ssim, 0)
+                    if np.isfinite(initial_eval_student_vs_grasp_psnr):
+                        writer.add_scalar('Metric/Student_vs_GRASP_PSNR', initial_eval_student_vs_grasp_psnr, 0)
+                    if np.isfinite(initial_eval_student_vs_grasp_mse):
+                        writer.add_scalar('Metric/Student_vs_GRASP_MSE', initial_eval_student_vs_grasp_mse, 0)
+                    if np.isfinite(initial_eval_student_vs_grasp_lpips):
+                        writer.add_scalar('Metric/Student_vs_GRASP_LPIPS', initial_eval_student_vs_grasp_lpips, 0)
                     writer.add_scalar('Metric/DC_MSE', initial_eval_dc_mse, 0)
                     writer.add_scalar('Metric/DC_MAE', initial_eval_dc_mae, 0)
                     writer.add_scalar('Metric/RAW_DC_MSE', initial_eval_raw_dc_mse, 0)
@@ -3728,6 +4410,60 @@ def main():
                         writer.add_scalar('Metric/Temporal_Peak_err', initial_eval_peak_err, 0)
                     if np.isfinite(initial_eval_ttpeak_err_sec):
                         writer.add_scalar('Metric/Temporal_TTPeak_err_sec', initial_eval_ttpeak_err_sec, 0)
+                    if np.isfinite(initial_eval_student_vs_grasp_rho_full):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Rho_full',
+                            initial_eval_student_vs_grasp_rho_full,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_curve_mae):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Curve_MAE',
+                            initial_eval_student_vs_grasp_curve_mae,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_early_corr):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Rho_early',
+                            initial_eval_student_vs_grasp_early_corr,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_early_mae):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Early_MAE',
+                            initial_eval_student_vs_grasp_early_mae,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_ttae_sec):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_TTAE_sec',
+                            initial_eval_student_vs_grasp_ttae_sec,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_washin_mae):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Washin_MAE',
+                            initial_eval_student_vs_grasp_washin_mae,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_iauc10_err):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_IAUC10_err',
+                            initial_eval_student_vs_grasp_iauc10_err,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_peak_err):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Peak_err',
+                            initial_eval_student_vs_grasp_peak_err,
+                            0,
+                        )
+                    if np.isfinite(initial_eval_student_vs_grasp_ttpeak_err_sec):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_TTPeak_err_sec',
+                            initial_eval_student_vs_grasp_ttpeak_err_sec,
+                            0,
+                        )
                     if np.isfinite(initial_eval_dl_dc_mae_bestfit):
                         writer.add_scalar('Metric/DL_DC_MAE_BESTFIT', initial_eval_dl_dc_mae_bestfit, 0)
                     if np.isfinite(initial_eval_raw_ssdu_nmse):
@@ -3834,17 +4570,24 @@ def main():
     else: 
 
         current_curriculum_phase_idx = -1
+        auto_stop_requested = False
+        auto_stop_reason = None
+        run_completion_reason = "completed"
+        last_completed_step = int(start_step) - 1
 
         for epoch in range(start_step, max_steps + 1):
             model.train()
             if torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats(device)
             running_mc_loss = 0.0
+            running_ssdu_loss = 0.0
             running_ei_loss = 0.0
             running_adj_loss = 0.0
             running_rebin_loss = 0.0
             running_teacher_distill_loss = 0.0
             running_supervised_distill_loss = 0.0
+            running_supervised_distill_image_loss = 0.0
+            running_supervised_distill_temporal_loss = 0.0
             running_supervised_distill_freq_loss = 0.0
             running_supervised_distill_batches = 0
             running_supervised_distill_valid = 0
@@ -3853,6 +4596,10 @@ def main():
             epoch_eval_psnrs = []
             epoch_eval_mses = []
             epoch_eval_lpipses = []
+            epoch_eval_student_vs_grasp_ssims = []
+            epoch_eval_student_vs_grasp_psnrs = []
+            epoch_eval_student_vs_grasp_mses = []
+            epoch_eval_student_vs_grasp_lpipses = []
             epoch_eval_dc_mses = []
             epoch_eval_dc_maes = []
             epoch_eval_curve_corrs = []
@@ -3873,6 +4620,15 @@ def main():
             epoch_eval_iauc10_errs = []
             epoch_eval_peak_errs = []
             epoch_eval_ttpeak_err_secs = []
+            epoch_eval_student_vs_grasp_rho_fulls = []
+            epoch_eval_student_vs_grasp_curve_maes = []
+            epoch_eval_student_vs_grasp_early_corrs = []
+            epoch_eval_student_vs_grasp_early_maes = []
+            epoch_eval_student_vs_grasp_ttae_secs = []
+            epoch_eval_student_vs_grasp_washin_maes = []
+            epoch_eval_student_vs_grasp_iauc10_errs = []
+            epoch_eval_student_vs_grasp_peak_errs = []
+            epoch_eval_student_vs_grasp_ttpeak_err_secs = []
             epoch_eval_dl_dc_mae_bestfits = []
             epoch_eval_raw_ssdu_nmses = []
 
@@ -4056,6 +4812,7 @@ def main():
                     ei_gate_metric_val = _resolve_gate_metric_value(
                         ei_gate.get("metric", "train_mc_loss"),
                         train_mc_losses=train_mc_losses,
+                        train_ssdu_losses=train_ssdu_losses,
                         val_mc_losses=val_mc_losses,
                         train_ei_losses=train_ei_losses,
                         val_ei_losses=val_ei_losses,
@@ -4118,6 +4875,21 @@ def main():
                 if ei_gradnorm_ratio_ema is not None:
                     writer.add_scalar("Loss/EI_GradNorm_Ratio_EMA_Step", ei_gradnorm_ratio_ema, epoch)
 
+            ssdu_loss_weight = 0.0
+            compute_ssdu_this_epoch = False
+            if use_ssdu_loss:
+                ssdu_loss_weight = get_cosine_ei_weight(
+                    current_epoch=epoch,
+                    warmup_max_steps=ssdu_warmup,
+                    schedule_duration_steps=ssdu_duration_steps,
+                    target_weight=ssdu_target_w,
+                )
+                compute_ssdu_this_epoch = ssdu_loss_weight > 0.0
+            ssdu_weight_history.append(ssdu_loss_weight)
+            ssdu_weight_steps.append(epoch)
+            if (global_rank == 0 or not config['training']['multigpu']) and use_ssdu_loss:
+                writer.add_scalar("Loss/SSDU_Weight", ssdu_loss_weight, epoch)
+
             # Rebin schedule is epoch-wise; skip rebin compute whenever its weight is zero.
             rebin_loss_weight = 0.0
             compute_rebin_this_epoch = False
@@ -4128,6 +4900,7 @@ def main():
                         rebin_gate_metric_val = _resolve_gate_metric_value(
                             rebin_gate.get("metric", "train_mc_loss"),
                             train_mc_losses=train_mc_losses,
+                            train_ssdu_losses=train_ssdu_losses,
                             val_mc_losses=val_mc_losses,
                             train_ei_losses=train_ei_losses,
                             val_ei_losses=val_ei_losses,
@@ -4219,6 +4992,7 @@ def main():
             if use_supervised_distill:
                 supervised_distill_curriculum_alpha_history.append(float(epoch_supervised_curriculum_alpha))
                 supervised_distill_curriculum_alpha_steps.append(int(epoch))
+            epoch_supervised_multiobj_temporal_scale = float(supervised_multiobj_temporal_scale)
 
             # Only set when EI is computed; keep defined to avoid UnboundLocalError in plotting.
             t_img = None
@@ -4311,19 +5085,59 @@ def main():
                 #     start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
 
                 # print("Time encoding: ", start_timepoint_index.item())
+                model_input_kspace = measured_kspace
+                ssdu_heldout_mask = None
+                ssdu_used_mask = None
+                if use_ssdu_loss and compute_ssdu_this_epoch:
+                    model_input_kspace, ssdu_heldout_mask, ssdu_used_mask = ssdu_loss_fn.split_measurements(
+                        measured_kspace,
+                        samples_per_spoke=n_samples_i,
+                        step=iteration_count,
+                    )
 
                 try:
                     with amp_autocast():
                         x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                            measured_kspace, physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
+                            model_input_kspace, physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
                         )
 
                         # compute losses
                         if use_adj_loss:
                             running_adj_loss += adj_loss.item()
 
-                        mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
+                        shared_y_hat = None
+                        if use_ssdu_loss and compute_ssdu_this_epoch:
+                            if model_type == "CRNN":
+                                shared_y_hat = physics.A(x_recon, csmap)
+                            elif model_type in {"LSFPNet", "MambaRecon", "MambaTemporal"}:
+                                x_recon_complex = to_torch_complex(x_recon)
+                                shared_y_hat = physics(inv=False, data=x_recon_complex, smaps=csmap).to(device)
+                            else:
+                                raise ValueError(
+                                    f"Unsupported model_type '{model_type}' for shared MC/SSDU projection."
+                                )
+
+                        mc_loss = mc_loss_fn(
+                            measured_kspace,
+                            x_recon,
+                            physics,
+                            csmap,
+                            sample_mask=ssdu_used_mask,
+                            y_hat_override=shared_y_hat,
+                        )
                         running_mc_loss += mc_loss.item()
+
+                        ssdu_loss = None
+                        if use_ssdu_loss and compute_ssdu_this_epoch:
+                            ssdu_loss = ssdu_loss_fn(
+                                measured_kspace,
+                                x_recon,
+                                physics,
+                                csmap,
+                                heldout_mask=ssdu_heldout_mask,
+                                y_hat_override=shared_y_hat,
+                            )
+                            running_ssdu_loss += ssdu_loss.item()
 
                         if use_rebin_loss and compute_rebin_this_epoch:
                             rebin_loss = rebin_loss_fn(
@@ -4349,7 +5163,7 @@ def main():
                             if teacher_distill_detach_teacher:
                                 with torch.no_grad():
                                     x_teacher, *_ = teacher_model(
-                                        measured_kspace,
+                                        model_input_kspace,
                                         physics,
                                         csmap,
                                         acceleration_encoding,
@@ -4359,7 +5173,7 @@ def main():
                                     )
                             else:
                                 x_teacher, *_ = teacher_model(
-                                    measured_kspace,
+                                    model_input_kspace,
                                     physics,
                                     csmap,
                                     acceleration_encoding,
@@ -4405,51 +5219,98 @@ def main():
                                 pred_selected = x_recon[valid_mask]
                                 grasp_target_selected = grasp_target_selected.detach()
 
-                                def _mode_distill_loss(mode_name: str) -> torch.Tensor:
+                                def _mode_distill_loss(
+                                    mode_name: str,
+                                    metric_name: str,
+                                    temporal_diff_lags: list[int],
+                                    temporal_diff_lag_weights: list[float],
+                                    arrival_weight_cfg: dict | None,
+                                ) -> torch.Tensor:
                                     mode_norm = str(mode_name).strip().lower()
                                     if mode_norm == "temporal_difference":
-                                        if len(supervised_distill_temporal_diff_lags) > 1:
+                                        if len(temporal_diff_lags) > 1:
                                             return _compute_multi_lag_temporal_difference_loss(
                                                 pred_complex=pred_selected,
                                                 target_complex=grasp_target_selected,
-                                                metric_name=supervised_distill_metric_name,
+                                                metric_name=metric_name,
                                                 baseline_frames=supervised_distill_baseline_frames,
                                                 percent_enhancement_eps=supervised_distill_percent_eps,
-                                                lags=supervised_distill_temporal_diff_lags,
-                                                lag_weights=supervised_distill_temporal_diff_lag_weights,
-                                                arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                                lags=temporal_diff_lags,
+                                                lag_weights=temporal_diff_lag_weights,
+                                                arrival_weight_cfg=arrival_weight_cfg,
                                             )
                                         return _compute_temporal_loss_term(
                                             pred_complex=pred_selected,
                                             target_complex=grasp_target_selected,
-                                            metric_name=supervised_distill_metric_name,
+                                            metric_name=metric_name,
                                             temporal_mode=mode_norm,
                                             baseline_frames=supervised_distill_baseline_frames,
                                             percent_enhancement_eps=supervised_distill_percent_eps,
-                                            lag=int(supervised_distill_temporal_diff_lags[0]),
-                                            arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                            lag=int(temporal_diff_lags[0]),
+                                            arrival_weight_cfg=arrival_weight_cfg,
                                         )
                                     return _compute_temporal_loss_term(
                                         pred_complex=pred_selected,
                                         target_complex=grasp_target_selected,
-                                        metric_name=supervised_distill_metric_name,
+                                        metric_name=metric_name,
                                         temporal_mode=mode_norm,
                                         baseline_frames=supervised_distill_baseline_frames,
                                         percent_enhancement_eps=supervised_distill_percent_eps,
                                         lag=1,
-                                        arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                        arrival_weight_cfg=arrival_weight_cfg,
                                     )
 
-                                if supervised_curriculum_cfg.get("enable", False):
+                                if use_supervised_multiobjective:
+                                    image_cfg = supervised_multiobj_cfg["image"]
+                                    temporal_cfg = supervised_multiobj_cfg["temporal"]
+                                    image_w = float(image_cfg["weight"])
+                                    temporal_w = float(temporal_cfg["weight"])
+                                    image_loss = _mode_distill_loss(
+                                        mode_name=image_cfg["mode"],
+                                        metric_name=str(supervised_multiobj_image_metric_name),
+                                        temporal_diff_lags=[1],
+                                        temporal_diff_lag_weights=[1.0],
+                                        arrival_weight_cfg=None,
+                                    )
+                                    temporal_loss = _mode_distill_loss(
+                                        mode_name=temporal_cfg["mode"],
+                                        metric_name=str(supervised_multiobj_temporal_metric_name),
+                                        temporal_diff_lags=[int(x) for x in temporal_cfg["lags"]],
+                                        temporal_diff_lag_weights=[float(x) for x in temporal_cfg["lag_weights"]],
+                                        arrival_weight_cfg=temporal_cfg.get("arrival_weighting"),
+                                    )
+                                    supervised_distill_loss = (
+                                        image_w * image_loss
+                                        + temporal_w * epoch_supervised_multiobj_temporal_scale * temporal_loss
+                                    )
+                                    running_supervised_distill_image_loss += float(image_loss.item())
+                                    running_supervised_distill_temporal_loss += float(temporal_loss.item())
+                                elif supervised_curriculum_cfg.get("enable", False):
                                     early_mode = supervised_curriculum_cfg["early_mode"]
                                     late_mode = supervised_curriculum_cfg["late_mode"]
-                                    early_loss = _mode_distill_loss(early_mode)
-                                    late_loss = _mode_distill_loss(late_mode)
+                                    early_loss = _mode_distill_loss(
+                                        mode_name=early_mode,
+                                        metric_name=supervised_distill_metric_name,
+                                        temporal_diff_lags=supervised_distill_temporal_diff_lags,
+                                        temporal_diff_lag_weights=supervised_distill_temporal_diff_lag_weights,
+                                        arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                    )
+                                    late_loss = _mode_distill_loss(
+                                        mode_name=late_mode,
+                                        metric_name=supervised_distill_metric_name,
+                                        temporal_diff_lags=supervised_distill_temporal_diff_lags,
+                                        temporal_diff_lag_weights=supervised_distill_temporal_diff_lag_weights,
+                                        arrival_weight_cfg=supervised_arrival_weight_cfg,
+                                    )
                                     alpha_t = float(epoch_supervised_curriculum_alpha)
                                     supervised_distill_loss = (1.0 - alpha_t) * early_loss + alpha_t * late_loss
                                 else:
                                     supervised_distill_loss = _mode_distill_loss(
-                                        supervised_distill_temporal_mode
+                                        mode_name=supervised_distill_temporal_mode,
+                                        metric_name=supervised_distill_metric_name,
+                                        temporal_diff_lags=supervised_distill_temporal_diff_lags,
+                                        temporal_diff_lag_weights=supervised_distill_temporal_diff_lag_weights,
+                                        arrival_weight_cfg=supervised_arrival_weight_cfg,
                                     )
 
                                 if supervised_freq_cfg.get("enable", False):
@@ -4542,6 +5403,8 @@ def main():
                             pass
 
                         total_loss = mc_loss * mc_loss_weight
+                        if ssdu_loss is not None and ssdu_loss_weight > 0:
+                            total_loss = total_loss + ssdu_loss * ssdu_loss_weight
                         if ei_loss is not None:
                             total_loss = total_loss + ei_loss * ei_loss_weight
                         if use_adj_loss:
@@ -4672,6 +5535,13 @@ def main():
             epoch_train_mc_loss = running_mc_loss / max(1, num_train_batches)
             train_mc_losses.append(epoch_train_mc_loss)
             weighted_train_mc_losses.append(epoch_train_mc_loss*mc_loss_weight)
+            if use_ssdu_loss and compute_ssdu_this_epoch:
+                epoch_train_ssdu_loss = running_ssdu_loss / max(1, num_train_batches)
+            else:
+                epoch_train_ssdu_loss = 0.0
+            if use_ssdu_loss:
+                train_ssdu_losses.append(epoch_train_ssdu_loss)
+                weighted_train_ssdu_losses.append(epoch_train_ssdu_loss * ssdu_loss_weight)
             if use_ei_loss:
                 epoch_train_ei_loss = running_ei_loss / max(1, num_train_batches)
             else:
@@ -4711,19 +5581,51 @@ def main():
                 epoch_train_supervised_distill_loss = (
                     running_supervised_distill_loss / max(1, running_supervised_distill_batches)
                 )
+                epoch_train_supervised_distill_image_loss = (
+                    running_supervised_distill_image_loss / max(1, running_supervised_distill_batches)
+                )
+                epoch_train_supervised_distill_temporal_loss = (
+                    running_supervised_distill_temporal_loss / max(1, running_supervised_distill_batches)
+                )
                 epoch_train_supervised_distill_freq_loss = (
                     running_supervised_distill_freq_loss / max(1, running_supervised_distill_batches)
                 )
             else:
                 epoch_train_supervised_distill_loss = 0.0
+                epoch_train_supervised_distill_image_loss = 0.0
+                epoch_train_supervised_distill_temporal_loss = 0.0
                 epoch_train_supervised_distill_freq_loss = 0.0
             epoch_supervised_distill_valid_fraction = (
                 float(running_supervised_distill_valid) / max(1, int(running_supervised_distill_total))
             )
+            epoch_supervised_distill_weighted_image_loss = 0.0
+            epoch_supervised_distill_weighted_temporal_loss = 0.0
             if use_supervised_distill:
                 train_supervised_distill_losses.append(epoch_train_supervised_distill_loss)
                 weighted_train_supervised_distill_losses.append(
                     epoch_train_supervised_distill_loss * supervised_distill_loss_weight
+                )
+                if use_supervised_multiobjective:
+                    image_w = float(supervised_multiobj_cfg["image"]["weight"])
+                    temporal_w = float(supervised_multiobj_cfg["temporal"]["weight"])
+                    epoch_supervised_distill_weighted_image_loss = (
+                        epoch_train_supervised_distill_image_loss
+                        * supervised_distill_loss_weight
+                        * image_w
+                    )
+                    epoch_supervised_distill_weighted_temporal_loss = (
+                        epoch_train_supervised_distill_temporal_loss
+                        * supervised_distill_loss_weight
+                        * temporal_w
+                        * epoch_supervised_multiobj_temporal_scale
+                    )
+                train_supervised_distill_image_losses.append(epoch_train_supervised_distill_image_loss)
+                weighted_train_supervised_distill_image_losses.append(
+                    epoch_supervised_distill_weighted_image_loss
+                )
+                train_supervised_distill_temporal_losses.append(epoch_train_supervised_distill_temporal_loss)
+                weighted_train_supervised_distill_temporal_losses.append(
+                    epoch_supervised_distill_weighted_temporal_loss
                 )
                 train_supervised_distill_freq_losses.append(epoch_train_supervised_distill_freq_loss)
                 weighted_train_supervised_distill_freq_losses.append(
@@ -4732,10 +5634,57 @@ def main():
                     * supervised_distill_loss_weight
                 )
                 supervised_distill_valid_fraction_history.append(epoch_supervised_distill_valid_fraction)
+            if use_supervised_multiobjective:
+                supervised_multiobj_temporal_scale_history.append(
+                    float(epoch_supervised_multiobj_temporal_scale)
+                )
+                supervised_multiobj_temporal_scale_steps.append(int(epoch))
+
+                adaptive_cfg = supervised_multiobj_cfg.get("adaptive", {})
+                if (
+                    adaptive_cfg.get("enable", False)
+                    and compute_supervised_distill_this_epoch
+                    and running_supervised_distill_batches > 0
+                    and epoch >= int(adaptive_cfg.get("start_step", 0))
+                ):
+                    image_obs = float(epoch_train_supervised_distill_image_loss)
+                    if np.isfinite(image_obs):
+                        ema_beta = float(adaptive_cfg.get("ema_beta", 0.8))
+                        if supervised_multiobj_image_ema is None:
+                            supervised_multiobj_image_ema = image_obs
+                        else:
+                            supervised_multiobj_image_ema = (
+                                ema_beta * float(supervised_multiobj_image_ema)
+                                + (1.0 - ema_beta) * image_obs
+                            )
+                        if (
+                            supervised_multiobj_image_best is None
+                            or float(supervised_multiobj_image_ema) < float(supervised_multiobj_image_best)
+                        ):
+                            supervised_multiobj_image_best = float(supervised_multiobj_image_ema)
+
+                        tol = float(adaptive_cfg.get("image_tolerance", 0.01))
+                        allowed = float(supervised_multiobj_image_best) * (1.0 + tol)
+                        scale_before = float(supervised_multiobj_temporal_scale)
+                        if float(supervised_multiobj_image_ema) <= allowed:
+                            scale_after = scale_before * float(adaptive_cfg.get("up_mult", 1.05))
+                        else:
+                            scale_after = scale_before * float(adaptive_cfg.get("down_mult", 0.9))
+                        scale_after = float(
+                            np.clip(
+                                scale_after,
+                                float(adaptive_cfg.get("min_scale", 0.25)),
+                                float(adaptive_cfg.get("max_scale", 4.0)),
+                            )
+                        )
+                        supervised_multiobj_temporal_scale = scale_after
 
 
             if global_rank == 0 or not config['training']['multigpu']:
                 writer.add_scalar('Loss/Train_MC', epoch_train_mc_loss, epoch)
+                if use_ssdu_loss:
+                    writer.add_scalar('Loss/Train_SSDU', epoch_train_ssdu_loss, epoch)
+                    writer.add_scalar('Loss/Train_Weighted_SSDU', epoch_train_ssdu_loss * ssdu_loss_weight, epoch)
                 writer.add_scalar('Loss/Train_EI', epoch_train_ei_loss, epoch)
                 writer.add_scalar('Loss/Train_Adj', epoch_train_adj_loss, epoch)
                 if use_rebin_loss:
@@ -4780,6 +5729,44 @@ def main():
                         float(epoch_supervised_curriculum_alpha),
                         epoch,
                     )
+                    if use_supervised_multiobjective:
+                        writer.add_scalar(
+                            'Loss/Train_Supervised_Distill_Image',
+                            epoch_train_supervised_distill_image_loss,
+                            epoch,
+                        )
+                        writer.add_scalar(
+                            'Loss/Train_Supervised_Distill_Temporal',
+                            epoch_train_supervised_distill_temporal_loss,
+                            epoch,
+                        )
+                        writer.add_scalar(
+                            'Loss/Train_Weighted_Supervised_Distill_Image',
+                            epoch_supervised_distill_weighted_image_loss,
+                            epoch,
+                        )
+                        writer.add_scalar(
+                            'Loss/Train_Weighted_Supervised_Distill_Temporal',
+                            epoch_supervised_distill_weighted_temporal_loss,
+                            epoch,
+                        )
+                        writer.add_scalar(
+                            'Loss/Supervised_MultiObj_Temporal_Scale',
+                            float(epoch_supervised_multiobj_temporal_scale),
+                            epoch,
+                        )
+                        if supervised_multiobj_image_ema is not None:
+                            writer.add_scalar(
+                                'Loss/Supervised_MultiObj_Image_EMA',
+                                float(supervised_multiobj_image_ema),
+                                epoch,
+                            )
+                        if supervised_multiobj_image_best is not None:
+                            writer.add_scalar(
+                                'Loss/Supervised_MultiObj_Image_Best_EMA',
+                                float(supervised_multiobj_image_best),
+                                epoch,
+                            )
 
 
             lambda_Ls.append(lambda_L.item())
@@ -5022,6 +6009,19 @@ def main():
                                 grasp_iauc10_err = None
                                 grasp_peak_err = None
                                 grasp_ttpeak_err_sec = None
+                                student_vs_grasp_ssim = None
+                                student_vs_grasp_psnr = None
+                                student_vs_grasp_mse = None
+                                student_vs_grasp_lpips = None
+                                student_vs_grasp_rho_full = None
+                                student_vs_grasp_curve_mae = None
+                                student_vs_grasp_early_corr = None
+                                student_vs_grasp_early_mae = None
+                                student_vs_grasp_ttae_sec = None
+                                student_vs_grasp_washin_mae = None
+                                student_vs_grasp_iauc10_err = None
+                                student_vs_grasp_peak_err = None
+                                student_vs_grasp_ttpeak_err_sec = None
                                 dl_dc_mae_bestfit = None
                                 if temporal_metrics:
                                     rho_full = temporal_metrics.get("dl_all_curve_corr")
@@ -5042,6 +6042,27 @@ def main():
                                     grasp_iauc10_err = temporal_metrics.get("grasp_all_iauc10_err")
                                     grasp_peak_err = temporal_metrics.get("grasp_all_peak_err")
                                     grasp_ttpeak_err_sec = temporal_metrics.get("grasp_all_ttpeak_err_sec")
+                                    student_vs_grasp_ssim = temporal_metrics.get("student_vs_grasp_ssim")
+                                    student_vs_grasp_psnr = temporal_metrics.get("student_vs_grasp_psnr")
+                                    student_vs_grasp_mse = temporal_metrics.get("student_vs_grasp_mse")
+                                    student_vs_grasp_lpips = temporal_metrics.get("student_vs_grasp_lpips")
+                                    student_vs_grasp_rho_full = temporal_metrics.get("student_vs_grasp_all_curve_corr")
+                                    student_vs_grasp_curve_mae = temporal_metrics.get("student_vs_grasp_all_curve_mae")
+                                    student_vs_grasp_early_corr = temporal_metrics.get("student_vs_grasp_all_early_corr")
+                                    student_vs_grasp_early_mae = temporal_metrics.get("student_vs_grasp_all_early_mae")
+                                    student_vs_grasp_ttae_sec = temporal_metrics.get("student_vs_grasp_all_ttae_sec")
+                                    student_vs_grasp_washin_mae = temporal_metrics.get(
+                                        "student_vs_grasp_all_wash_in_slope_err"
+                                    )
+                                    student_vs_grasp_iauc10_err = temporal_metrics.get(
+                                        "student_vs_grasp_all_iauc10_err"
+                                    )
+                                    student_vs_grasp_peak_err = temporal_metrics.get(
+                                        "student_vs_grasp_all_peak_err"
+                                    )
+                                    student_vs_grasp_ttpeak_err_sec = temporal_metrics.get(
+                                        "student_vs_grasp_all_ttpeak_err_sec"
+                                    )
                                     dl_dc_mae_bestfit = temporal_metrics.get("dl_dc_mae_bestfit")
 
                                 # raw k-space eval
@@ -5149,6 +6170,30 @@ def main():
                                             "psnr": float(psnr),
                                             "mse": float(mse),
                                             "lpips": float(lpips),
+                                            "student_vs_grasp_ssim": (
+                                                float(student_vs_grasp_ssim)
+                                                if student_vs_grasp_ssim is not None
+                                                and np.isfinite(student_vs_grasp_ssim)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_psnr": (
+                                                float(student_vs_grasp_psnr)
+                                                if student_vs_grasp_psnr is not None
+                                                and np.isfinite(student_vs_grasp_psnr)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_mse": (
+                                                float(student_vs_grasp_mse)
+                                                if student_vs_grasp_mse is not None
+                                                and np.isfinite(student_vs_grasp_mse)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_lpips": (
+                                                float(student_vs_grasp_lpips)
+                                                if student_vs_grasp_lpips is not None
+                                                and np.isfinite(student_vs_grasp_lpips)
+                                                else None
+                                            ),
                                             "dc_mse": float(dc_mse),
                                             "dc_mae": float(dc_mae),
                                             "recon_corr": (float(recon_corr) if recon_corr is not None else None),
@@ -5163,6 +6208,60 @@ def main():
                                             "ttpeak_err_sec": (
                                                 float(ttpeak_err_sec)
                                                 if ttpeak_err_sec is not None and np.isfinite(ttpeak_err_sec)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_rho_full": (
+                                                float(student_vs_grasp_rho_full)
+                                                if student_vs_grasp_rho_full is not None
+                                                and np.isfinite(student_vs_grasp_rho_full)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_curve_mae": (
+                                                float(student_vs_grasp_curve_mae)
+                                                if student_vs_grasp_curve_mae is not None
+                                                and np.isfinite(student_vs_grasp_curve_mae)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_early_corr": (
+                                                float(student_vs_grasp_early_corr)
+                                                if student_vs_grasp_early_corr is not None
+                                                and np.isfinite(student_vs_grasp_early_corr)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_early_mae": (
+                                                float(student_vs_grasp_early_mae)
+                                                if student_vs_grasp_early_mae is not None
+                                                and np.isfinite(student_vs_grasp_early_mae)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_ttae_sec": (
+                                                float(student_vs_grasp_ttae_sec)
+                                                if student_vs_grasp_ttae_sec is not None
+                                                and np.isfinite(student_vs_grasp_ttae_sec)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_washin_mae": (
+                                                float(student_vs_grasp_washin_mae)
+                                                if student_vs_grasp_washin_mae is not None
+                                                and np.isfinite(student_vs_grasp_washin_mae)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_iauc10_err": (
+                                                float(student_vs_grasp_iauc10_err)
+                                                if student_vs_grasp_iauc10_err is not None
+                                                and np.isfinite(student_vs_grasp_iauc10_err)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_peak_err": (
+                                                float(student_vs_grasp_peak_err)
+                                                if student_vs_grasp_peak_err is not None
+                                                and np.isfinite(student_vs_grasp_peak_err)
+                                                else None
+                                            ),
+                                            "student_vs_grasp_ttpeak_err_sec": (
+                                                float(student_vs_grasp_ttpeak_err_sec)
+                                                if student_vs_grasp_ttpeak_err_sec is not None
+                                                and np.isfinite(student_vs_grasp_ttpeak_err_sec)
                                                 else None
                                             ),
                                             "dl_dc_mae_bestfit": (
@@ -5346,6 +6445,14 @@ def main():
                                     epoch_eval_psnrs.append(psnr)
                                     epoch_eval_mses.append(mse)
                                     epoch_eval_lpipses.append(lpips)
+                                    if student_vs_grasp_ssim is not None and np.isfinite(student_vs_grasp_ssim):
+                                        epoch_eval_student_vs_grasp_ssims.append(float(student_vs_grasp_ssim))
+                                    if student_vs_grasp_psnr is not None and np.isfinite(student_vs_grasp_psnr):
+                                        epoch_eval_student_vs_grasp_psnrs.append(float(student_vs_grasp_psnr))
+                                    if student_vs_grasp_mse is not None and np.isfinite(student_vs_grasp_mse):
+                                        epoch_eval_student_vs_grasp_mses.append(float(student_vs_grasp_mse))
+                                    if student_vs_grasp_lpips is not None and np.isfinite(student_vs_grasp_lpips):
+                                        epoch_eval_student_vs_grasp_lpipses.append(float(student_vs_grasp_lpips))
                                     epoch_eval_dc_mses.append(dc_mse)
                                     epoch_eval_dc_maes.append(dc_mae)
 
@@ -5369,6 +6476,69 @@ def main():
                                         epoch_eval_peak_errs.append(peak_err)
                                     if ttpeak_err_sec is not None and np.isfinite(ttpeak_err_sec):
                                         epoch_eval_ttpeak_err_secs.append(ttpeak_err_sec)
+                                    if (
+                                        student_vs_grasp_rho_full is not None
+                                        and np.isfinite(student_vs_grasp_rho_full)
+                                    ):
+                                        epoch_eval_student_vs_grasp_rho_fulls.append(
+                                            float(student_vs_grasp_rho_full)
+                                        )
+                                    if (
+                                        student_vs_grasp_curve_mae is not None
+                                        and np.isfinite(student_vs_grasp_curve_mae)
+                                    ):
+                                        epoch_eval_student_vs_grasp_curve_maes.append(
+                                            float(student_vs_grasp_curve_mae)
+                                        )
+                                    if (
+                                        student_vs_grasp_early_corr is not None
+                                        and np.isfinite(student_vs_grasp_early_corr)
+                                    ):
+                                        epoch_eval_student_vs_grasp_early_corrs.append(
+                                            float(student_vs_grasp_early_corr)
+                                        )
+                                    if (
+                                        student_vs_grasp_early_mae is not None
+                                        and np.isfinite(student_vs_grasp_early_mae)
+                                    ):
+                                        epoch_eval_student_vs_grasp_early_maes.append(
+                                            float(student_vs_grasp_early_mae)
+                                        )
+                                    if (
+                                        student_vs_grasp_ttae_sec is not None
+                                        and np.isfinite(student_vs_grasp_ttae_sec)
+                                    ):
+                                        epoch_eval_student_vs_grasp_ttae_secs.append(
+                                            float(student_vs_grasp_ttae_sec)
+                                        )
+                                    if (
+                                        student_vs_grasp_washin_mae is not None
+                                        and np.isfinite(student_vs_grasp_washin_mae)
+                                    ):
+                                        epoch_eval_student_vs_grasp_washin_maes.append(
+                                            float(student_vs_grasp_washin_mae)
+                                        )
+                                    if (
+                                        student_vs_grasp_iauc10_err is not None
+                                        and np.isfinite(student_vs_grasp_iauc10_err)
+                                    ):
+                                        epoch_eval_student_vs_grasp_iauc10_errs.append(
+                                            float(student_vs_grasp_iauc10_err)
+                                        )
+                                    if (
+                                        student_vs_grasp_peak_err is not None
+                                        and np.isfinite(student_vs_grasp_peak_err)
+                                    ):
+                                        epoch_eval_student_vs_grasp_peak_errs.append(
+                                            float(student_vs_grasp_peak_err)
+                                        )
+                                    if (
+                                        student_vs_grasp_ttpeak_err_sec is not None
+                                        and np.isfinite(student_vs_grasp_ttpeak_err_sec)
+                                    ):
+                                        epoch_eval_student_vs_grasp_ttpeak_err_secs.append(
+                                            float(student_vs_grasp_ttpeak_err_sec)
+                                        )
                                     if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit):
                                         epoch_eval_dl_dc_mae_bestfits.append(float(dl_dc_mae_bestfit))
 
@@ -5441,6 +6611,26 @@ def main():
                         epoch_eval_psnrs = [r["psnr"] for r in all_eval_records]
                         epoch_eval_mses = [r["mse"] for r in all_eval_records]
                         epoch_eval_lpipses = [r["lpips"] for r in all_eval_records]
+                        epoch_eval_student_vs_grasp_ssims = [
+                            r["student_vs_grasp_ssim"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_ssim") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_psnrs = [
+                            r["student_vs_grasp_psnr"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_psnr") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_mses = [
+                            r["student_vs_grasp_mse"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_mse") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_lpipses = [
+                            r["student_vs_grasp_lpips"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_lpips") is not None
+                        ]
                         epoch_eval_dc_mses = [r["dc_mse"] for r in all_eval_records]
                         epoch_eval_dc_maes = [r["dc_mae"] for r in all_eval_records]
                         epoch_eval_raw_dc_mses = [r["raw_dc_mse"] for r in all_eval_records]
@@ -5474,6 +6664,51 @@ def main():
                         epoch_eval_peak_errs = [r["peak_err"] for r in all_eval_records if r.get("peak_err") is not None]
                         epoch_eval_ttpeak_err_secs = [
                             r["ttpeak_err_sec"] for r in all_eval_records if r.get("ttpeak_err_sec") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_rho_fulls = [
+                            r["student_vs_grasp_rho_full"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_rho_full") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_curve_maes = [
+                            r["student_vs_grasp_curve_mae"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_curve_mae") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_early_corrs = [
+                            r["student_vs_grasp_early_corr"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_early_corr") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_early_maes = [
+                            r["student_vs_grasp_early_mae"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_early_mae") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_ttae_secs = [
+                            r["student_vs_grasp_ttae_sec"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_ttae_sec") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_washin_maes = [
+                            r["student_vs_grasp_washin_mae"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_washin_mae") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_iauc10_errs = [
+                            r["student_vs_grasp_iauc10_err"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_iauc10_err") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_peak_errs = [
+                            r["student_vs_grasp_peak_err"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_peak_err") is not None
+                        ]
+                        epoch_eval_student_vs_grasp_ttpeak_err_secs = [
+                            r["student_vs_grasp_ttpeak_err_sec"]
+                            for r in all_eval_records
+                            if r.get("student_vs_grasp_ttpeak_err_sec") is not None
                         ]
                         epoch_eval_dl_dc_mae_bestfits = [
                             r["dl_dc_mae_bestfit"] for r in all_eval_records if r.get("dl_dc_mae_bestfit") is not None
@@ -5606,6 +6841,26 @@ def main():
                     epoch_eval_psnr = np.mean(epoch_eval_psnrs)
                     epoch_eval_mse = np.mean(epoch_eval_mses)
                     epoch_eval_lpips = np.mean(epoch_eval_lpipses)
+                    epoch_eval_student_vs_grasp_ssim = (
+                        np.mean(epoch_eval_student_vs_grasp_ssims)
+                        if epoch_eval_student_vs_grasp_ssims
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_psnr = (
+                        np.mean(epoch_eval_student_vs_grasp_psnrs)
+                        if epoch_eval_student_vs_grasp_psnrs
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_mse = (
+                        np.mean(epoch_eval_student_vs_grasp_mses)
+                        if epoch_eval_student_vs_grasp_mses
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_lpips = (
+                        np.mean(epoch_eval_student_vs_grasp_lpipses)
+                        if epoch_eval_student_vs_grasp_lpipses
+                        else np.nan
+                    )
                     epoch_eval_dc_mse = np.mean(epoch_eval_dc_mses)
                     epoch_eval_dc_mae = np.mean(epoch_eval_dc_maes)
                     epoch_eval_curve_corr = np.mean(epoch_eval_curve_corrs)
@@ -5644,6 +6899,51 @@ def main():
                     epoch_eval_ttpeak_err_sec = (
                         np.mean(epoch_eval_ttpeak_err_secs) if epoch_eval_ttpeak_err_secs else np.nan
                     )
+                    epoch_eval_student_vs_grasp_rho_full = (
+                        np.mean(epoch_eval_student_vs_grasp_rho_fulls)
+                        if epoch_eval_student_vs_grasp_rho_fulls
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_curve_mae = (
+                        np.mean(epoch_eval_student_vs_grasp_curve_maes)
+                        if epoch_eval_student_vs_grasp_curve_maes
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_early_corr = (
+                        np.mean(epoch_eval_student_vs_grasp_early_corrs)
+                        if epoch_eval_student_vs_grasp_early_corrs
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_early_mae = (
+                        np.mean(epoch_eval_student_vs_grasp_early_maes)
+                        if epoch_eval_student_vs_grasp_early_maes
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_ttae_sec = (
+                        np.mean(epoch_eval_student_vs_grasp_ttae_secs)
+                        if epoch_eval_student_vs_grasp_ttae_secs
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_washin_mae = (
+                        np.mean(epoch_eval_student_vs_grasp_washin_maes)
+                        if epoch_eval_student_vs_grasp_washin_maes
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_iauc10_err = (
+                        np.mean(epoch_eval_student_vs_grasp_iauc10_errs)
+                        if epoch_eval_student_vs_grasp_iauc10_errs
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_peak_err = (
+                        np.mean(epoch_eval_student_vs_grasp_peak_errs)
+                        if epoch_eval_student_vs_grasp_peak_errs
+                        else np.nan
+                    )
+                    epoch_eval_student_vs_grasp_ttpeak_err_sec = (
+                        np.mean(epoch_eval_student_vs_grasp_ttpeak_err_secs)
+                        if epoch_eval_student_vs_grasp_ttpeak_err_secs
+                        else np.nan
+                    )
                     epoch_eval_dl_dc_mae_bestfit = (
                         np.mean(epoch_eval_dl_dc_mae_bestfits) if epoch_eval_dl_dc_mae_bestfits else np.nan
                     )
@@ -5666,6 +6966,10 @@ def main():
                     eval_psnrs.append(epoch_eval_psnr)
                     eval_mses.append(epoch_eval_mse)
                     eval_lpipses.append(epoch_eval_lpips)
+                    eval_student_vs_grasp_ssims.append(epoch_eval_student_vs_grasp_ssim)
+                    eval_student_vs_grasp_psnrs.append(epoch_eval_student_vs_grasp_psnr)
+                    eval_student_vs_grasp_mses.append(epoch_eval_student_vs_grasp_mse)
+                    eval_student_vs_grasp_lpipses.append(epoch_eval_student_vs_grasp_lpips)
                     eval_dc_mses.append(epoch_eval_dc_mse) 
                     eval_dc_maes.append(epoch_eval_dc_mae) 
                     eval_raw_dc_mses.append(epoch_eval_raw_dc_mse) 
@@ -5687,6 +6991,15 @@ def main():
                     eval_iauc10_errs.append(epoch_eval_iauc10_err)
                     eval_peak_errs.append(epoch_eval_peak_err)
                     eval_ttpeak_err_secs.append(epoch_eval_ttpeak_err_sec)
+                    eval_student_vs_grasp_rho_fulls.append(epoch_eval_student_vs_grasp_rho_full)
+                    eval_student_vs_grasp_curve_maes.append(epoch_eval_student_vs_grasp_curve_mae)
+                    eval_student_vs_grasp_early_corrs.append(epoch_eval_student_vs_grasp_early_corr)
+                    eval_student_vs_grasp_early_maes.append(epoch_eval_student_vs_grasp_early_mae)
+                    eval_student_vs_grasp_ttae_secs.append(epoch_eval_student_vs_grasp_ttae_sec)
+                    eval_student_vs_grasp_washin_maes.append(epoch_eval_student_vs_grasp_washin_mae)
+                    eval_student_vs_grasp_iauc10_errs.append(epoch_eval_student_vs_grasp_iauc10_err)
+                    eval_student_vs_grasp_peak_errs.append(epoch_eval_student_vs_grasp_peak_err)
+                    eval_student_vs_grasp_ttpeak_err_secs.append(epoch_eval_student_vs_grasp_ttpeak_err_sec)
                     eval_dl_dc_mae_bestfits.append(epoch_eval_dl_dc_mae_bestfit)
                     eval_raw_ssdu_nmses.append(epoch_eval_raw_ssdu_nmse)
 
@@ -5706,6 +7019,14 @@ def main():
                     writer.add_scalar('Metric/PSNR', epoch_eval_psnr, epoch)
                     writer.add_scalar('Metric/MSE', epoch_eval_mse, epoch)
                     writer.add_scalar('Metric/LPIPS', epoch_eval_lpips, epoch)
+                    if np.isfinite(epoch_eval_student_vs_grasp_ssim):
+                        writer.add_scalar('Metric/Student_vs_GRASP_SSIM', epoch_eval_student_vs_grasp_ssim, epoch)
+                    if np.isfinite(epoch_eval_student_vs_grasp_psnr):
+                        writer.add_scalar('Metric/Student_vs_GRASP_PSNR', epoch_eval_student_vs_grasp_psnr, epoch)
+                    if np.isfinite(epoch_eval_student_vs_grasp_mse):
+                        writer.add_scalar('Metric/Student_vs_GRASP_MSE', epoch_eval_student_vs_grasp_mse, epoch)
+                    if np.isfinite(epoch_eval_student_vs_grasp_lpips):
+                        writer.add_scalar('Metric/Student_vs_GRASP_LPIPS', epoch_eval_student_vs_grasp_lpips, epoch)
                     writer.add_scalar('Metric/DC_MSE', epoch_eval_dc_mse, epoch)
                     writer.add_scalar('Metric/DC_MAE', epoch_eval_dc_mae, epoch)
                     writer.add_scalar('Metric/RAW_DC_MSE', epoch_eval_raw_dc_mse, epoch)
@@ -5743,6 +7064,60 @@ def main():
                         writer.add_scalar('Metric/Temporal_Peak_err', epoch_eval_peak_err, epoch)
                     if np.isfinite(epoch_eval_ttpeak_err_sec):
                         writer.add_scalar('Metric/Temporal_TTPeak_err_sec', epoch_eval_ttpeak_err_sec, epoch)
+                    if np.isfinite(epoch_eval_student_vs_grasp_rho_full):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Rho_full',
+                            epoch_eval_student_vs_grasp_rho_full,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_curve_mae):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Curve_MAE',
+                            epoch_eval_student_vs_grasp_curve_mae,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_early_corr):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Rho_early',
+                            epoch_eval_student_vs_grasp_early_corr,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_early_mae):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Early_MAE',
+                            epoch_eval_student_vs_grasp_early_mae,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_ttae_sec):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_TTAE_sec',
+                            epoch_eval_student_vs_grasp_ttae_sec,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_washin_mae):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Washin_MAE',
+                            epoch_eval_student_vs_grasp_washin_mae,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_iauc10_err):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_IAUC10_err',
+                            epoch_eval_student_vs_grasp_iauc10_err,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_peak_err):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_Peak_err',
+                            epoch_eval_student_vs_grasp_peak_err,
+                            epoch,
+                        )
+                    if np.isfinite(epoch_eval_student_vs_grasp_ttpeak_err_sec):
+                        writer.add_scalar(
+                            'Metric/Student_vs_GRASP_Temporal_TTPeak_err_sec',
+                            epoch_eval_student_vs_grasp_ttpeak_err_sec,
+                            epoch,
+                        )
                     if np.isfinite(epoch_eval_dl_dc_mae_bestfit):
                         writer.add_scalar('Metric/DL_DC_MAE_BESTFIT', epoch_eval_dl_dc_mae_bestfit, epoch)
                     if np.isfinite(epoch_eval_raw_ssdu_nmse):
@@ -5869,6 +7244,78 @@ def main():
                                 run_state["best_checkpoint_psnr"] = float(best_psnr)
                                 _save_run_state(run_state_path, run_state)
 
+                    if early_stop_enabled and epoch >= early_stop_min_step and early_stop_patience_evals > 0:
+                        early_stop_values = {
+                            "dro_ssim": epoch_eval_ssim,
+                            "dro_psnr": epoch_eval_psnr,
+                            "dro_mse": epoch_eval_mse,
+                            "dro_lpips": epoch_eval_lpips,
+                            "dro_curve_corr": epoch_eval_curve_corr,
+                            "rho_full": epoch_eval_rho_full,
+                            "mae_full": epoch_eval_curve_mae,
+                            "rho_early": epoch_eval_early_corr,
+                            "mae_early": epoch_eval_early_mae,
+                            "t_arr_error": epoch_eval_ttae_sec,
+                            "mae_washin": epoch_eval_washin_mae,
+                            "iauc10_error": epoch_eval_iauc10_err,
+                            "mae_peak": epoch_eval_peak_err,
+                            "t_peak_error": epoch_eval_ttpeak_err_sec,
+                            "non_dro_mae": epoch_eval_raw_dc_mae,
+                            "non_dro_mse": epoch_eval_raw_dc_mse,
+                            "val_mc_loss": epoch_val_mc_loss,
+                            "val_ei_loss": epoch_val_ei_loss,
+                            "val_adj_loss": epoch_val_adj_loss,
+                            "train_mc_loss": epoch_train_mc_loss,
+                            "train_ssdu_loss": epoch_train_ssdu_loss,
+                            "train_ei_loss": epoch_train_ei_loss,
+                            "train_rebin_loss": epoch_train_rebin_loss,
+                            "train_supervised_distill_loss": epoch_train_supervised_distill_loss,
+                        }
+                        stop_metric_key, stop_metric_value = _resolve_early_stop_metric(
+                            early_stop_values, early_stop_metric
+                        )
+                        if stop_metric_value is not None:
+                            if (
+                                early_stop_best_metric is None
+                                or _metric_improved(
+                                    float(stop_metric_value),
+                                    float(early_stop_best_metric),
+                                    early_stop_mode,
+                                    early_stop_min_delta,
+                                )
+                            ):
+                                early_stop_best_metric = float(stop_metric_value)
+                                early_stop_bad_evals = 0
+                            else:
+                                early_stop_bad_evals += 1
+
+                            writer.add_scalar("EarlyStopping/BestMetric", float(early_stop_best_metric), epoch)
+                            writer.add_scalar("EarlyStopping/BadEvalCount", int(early_stop_bad_evals), epoch)
+                            writer.add_scalar("EarlyStopping/CurrentMetric", float(stop_metric_value), epoch)
+
+                            if early_stop_bad_evals >= early_stop_patience_evals:
+                                auto_stop_requested = True
+                                auto_stop_reason = (
+                                    f"early_stopping(metric={stop_metric_key}, mode={early_stop_mode}, "
+                                    f"best={float(early_stop_best_metric):.6g}, current={float(stop_metric_value):.6g}, "
+                                    f"patience={int(early_stop_patience_evals)}, min_delta={float(early_stop_min_delta):.6g})"
+                                )
+                                run_completion_reason = str(auto_stop_reason)
+                                writer.add_scalar("EarlyStopping/Triggered", 1.0, epoch)
+                                print(
+                                    f"[EarlyStopping] Triggered at step {epoch}. reason={auto_stop_reason}"
+                                )
+                                if run_state is not None:
+                                    with state_lock:
+                                        run_state["early_stopping"] = {
+                                            "trigger_step": int(epoch),
+                                            "reason": str(auto_stop_reason),
+                                            "metric": str(stop_metric_key),
+                                            "best_metric": float(early_stop_best_metric),
+                                            "bad_evals": int(early_stop_bad_evals),
+                                        }
+                                        _save_run_state(run_state_path, run_state)
+
 
 
 
@@ -5984,6 +7431,8 @@ def main():
                         # Plot Weighted Losses
                         plt.figure()
                         plt.plot(weighted_train_mc_losses, label="MC Loss")
+                        if use_ssdu_loss and weighted_train_ssdu_losses:
+                            plt.plot(weighted_train_ssdu_losses, label="SSDU Loss")
                         plt.plot(weighted_train_ei_losses, label="EI Loss")
                         plt.plot(weighted_train_adj_losses, label="Adjoint Loss")
                         plt.xlabel("Step")
@@ -6019,6 +7468,20 @@ def main():
                             plt.savefig(os.path.join(output_dir, "rebin_loss.png"))
                             plt.close()
 
+                        # Plot SSDU Loss (if enabled)
+                        if use_ssdu_loss and train_ssdu_losses:
+                            plt.figure()
+                            plt.plot(train_ssdu_losses, label="SSDU Loss")
+                            if weighted_train_ssdu_losses:
+                                plt.plot(weighted_train_ssdu_losses, label="Weighted SSDU Loss")
+                            plt.xlabel("Step")
+                            plt.ylabel("Loss")
+                            plt.title("Training SSDU Loss")
+                            plt.legend()
+                            plt.grid(True)
+                            plt.savefig(os.path.join(output_dir, "ssdu_loss.png"))
+                            plt.close()
+
                         # plot evaluation metrics in one figure
 
                         # Set the seaborn style
@@ -6032,13 +7495,19 @@ def main():
                         )
 
                         eval_plot_specs = [
-                            ("DRO SSIM", "SSIM", eval_ssims, avg_grasp_ssim),
-                            ("DRO PSNR", "PSNR", eval_psnrs, avg_grasp_psnr),
-                            ("DRO Image MSE", "MSE", eval_mses, avg_grasp_mse),
-                            ("Non-DRO k-space MSE", "MSE", eval_raw_dc_mses, avg_grasp_raw_dc_mse),
-                            ("DRO LPIPS", "LPIPS", eval_lpipses, avg_grasp_lpips),
-                            ("DRO k-space MAE (sim)", "MAE", eval_dc_maes, avg_grasp_dc_mae),
+                            ("Student vs DRO SSIM", "SSIM", eval_ssims, avg_grasp_ssim),
+                            ("Student vs DRO PSNR", "PSNR", eval_psnrs, avg_grasp_psnr),
+                            ("Student vs DRO Image MSE", "MSE", eval_mses, avg_grasp_mse),
+                            ("Student vs DRO LPIPS", "LPIPS", eval_lpipses, avg_grasp_lpips),
+                            ("Student vs DRO k-space MAE (sim)", "MAE", eval_dc_maes, avg_grasp_dc_mae),
+                            (
+                                "Student vs DRO k-space MAE (best-fit gain)",
+                                "MAE",
+                                eval_dl_dc_mae_bestfits,
+                                avg_grasp_dc_mae_bestfit,
+                            ),
                             ("Non-DRO k-space MAE", "MAE", eval_raw_dc_maes, avg_grasp_raw_dc_mae),
+                            ("Non-DRO k-space MSE", "MSE", eval_raw_dc_mses, avg_grasp_raw_dc_mse),
                             ("Non-DRO k-space Relative PSNR", "PSNR", eval_raw_dc_psnrs, avg_grasp_raw_dc_psnr),
                             (
                                 "Non-DRO k-space Relative L2",
@@ -6070,17 +7539,15 @@ def main():
                                 eval_raw_dyn_dce_maes,
                                 avg_grasp_raw_dyn_dce_mae,
                             ),
+                            ("Student vs GRASP SSIM", "SSIM", eval_student_vs_grasp_ssims, None),
+                            ("Student vs GRASP PSNR", "PSNR", eval_student_vs_grasp_psnrs, None),
+                            ("Student vs GRASP Image MSE", "MSE", eval_student_vs_grasp_mses, None),
+                            ("Student vs GRASP LPIPS", "LPIPS", eval_student_vs_grasp_lpipses, None),
                             (
-                                "DRO Curve Correlation",
+                                "Student vs DRO Curve Correlation",
                                 "Pearson Correlation Coefficient",
                                 eval_curve_corrs,
                                 avg_grasp_curve_corr,
-                            ),
-                            (
-                                "DRO k-space MAE (best-fit gain)",
-                                "MAE",
-                                eval_dl_dc_mae_bestfits,
-                                avg_grasp_dc_mae_bestfit,
                             ),
                             ("Non-DRO SSDU NMSE", "NMSE", eval_raw_ssdu_nmses, avg_grasp_raw_ssdu_nmse),
                         ]
@@ -6089,7 +7556,11 @@ def main():
                         nrows = int(math.ceil(len(eval_plot_specs) / ncols))
                         fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6, nrows * 4.5))
                         axes = np.array(axes, ndmin=1).reshape(nrows, ncols)
-                        fig.suptitle(f'Evaluation Metrics Over Steps ({N_spokes_eval} spokes/frame)', fontsize=20)
+                        fig.suptitle(
+                            f"Evaluation Metrics Over Steps ({N_spokes_eval} spokes/frame): "
+                            "student-vs-DRO plus student-vs-GRASP",
+                            fontsize=20,
+                        )
 
                         for idx, (title, ylabel, series, grasp_baseline) in enumerate(eval_plot_specs):
                             ax = axes[idx // ncols, idx % ncols]
@@ -6115,15 +7586,15 @@ def main():
                         plt.close()
 
                         temporal_plot_specs = [
-                            ("ρ_full", "Pearson Correlation", eval_rho_fulls, avg_grasp_rho_full),
-                            ("MAE_full", "MAE", eval_curve_maes, avg_grasp_curve_mae),
-                            ("ρ_early", "Pearson Correlation", eval_early_corrs, avg_grasp_early_corr),
-                            ("MAE_early", "MAE", eval_early_maes, avg_grasp_early_mae),
-                            ("t_arr Error", "Seconds", eval_ttae_secs, avg_grasp_ttae_sec),
-                            ("MAE_wash-in", "MAE", eval_washin_maes, avg_grasp_washin_mae),
-                            ("iAUC_10 Error", "Error", eval_iauc10_errs, avg_grasp_iauc10_err),
-                            ("MAE_peak", "MAE", eval_peak_errs, avg_grasp_peak_err),
-                            ("t_peak Error", "Seconds", eval_ttpeak_err_secs, avg_grasp_ttpeak_err_sec),
+                            ("Student vs DRO ρ_full", "Pearson Correlation", eval_rho_fulls, avg_grasp_rho_full),
+                            ("Student vs DRO MAE_full", "MAE", eval_curve_maes, avg_grasp_curve_mae),
+                            ("Student vs DRO ρ_early", "Pearson Correlation", eval_early_corrs, avg_grasp_early_corr),
+                            ("Student vs DRO MAE_early", "MAE", eval_early_maes, avg_grasp_early_mae),
+                            ("Student vs DRO t_arr Error", "Seconds", eval_ttae_secs, avg_grasp_ttae_sec),
+                            ("Student vs DRO MAE_wash-in", "MAE", eval_washin_maes, avg_grasp_washin_mae),
+                            ("Student vs DRO iAUC_10 Error", "Error", eval_iauc10_errs, avg_grasp_iauc10_err),
+                            ("Student vs DRO MAE_peak", "MAE", eval_peak_errs, avg_grasp_peak_err),
+                            ("Student vs DRO t_peak Error", "Seconds", eval_ttpeak_err_secs, avg_grasp_ttpeak_err_sec),
                         ]
                         if any(series for _, _, series, _ in temporal_plot_specs):
                             ncols_t = 3
@@ -6131,7 +7602,7 @@ def main():
                             fig, axes = plt.subplots(nrows_t, ncols_t, figsize=(ncols_t * 6, nrows_t * 4.8))
                             axes = np.array(axes, ndmin=1).reshape(nrows_t, ncols_t)
                             fig.suptitle(
-                                f"Temporal Fidelity Metrics Over Steps ({N_spokes_eval} spokes/frame)",
+                                f"Temporal Metrics Over Steps ({N_spokes_eval} spokes/frame): student-vs-DRO",
                                 fontsize=20,
                             )
 
@@ -6159,6 +7630,46 @@ def main():
                             plt.savefig(os.path.join(output_dir, "eval_temporal_metrics.png"))
                             plt.close()
 
+                        temporal_student_vs_grasp_specs = [
+                            ("Student vs GRASP ρ_full", "Pearson Correlation", eval_student_vs_grasp_rho_fulls),
+                            ("Student vs GRASP MAE_full", "MAE", eval_student_vs_grasp_curve_maes),
+                            ("Student vs GRASP ρ_early", "Pearson Correlation", eval_student_vs_grasp_early_corrs),
+                            ("Student vs GRASP MAE_early", "MAE", eval_student_vs_grasp_early_maes),
+                            ("Student vs GRASP t_arr Error", "Seconds", eval_student_vs_grasp_ttae_secs),
+                            ("Student vs GRASP MAE_wash-in", "MAE", eval_student_vs_grasp_washin_maes),
+                            ("Student vs GRASP iAUC_10 Error", "Error", eval_student_vs_grasp_iauc10_errs),
+                            ("Student vs GRASP MAE_peak", "MAE", eval_student_vs_grasp_peak_errs),
+                            ("Student vs GRASP t_peak Error", "Seconds", eval_student_vs_grasp_ttpeak_err_secs),
+                        ]
+                        if any(series for _, _, series in temporal_student_vs_grasp_specs):
+                            ncols_t = 3
+                            nrows_t = int(math.ceil(len(temporal_student_vs_grasp_specs) / ncols_t))
+                            fig, axes = plt.subplots(nrows_t, ncols_t, figsize=(ncols_t * 6, nrows_t * 4.8))
+                            axes = np.array(axes, ndmin=1).reshape(nrows_t, ncols_t)
+                            fig.suptitle(
+                                f"Temporal Metrics Over Steps ({N_spokes_eval} spokes/frame): student-vs-GRASP",
+                                fontsize=20,
+                            )
+                            for idx, (title, ylabel, series) in enumerate(temporal_student_vs_grasp_specs):
+                                ax = axes[idx // ncols_t, idx % ncols_t]
+                                if eval_steps and len(eval_steps) >= len(series):
+                                    x = eval_steps[: len(series)]
+                                else:
+                                    x = list(range(0, len(series) * eval_every_steps, eval_every_steps))
+                                finite_values = [v for v in series if v is not None and np.isfinite(v)]
+                                if finite_values:
+                                    sns.lineplot(x=x, y=series, ax=ax)
+                                else:
+                                    ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+                                ax.set_title(title)
+                                ax.set_xlabel("Step")
+                                ax.set_ylabel(ylabel)
+                            for idx in range(len(temporal_student_vs_grasp_specs), nrows_t * ncols_t):
+                                axes[idx // ncols_t, idx % ncols_t].axis("off")
+                            plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+                            plt.savefig(os.path.join(output_dir, "eval_temporal_metrics_student_vs_grasp.png"))
+                            plt.close()
+
                         if curriculum_enabled and eval_spf_curves:
                             for spf in sorted(eval_spf_curves):
                                 spf_curves = eval_spf_curves[spf]
@@ -6167,7 +7678,7 @@ def main():
 
                                 fig, axes = plt.subplots(2, 4, figsize=(24, 10))
                                 fig.suptitle(
-                                    f"Evaluation Metrics Over Steps ({spf} spokes/frame)",
+                                    f"Evaluation Metrics Over Steps ({spf} spokes/frame): student-vs-DRO",
                                     fontsize=20,
                                 )
 
@@ -6176,7 +7687,7 @@ def main():
                                     y=spf_curves["eval_ssims"],
                                     ax=axes[0, 0],
                                 )
-                                axes[0, 0].set_title("DRO SSIM")
+                                axes[0, 0].set_title("Student vs DRO SSIM")
                                 axes[0, 0].set_xlabel("Step")
                                 axes[0, 0].set_ylabel("SSIM")
 
@@ -6185,7 +7696,7 @@ def main():
                                     y=spf_curves["eval_psnrs"],
                                     ax=axes[0, 1],
                                 )
-                                axes[0, 1].set_title("DRO PSNR")
+                                axes[0, 1].set_title("Student vs DRO PSNR")
                                 axes[0, 1].set_xlabel("Step")
                                 axes[0, 1].set_ylabel("PSNR")
 
@@ -6194,7 +7705,7 @@ def main():
                                     y=spf_curves["eval_mses"],
                                     ax=axes[0, 2],
                                 )
-                                axes[0, 2].set_title("DRO Image MSE")
+                                axes[0, 2].set_title("Student vs DRO Image MSE")
                                 axes[0, 2].set_xlabel("Step")
                                 axes[0, 2].set_ylabel("MSE")
 
@@ -6203,7 +7714,7 @@ def main():
                                     y=spf_curves["eval_lpipses"],
                                     ax=axes[1, 0],
                                 )
-                                axes[1, 0].set_title("DRO LPIPS")
+                                axes[1, 0].set_title("Student vs DRO LPIPS")
                                 axes[1, 0].set_xlabel("Step")
                                 axes[1, 0].set_ylabel("LPIPS")
 
@@ -6230,7 +7741,7 @@ def main():
                                     y=spf_curves["eval_curve_corrs"],
                                     ax=axes[1, 3],
                                 )
-                                axes[1, 3].set_title("DRO Curve Correlation")
+                                axes[1, 3].set_title("Student vs DRO Curve Correlation")
                                 axes[1, 3].set_xlabel("Step")
                                 axes[1, 3].set_ylabel("Pearson Correlation Coefficient")
 
@@ -6251,7 +7762,7 @@ def main():
                             color="red",
                             linestyle="--",
                             linewidth=2,
-                            label="GRASP Avg"
+                            label="GRASP-vs-DRO baseline"
                         )
                         plt.xlabel("Step")
                         plt.ylabel("DRO k-space MSE (sim)")
@@ -6268,7 +7779,7 @@ def main():
                             color="red",
                             linestyle="--",
                             linewidth=2,
-                            label="GRASP Avg"
+                            label="GRASP-vs-DRO baseline"
                         )
                         plt.xlabel("Step")
                         plt.ylabel("DRO k-space MAE (sim)")
@@ -6284,7 +7795,7 @@ def main():
                             color="red",
                             linestyle="--",
                             linewidth=2,
-                            label="GRASP Avg"
+                            label="GRASP-vs-NonDRO reference"
                         )
                         plt.xlabel("Step")
                         plt.ylabel("Non-DRO k-space MSE")
@@ -6303,7 +7814,7 @@ def main():
                                 color="red",
                                 linestyle="--",
                                 linewidth=2,
-                                label="GRASP Avg",
+                                label="GRASP-vs-NonDRO reference",
                             )
                         plt.xlabel("Step")
                         plt.ylabel("Non-DRO k-space Relative PSNR")
@@ -6318,6 +7829,11 @@ def main():
                     print(
                         f"Step {epoch}: Training MC Loss: {epoch_train_mc_loss:.6f}, Validation MC Loss: {epoch_val_mc_loss:.6f}"
                     )
+                    if use_ssdu_loss:
+                        print(
+                            f"Step {epoch}: Training SSDU Loss: {epoch_train_ssdu_loss:.6f} "
+                            f"(weight={ssdu_loss_weight:.3g})"
+                        )
                     if use_ei_loss:
                         print(
                             f"Step {epoch}: Training EI Loss: {epoch_train_ei_loss:.6f}, Validation EI Loss: {epoch_val_ei_loss:.6f}"
@@ -6342,60 +7858,83 @@ def main():
                             f"freq_term={epoch_train_supervised_distill_freq_loss:.6f}, "
                             f"curriculum_alpha={float(epoch_supervised_curriculum_alpha):.3f})"
                         )
+                        if use_supervised_multiobjective:
+                            print(
+                                "Step "
+                                f"{epoch}: Supervised MultiObjective components: "
+                                f"image={epoch_train_supervised_distill_image_loss:.6f}, "
+                                f"temporal={epoch_train_supervised_distill_temporal_loss:.6f}, "
+                                f"weighted_image={epoch_supervised_distill_weighted_image_loss:.6f}, "
+                                f"weighted_temporal={epoch_supervised_distill_weighted_temporal_loss:.6f}, "
+                                f"temporal_scale_used={float(epoch_supervised_multiobj_temporal_scale):.4f}, "
+                                f"temporal_scale_next={float(supervised_multiobj_temporal_scale):.4f}"
+                            )
                     print(f"--- Evaluation Metrics: Step {epoch} ---")
-                    print(f"Recon SSIM: {epoch_eval_ssim:.4f} ± {np.std(epoch_eval_ssims):.4f}")
-                    print(f"Recon PSNR: {epoch_eval_psnr:.4f} ± {np.std(epoch_eval_psnrs):.4f}")
-                    print(f"Recon MSE: {epoch_eval_mse:.4f} ± {np.std(epoch_eval_mses):.4f}")
-                    print(f"Recon LPIPS: {epoch_eval_lpips:.4f} ± {np.std(epoch_eval_lpipses):.4f}")
-                    print(f"Recon DC MSE: {epoch_eval_dc_mse:.4f} ± {np.std(epoch_eval_dc_mses):.4f}")
-                    print(f"Recon DC MAE: {epoch_eval_dc_mae:.4f} ± {np.std(epoch_eval_dc_maes):.4f}")
+                    print(f"Student-vs-DRO SSIM: {epoch_eval_ssim:.4f} ± {np.std(epoch_eval_ssims):.4f}")
+                    print(f"Student-vs-DRO PSNR: {epoch_eval_psnr:.4f} ± {np.std(epoch_eval_psnrs):.4f}")
+                    print(f"Student-vs-DRO MSE: {epoch_eval_mse:.4f} ± {np.std(epoch_eval_mses):.4f}")
+                    print(f"Student-vs-DRO LPIPS: {epoch_eval_lpips:.4f} ± {np.std(epoch_eval_lpipses):.4f}")
+                    print(f"Student-vs-GRASP SSIM: {epoch_eval_student_vs_grasp_ssim:.4f} ± {_std_or_zero(epoch_eval_student_vs_grasp_ssims):.4f}")
+                    print(f"Student-vs-GRASP PSNR: {epoch_eval_student_vs_grasp_psnr:.4f} ± {_std_or_zero(epoch_eval_student_vs_grasp_psnrs):.4f}")
+                    print(f"Student-vs-GRASP MSE: {epoch_eval_student_vs_grasp_mse:.4f} ± {_std_or_zero(epoch_eval_student_vs_grasp_mses):.4f}")
+                    print(f"Student-vs-GRASP LPIPS: {epoch_eval_student_vs_grasp_lpips:.4f} ± {_std_or_zero(epoch_eval_student_vs_grasp_lpipses):.4f}")
+                    print(f"Student-vs-DRO k-space MSE (sim): {epoch_eval_dc_mse:.4f} ± {np.std(epoch_eval_dc_mses):.4f}")
+                    print(f"Student-vs-DRO k-space MAE (sim): {epoch_eval_dc_mae:.4f} ± {np.std(epoch_eval_dc_maes):.4f}")
                     avg_grasp_raw_dc_psnr = _mse_to_psnr(avg_grasp_raw_dc_mse, peak=raw_dc_psnr_peak)
-                    print(f"Recon Raw DC MSE: {epoch_eval_raw_dc_mse:.4f} ± {np.std(epoch_eval_raw_dc_mses):.4f}")
-                    print(f"Recon Raw DC MAE: {epoch_eval_raw_dc_mae:.4f} ± {np.std(epoch_eval_raw_dc_maes):.4f}")
+                    print(f"Student-vs-NonDRO Raw DC MSE: {epoch_eval_raw_dc_mse:.4f} ± {np.std(epoch_eval_raw_dc_mses):.4f}")
+                    print(f"Student-vs-NonDRO Raw DC MAE: {epoch_eval_raw_dc_mae:.4f} ± {np.std(epoch_eval_raw_dc_maes):.4f}")
                     if np.isfinite(epoch_eval_raw_dc_psnr):
-                        print(f"Recon Raw DC Relative PSNR: {epoch_eval_raw_dc_psnr:.4f}")
+                        print(f"Student-vs-NonDRO Raw DC Relative PSNR: {epoch_eval_raw_dc_psnr:.4f}")
                     if np.isfinite(epoch_eval_raw_dc_rel_l2):
-                        print(f"Recon Raw DC Relative L2: {epoch_eval_raw_dc_rel_l2:.6f}")
+                        print(f"Student-vs-NonDRO Raw DC Relative L2: {epoch_eval_raw_dc_rel_l2:.6f}")
                     if np.isfinite(epoch_eval_raw_dc_rel_l2_low) and np.isfinite(epoch_eval_raw_dc_rel_l2_mid) and np.isfinite(epoch_eval_raw_dc_rel_l2_high):
                         print(
-                            "Recon Raw DC Relative L2 Bands "
+                            "Student-vs-NonDRO Raw DC Relative L2 Bands "
                             f"(L/M/H): {epoch_eval_raw_dc_rel_l2_low:.6f} / "
                             f"{epoch_eval_raw_dc_rel_l2_mid:.6f} / {epoch_eval_raw_dc_rel_l2_high:.6f}"
                         )
                     if epoch_eval_raw_dyn_dce_maes:
                         print(
-                            f"Recon Raw Dynamic DCE MAE: {epoch_eval_raw_dyn_dce_mae:.6f} ± "
+                            f"Student-vs-NonDRO Raw Dynamic DCE MAE: {epoch_eval_raw_dyn_dce_mae:.6f} ± "
                             f"{np.std(epoch_eval_raw_dyn_dce_maes):.6f}"
                         )
-                    print(f"Recon Enhancement Curve Correlation: {epoch_eval_curve_corr:.4f} ± {np.std(epoch_eval_curve_corrs):.4f}")
+                    print(f"Student-vs-DRO Enhancement Curve Correlation: {epoch_eval_curve_corr:.4f} ± {np.std(epoch_eval_curve_corrs):.4f}")
+                    if np.isfinite(epoch_eval_student_vs_grasp_rho_full):
+                        print(f"Student-vs-GRASP ρ_full: {epoch_eval_student_vs_grasp_rho_full:.4f}")
+                    if np.isfinite(epoch_eval_student_vs_grasp_early_corr):
+                        print(f"Student-vs-GRASP ρ_early: {epoch_eval_student_vs_grasp_early_corr:.4f}")
+                    if np.isfinite(epoch_eval_student_vs_grasp_ttae_sec):
+                        print(f"Student-vs-GRASP t_arr Error: {epoch_eval_student_vs_grasp_ttae_sec:.4f}s")
+                    if np.isfinite(epoch_eval_student_vs_grasp_ttpeak_err_sec):
+                        print(f"Student-vs-GRASP t_peak Error: {epoch_eval_student_vs_grasp_ttpeak_err_sec:.4f}s")
                     if not _grasp_baseline_ready():
                         raise RuntimeError(
                             f"Step {epoch}: GRASP baseline metrics unavailable; cannot log baseline."
                         )
-                    print(f"GRASP SSIM: {avg_grasp_ssim:.4f} ± {_std_or_zero(grasp_ssims):.4f}")
-                    print(f"GRASP PSNR: {avg_grasp_psnr:.4f} ± {_std_or_zero(grasp_psnrs):.4f}")
-                    print(f"GRASP MSE: {avg_grasp_mse:.4f} ± {_std_or_zero(grasp_mses):.4f}")
-                    print(f"GRASP LPIPS: {avg_grasp_lpips:.4f} ± {_std_or_zero(grasp_lpipses):.4f}")
-                    print(f"GRASP DC MSE: {avg_grasp_dc_mse:.6f} ± {_std_or_zero(grasp_dc_mses):.4f}")
-                    print(f"GRASP DC MAE: {avg_grasp_dc_mae:.6f} ± {_std_or_zero(grasp_dc_maes):.4f}")
-                    print(f"GRASP Raw DC MSE: {avg_grasp_raw_dc_mse:.6f} ± {_std_or_zero(raw_grasp_dc_mses):.4f}")
-                    print(f"GRASP Raw DC MAE: {avg_grasp_raw_dc_mae:.6f} ± {_std_or_zero(raw_grasp_dc_maes):.4f}")
+                    print(f"GRASP-vs-DRO SSIM baseline: {avg_grasp_ssim:.4f} ± {_std_or_zero(grasp_ssims):.4f}")
+                    print(f"GRASP-vs-DRO PSNR baseline: {avg_grasp_psnr:.4f} ± {_std_or_zero(grasp_psnrs):.4f}")
+                    print(f"GRASP-vs-DRO MSE baseline: {avg_grasp_mse:.4f} ± {_std_or_zero(grasp_mses):.4f}")
+                    print(f"GRASP-vs-DRO LPIPS baseline: {avg_grasp_lpips:.4f} ± {_std_or_zero(grasp_lpipses):.4f}")
+                    print(f"GRASP-vs-DRO k-space MSE baseline: {avg_grasp_dc_mse:.6f} ± {_std_or_zero(grasp_dc_mses):.4f}")
+                    print(f"GRASP-vs-DRO k-space MAE baseline: {avg_grasp_dc_mae:.6f} ± {_std_or_zero(grasp_dc_maes):.4f}")
+                    print(f"GRASP-vs-NonDRO Raw DC MSE baseline: {avg_grasp_raw_dc_mse:.6f} ± {_std_or_zero(raw_grasp_dc_mses):.4f}")
+                    print(f"GRASP-vs-NonDRO Raw DC MAE baseline: {avg_grasp_raw_dc_mae:.6f} ± {_std_or_zero(raw_grasp_dc_maes):.4f}")
                     if np.isfinite(avg_grasp_raw_dc_psnr):
-                        print(f"GRASP Raw DC Relative PSNR: {avg_grasp_raw_dc_psnr:.4f}")
+                        print(f"GRASP-vs-NonDRO Raw DC Relative PSNR baseline: {avg_grasp_raw_dc_psnr:.4f}")
                     if np.isfinite(avg_grasp_raw_dc_rel_l2):
-                        print(f"GRASP Raw DC Relative L2: {avg_grasp_raw_dc_rel_l2:.6f}")
+                        print(f"GRASP-vs-NonDRO Raw DC Relative L2 baseline: {avg_grasp_raw_dc_rel_l2:.6f}")
                     if np.isfinite(avg_grasp_raw_dc_rel_l2_low) and np.isfinite(avg_grasp_raw_dc_rel_l2_mid) and np.isfinite(avg_grasp_raw_dc_rel_l2_high):
                         print(
-                            "GRASP Raw DC Relative L2 Bands "
+                            "GRASP-vs-NonDRO Raw DC Relative L2 Bands "
                             f"(L/M/H): {avg_grasp_raw_dc_rel_l2_low:.6f} / "
                             f"{avg_grasp_raw_dc_rel_l2_mid:.6f} / {avg_grasp_raw_dc_rel_l2_high:.6f}"
                         )
                     if raw_grasp_dyn_dce_maes:
                         print(
-                            f"GRASP Raw Dynamic DCE MAE: {avg_grasp_raw_dyn_dce_mae:.6f} ± "
+                            f"GRASP-vs-NonDRO Raw Dynamic DCE MAE baseline: {avg_grasp_raw_dyn_dce_mae:.6f} ± "
                             f"{_std_or_zero(raw_grasp_dyn_dce_maes):.6f}"
                         )
-                    print(f"GRASP Enhancement Curve Correlation: {avg_grasp_curve_corr:.6f} ± {_std_or_zero(grasp_curve_corrs):.4f}")
+                    print(f"GRASP-vs-DRO Enhancement Curve Correlation baseline: {avg_grasp_curve_corr:.6f} ± {_std_or_zero(grasp_curve_corrs):.4f}")
 
             # Save latest checkpoint on configured cadence (and at final step).
             should_save_latest = (epoch % save_every_steps == 0) or (epoch == max_steps)
@@ -6463,6 +8002,19 @@ def main():
                 epoch_peak_gb = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
                 attempt_peak_mem_gb = max(attempt_peak_mem_gb, epoch_peak_gb)
 
+            last_completed_step = int(epoch)
+            if config['training']['multigpu']:
+                stop_tensor = torch.tensor(
+                    [1 if (global_rank == 0 and auto_stop_requested) else 0],
+                    dtype=torch.int32,
+                    device=device,
+                )
+                dist.broadcast(stop_tensor, src=0)
+                auto_stop_requested = bool(int(stop_tensor.item()))
+            if auto_stop_requested:
+                if global_rank == 0 or not config['training']['multigpu']:
+                    print(f"[EarlyStopping] Stopping run at step {epoch}. reason={run_completion_reason}")
+                break
 
 
 
@@ -6471,7 +8023,8 @@ def main():
     if global_rank == 0 or not config['training']['multigpu']:
         train_curves, val_curves, eval_curves = _build_checkpoint_curves()
         model_save_path = os.path.join(output_dir, f'{exp_name}_model.pth')
-        save_checkpoint(model, optimizer, max_steps + 1, train_curves, val_curves, eval_curves, ei_target_weight_effective, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
+        final_checkpoint_step = max(1, int(last_completed_step) + 1)
+        save_checkpoint(model, optimizer, final_checkpoint_step, train_curves, val_curves, eval_curves, ei_target_weight_effective, step0_train_ei_loss, epoch_train_mc_loss, avg_grasp_ssim, avg_grasp_psnr, avg_grasp_mse, avg_grasp_lpips, avg_grasp_dc_mse, avg_grasp_dc_mae, avg_grasp_curve_corr, avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse, model_save_path)
         print(f'Model saved to {model_save_path}')
 
 
@@ -6482,8 +8035,19 @@ def main():
 
             with open(metrics_path, 'w', newline='') as csvfile:
                 csvwriter = csv.writer(csvfile)
-                csvwriter.writerow(['Recon', 'SSIM', 'PSNR', 'MSE', 'LPIPS', 'DC MSE', 'DC MAE', 'EC Correlation'])
-                csvwriter.writerow(['DL', 
+                csvwriter.writerow([
+                    'Reference',
+                    'SSIM',
+                    'PSNR',
+                    'MSE',
+                    'LPIPS',
+                    'DRO DC MSE',
+                    'DRO DC MAE',
+                    'Non-DRO Raw DC MSE',
+                    'Non-DRO Raw DC MAE',
+                    'DRO Curve Correlation',
+                ])
+                csvwriter.writerow(['Student_vs_DRO', 
                                 f'{epoch_eval_ssim:.4f} +- {np.std(epoch_eval_ssims):.4f}', 
                                 f'{epoch_eval_psnr:.4f} +- {np.std(epoch_eval_psnrs):.4f}', 
                                 f'{epoch_eval_mse:.4f} +- {np.std(epoch_eval_mses):.4f}',
@@ -6493,7 +8057,7 @@ def main():
                                 f"{epoch_eval_raw_dc_mse:.4f} +- {np.std(epoch_eval_raw_dc_mses):.4f}", 
                                 f"{epoch_eval_raw_dc_mae:.4f} +- {np.std(epoch_eval_raw_dc_maes):.4f}", 
                                 f'{epoch_eval_curve_corr:.4f} +- {np.std(epoch_eval_curve_corrs):.4f}'])
-                csvwriter.writerow(['GRASP', 
+                csvwriter.writerow(['GRASP_vs_DRO_baseline', 
                                 f'{avg_grasp_ssim:.4f} +- {np.std(grasp_ssims):.4f}', 
                                 f'{avg_grasp_psnr:.4f} +- {np.std(grasp_psnrs):.4f}', 
                                 f'{avg_grasp_mse:.4f} +- {np.std(grasp_mses):.4f}', 
@@ -6938,7 +8502,7 @@ def main():
         # plt.close()
 
     if global_rank == 0 or not config['training']['multigpu']:
-        _finalize_run_state("completed")
+        _finalize_run_state(run_completion_reason)
         writer.close()
 
     cleanup()

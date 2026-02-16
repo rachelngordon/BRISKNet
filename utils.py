@@ -865,9 +865,11 @@ def load_checkpoint(model, optimizer, filename):
     # curves come back as Python lists (or start empty if key not found)
     train_curves = {
         "train_mc_losses": ckpt.get("train_mc_losses", []),
+        "train_ssdu_losses": ckpt.get("train_ssdu_losses", []),
         "train_ei_losses": ckpt.get("train_ei_losses", []),
         "train_adj_losses": ckpt.get("train_adj_losses", []),
         "weighted_train_mc_losses": ckpt.get("weighted_train_mc_losses", []),
+        "weighted_train_ssdu_losses": ckpt.get("weighted_train_ssdu_losses", []),
         "weighted_train_ei_losses": ckpt.get("weighted_train_ei_losses", []),
         "weighted_train_adj_losses": ckpt.get("weighted_train_adj_losses", []),
         "train_rebin_losses": ckpt.get("train_rebin_losses", []),
@@ -876,6 +878,8 @@ def load_checkpoint(model, optimizer, filename):
         "lr_steps": ckpt.get("lr_steps", []),
         "ei_weight_history": ckpt.get("ei_weight_history", []),
         "ei_weight_steps": ckpt.get("ei_weight_steps", []),
+        "ssdu_weight_history": ckpt.get("ssdu_weight_history", []),
+        "ssdu_weight_steps": ckpt.get("ssdu_weight_steps", []),
         "ei_gradnorm_ratio_history": ckpt.get("ei_gradnorm_ratio_history", []),
         "ei_gradnorm_ratio_steps": ckpt.get("ei_gradnorm_ratio_steps", []),
         "ei_gradnorm_ratio_ema": ckpt.get("ei_gradnorm_ratio_ema"),

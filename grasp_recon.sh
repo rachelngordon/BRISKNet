@@ -23,7 +23,7 @@ CPUS_PER_TASK="${CPUS_PER_TASK:-4}"
 PARTITION="${PARTITION:-general}"
 TIME_MIN="${TIME_MIN:-700}"
 MEM_PER_GPU="${MEM_PER_GPU:-80000}"
-TARGET_ROOT="${TARGET_ROOT:-/net/scratch2/annawoodard/grasp_targets_fastmri_train}"
+TARGET_ROOT="${TARGET_ROOT:-/net/scratch2/annawoodard/grasp_targets_fastmri_train_packed}"
 ENV_NAME="${ENV_NAME:-brisknet}"
 RECON_MAX_ITER="${RECON_MAX_ITER:-10}"
 JOBS_PER_SPF="${JOBS_PER_SPF:-1}"
@@ -32,6 +32,7 @@ NUM_SHARDS="${NUM_SHARDS:-$((WORKERS_PER_JOB * JOBS_PER_SPF))}"
 SLICE_PRIORITY_ORDER="${SLICE_PRIORITY_ORDER:-middle_first}"
 PRIORITY_SLICES_PER_EXAM="${PRIORITY_SLICES_PER_EXAM:-24}"
 CONSTRAINT="${CONSTRAINT:-}"
+EXCLUDE="${EXCLUDE:-}"
 QOS="${QOS:-}"
 
 if [ "${NODES}" -lt 1 ] || [ "${GPUS_PER_NODE}" -lt 1 ] || [ "${WORKERS_PER_JOB}" -lt 1 ]; then
@@ -64,6 +65,9 @@ for SPF in "${SPFS[@]}"; do
     )
     if [ -n "${CONSTRAINT}" ]; then
       SBATCH_ARGS+=(--constraint "${CONSTRAINT}")
+    fi
+    if [ -n "${EXCLUDE}" ]; then
+      SBATCH_ARGS+=(--exclude "${EXCLUDE}")
     fi
     if [ -n "${QOS}" ]; then
       SBATCH_ARGS+=(--qos "${QOS}")
