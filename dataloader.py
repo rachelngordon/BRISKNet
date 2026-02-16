@@ -1911,6 +1911,12 @@ class SimulatedDataset(Dataset):
         else:
             kspace_torch = kspace_path
 
+        # CSMaps: (H, W, C) -> (1, C, H, W) [batch, coils, h, w]
+        if self.dro_csmaps_source == "original":
+            csmaps_torch = torch.from_numpy(csmaps).permute(2, 0, 1).unsqueeze(0)
+        else:
+            csmaps_torch = torch.from_numpy(csmaps).unsqueeze(0).to(torch.complex64)
+
 
         # load raw k-space and GRASP recon
         fastmri_id = self.get_fastMRI_id(sample_dir)
@@ -1996,12 +2002,6 @@ class SimulatedDataset(Dataset):
         # Ground truth: (H, W, T) -> (2, T, H, W) [real/imag, time, h, w]
         ground_truth_torch = torch.from_numpy(ground_truth_complex).permute(2, 0, 1) # T, H, W
         ground_truth_torch = torch.stack([ground_truth_torch.real, ground_truth_torch.imag], dim=0)
-
-        # CSMaps: (H, W, C) -> (1, C, H, W) [batch, coils, h, w]
-        if self.dro_csmaps_source == "original":
-            csmaps_torch = torch.from_numpy(csmaps).permute(2, 0, 1).unsqueeze(0)
-        else:
-            csmaps_torch = torch.from_numpy(csmaps).unsqueeze(0).to(torch.complex64)
 
         if raw_slice_valid or (not self.skip_raw_eval_if_invalid_slice):
             raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
