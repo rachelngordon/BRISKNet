@@ -108,7 +108,7 @@ model:
 
 # Training settings
 training:
-  epochs: 400
+  epochs: 50
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

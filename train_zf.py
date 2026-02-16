@@ -784,6 +784,7 @@ def main():
     dro_sim_source = eval_cfg.get("dro_sim_source", "espirit")
     dro_csmaps_source = eval_cfg.get("dro_csmaps_source", "espirit")
     dro_espirit_csmaps_dir = eval_cfg.get("dro_espirit_csmaps_dir")
+    skip_raw_eval_if_invalid_slice = bool(eval_cfg.get("skip_raw_eval_if_invalid_slice", False))
     compute_ssdu_eval = bool(eval_cfg.get("compute_ssdu", False))
     try:
         ssdu_k_folds = int(eval_cfg.get("ssdu_k_folds", 4))
@@ -1006,6 +1007,7 @@ def main():
         dro_csmaps_source=dro_csmaps_source,
         espirit_csmaps_dir=dro_espirit_csmaps_dir,
         dro_sim_source=dro_sim_source,
+        skip_raw_eval_if_invalid_slice=skip_raw_eval_if_invalid_slice,
     )
 
 
@@ -1079,20 +1081,23 @@ def main():
         # print("val_raw_csmaps norm check: ", np.sum(np.abs(val_raw_csmaps[:, :, :, 100, 100])**2))
 
         save_csmap_png(val_csmap.squeeze(0), csmap_dir, "val_dro", max_coils=max_coils)
-        save_csmap_png(val_raw_csmaps.squeeze(0), csmap_dir, "val_raw", max_coils=max_coils)
+        raw_eval_available = _raw_eval_available(val_raw_csmaps)
+        if raw_eval_available:
+            save_csmap_png(val_raw_csmaps.squeeze(0), csmap_dir, "val_raw", max_coils=max_coils)
 
 
         # --- ensure S has shape (C, H, W) ---
         S_dro = val_csmap.squeeze()         # (C,H,W) if val_csmap was (1,C,H,W)
-        S_raw = val_raw_csmaps.squeeze()    # (C,H,W) if val_raw_csmaps was (1,C,H,W)
-
         # --- 1) Sum of magnitudes across coils: abs(S).sum(axis=0) ---
         dro_sumabs = np.abs(S_dro).sum(axis=0)   # (H,W)
-        raw_sumabs = np.abs(S_raw).sum(axis=0)   # (H,W)
+        if raw_eval_available:
+            S_raw = val_raw_csmaps.squeeze()    # (C,H,W) if val_raw_csmaps was (1,C,H,W)
+            raw_sumabs = np.abs(S_raw).sum(axis=0)   # (H,W)
 
         # --- 2) (Optional but very useful) RSS magnitude across coils: sqrt(sum |S|^2) ---
         dro_rss = np.sqrt((np.abs(S_dro) ** 2).sum(axis=0))
-        raw_rss = np.sqrt((np.abs(S_raw) ** 2).sum(axis=0))
+        if raw_eval_available:
+            raw_rss = np.sqrt((np.abs(S_raw) ** 2).sum(axis=0))
 
         # --- Plot & save ---
         os.makedirs(csmap_dir, exist_ok=True)
@@ -1105,13 +1110,14 @@ def main():
         plt.savefig(os.path.join(csmap_dir, "val_dro_sumabs.png"), dpi=200)
         plt.close()
 
-        plt.figure(figsize=(6, 6))
-        plt.title("Raw: sum |S| across coils")
-        plt.imshow(raw_sumabs, cmap="gray")
-        plt.axis("off")
-        plt.tight_layout()
-        plt.savefig(os.path.join(csmap_dir, "val_raw_sumabs.png"), dpi=200)
-        plt.close()
+        if raw_eval_available:
+            plt.figure(figsize=(6, 6))
+            plt.title("Raw: sum |S| across coils")
+            plt.imshow(raw_sumabs, cmap="gray")
+            plt.axis("off")
+            plt.tight_layout()
+            plt.savefig(os.path.join(csmap_dir, "val_raw_sumabs.png"), dpi=200)
+            plt.close()
 
         # Optional RSS saves (recommended)
         plt.figure(figsize=(6, 6))
@@ -1122,13 +1128,14 @@ def main():
         plt.savefig(os.path.join(csmap_dir, "val_dro_rss.png"), dpi=200)
         plt.close()
 
-        plt.figure(figsize=(6, 6))
-        plt.title("Raw: RSS = sqrt(sum |S|^2)")
-        plt.imshow(raw_rss, cmap="gray")
-        plt.axis("off")
-        plt.tight_layout()
-        plt.savefig(os.path.join(csmap_dir, "val_raw_rss.png"), dpi=200)
-        plt.close()
+        if raw_eval_available:
+            plt.figure(figsize=(6, 6))
+            plt.title("Raw: RSS = sqrt(sum |S|^2)")
+            plt.imshow(raw_rss, cmap="gray")
+            plt.axis("off")
+            plt.tight_layout()
+            plt.savefig(os.path.join(csmap_dir, "val_raw_rss.png"), dpi=200)
+            plt.close()
             
         # except Exception as exc:
         #     print(f"CSMap plot skipped for val data: {exc}")
@@ -1899,21 +1906,35 @@ def main():
     def _std_or_zero(values):
         return float(np.std(values)) if values else 0.0
 
+    def _raw_eval_available(raw_csmaps) -> bool:
+        if raw_csmaps is None:
+            return False
+        try:
+            if hasattr(raw_csmaps, "numel") and raw_csmaps.numel() == 0:
+                return False
+            finite = torch.isfinite(raw_csmaps)
+            return bool(finite.any().item())
+        except Exception:
+            try:
+                return bool(np.isfinite(raw_csmaps).any())
+            except Exception:
+                return True
+
     def _grasp_baseline_ready():
-        required = (
+        required = [
             avg_grasp_ssim,
             avg_grasp_psnr,
             avg_grasp_mse,
             avg_grasp_lpips,
             avg_grasp_dc_mse,
             avg_grasp_dc_mae,
-            avg_grasp_raw_dc_mae,
-            avg_grasp_raw_dc_mse,
             avg_grasp_curve_mae,
             avg_grasp_ttae_sec,
             avg_grasp_iauc10_err,
             avg_grasp_peak_err,
-        )
+        ]
+        if (not skip_raw_eval_if_invalid_slice) or raw_grasp_dc_maes or raw_grasp_dc_mses:
+            required.extend([avg_grasp_raw_dc_mae, avg_grasp_raw_dc_mse])
         return all(val is not None and np.isfinite(val) for val in required)
 
     lambda_Ls = []
@@ -2076,9 +2097,15 @@ def main():
                     dro_kspace = dro_kspace.squeeze(0).to(device) # Remove batch dim
                     dro_grasp_img = dro_grasp_img.to(device) # Shape: (1, 2, H, T, W)
     
-                    raw_kspace = raw_kspace.squeeze(0).to(device) # Remove batch dim
-                    raw_grasp_img = raw_grasp_img.to(device) # Shape: (1, 2, H, T, W)
-                    raw_csmaps = raw_csmaps.squeeze(0).to(device)   # Remove batch dim
+                    raw_eval_available = _raw_eval_available(raw_csmaps)
+                    if raw_eval_available:
+                        raw_kspace = raw_kspace.squeeze(0).to(device) # Remove batch dim
+                        raw_grasp_img = raw_grasp_img.to(device) # Shape: (1, 2, H, T, W)
+                        raw_csmaps = raw_csmaps.squeeze(0).to(device)   # Remove batch dim
+                    else:
+                        raw_kspace = None
+                        raw_grasp_img = None
+                        raw_csmaps = None
     
     
                     N_spokes = eval_ktraj.shape[1] / config['data']['samples']
@@ -2109,12 +2136,24 @@ def main():
                         if device.type == "cuda":
                             torch.cuda.synchronize(device)
                         step0_val_infer_times.append(float(time.perf_counter() - infer_start))
-                        if step0_use_sliding_window:
-                            raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, raw_kspace, raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
-                        else:
-                            raw_x_recon, *_ = model(
-                            raw_kspace.to(device), eval_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
-                            )
+                        raw_x_recon = None
+                        if raw_eval_available:
+                            if step0_use_sliding_window:
+                                raw_x_recon, _ = sliding_window_inference(
+                                    H, W, N_time_eval,
+                                    eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob,
+                                    eval_chunk_size, eval_chunk_overlap,
+                                    raw_kspace, raw_csmaps,
+                                    acceleration_encoding, start_timepoint_index,
+                                    model, epoch="val0", device=device,
+                                    norm=config["model"]["norm"], collect_adj_loss=use_adj_loss
+                                )
+                            else:
+                                raw_x_recon, *_ = model(
+                                    raw_kspace.to(device), eval_physics, raw_csmaps,
+                                    acceleration_encoding, start_timepoint_index,
+                                    epoch="val0", norm=config['model']['norm']
+                                )
     
                         # fix orientation of raw k-space recon
                         # raw_x_recon = torch.rot90(raw_x_recon, k=2, dims=[-3,-2])
@@ -2239,65 +2278,70 @@ def main():
                                 initial_eval_dl_dc_mae_bestfits.append(float(dl_dc_mae_bestfit))
     
                         # raw k-space eval
-                        print("performing non-DRO eval...")
-                        dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(raw_kspace, raw_csmaps, ground_truth, raw_grasp_img, eval_physics, device, eval_dir, rescale=config['evaluation']['rescale'], dro_eval=False)
-                        dc_mse_raw, dc_mae_raw, _ = eval_sample(
-                            raw_kspace,
-                            raw_csmaps,
-                            ground_truth,
-                            raw_x_recon,
-                            eval_physics,
-                            mask,
-                            raw_grasp_img,
-                            acceleration,
-                            int(N_spokes),
-                            eval_dir,
-                            label='val0',
-                            device=device,
-                            cluster=cluster,
-                            dro_eval=False,
-                            grasp_path=grasp_path,
-                            raw_slice_idx=raw_grasp_slice_idx,
-                            rescale=config['evaluation']['rescale'],
-                            plot_arrival=True,
-                            arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
-                            arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
-                            arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
-                            arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
-                            arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
-                            arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
-                            arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
-                            arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
-                        )
-    
-                        raw_grasp_dc_mses.append(dc_mse_raw_grasp)
-                        raw_grasp_dc_maes.append(dc_mae_raw_grasp)
-                        initial_eval_raw_dc_mses.append(dc_mse_raw)
-                        initial_eval_raw_dc_maes.append(dc_mae_raw)
-                        if compute_ssdu_eval:
-                            ssdu_chunk_size = eval_chunk_size if step0_use_sliding_window else None
-                            ssdu_result = compute_ssdu_kspace_nmse(
-                                model,
+                        if raw_eval_available:
+                            print("performing non-DRO eval...")
+                            dc_mse_raw_grasp, dc_mae_raw_grasp, _ = eval_grasp(
+                                raw_kspace, raw_csmaps, ground_truth, raw_grasp_img,
+                                eval_physics, device, eval_dir,
+                                rescale=config['evaluation']['rescale'], dro_eval=False
+                            )
+                            dc_mse_raw, dc_mae_raw, _, _ = eval_sample(
                                 raw_kspace,
                                 raw_csmaps,
-                                eval_ktraj,
-                                eval_dcomp,
-                                eval_nufft_ob,
-                                eval_adjnufft_ob,
-                                spokes_per_frame=int(N_spokes),
-                                K_folds=ssdu_k_folds,
-                                baseline_weighting=ssdu_weighting,
+                                ground_truth,
+                                raw_x_recon,
+                                eval_physics,
+                                mask,
+                                raw_grasp_img,
+                                acceleration,
+                                int(N_spokes),
+                                eval_dir,
+                                label='val0',
                                 device=device,
-                                acceleration_encoding=acceleration_encoding,
-                                start_timepoint_index=start_timepoint_index,
-                                norm=config["model"]["norm"],
-                                epoch="val0",
-                                chunk_size=ssdu_chunk_size,
-                                chunk_overlap=eval_chunk_overlap,
+                                cluster=cluster,
+                                dro_eval=False,
+                                grasp_path=grasp_path,
+                                raw_slice_idx=raw_grasp_slice_idx,
+                                rescale=config['evaluation']['rescale'],
+                                plot_arrival=True,
+                                arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                                arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                                arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                                arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                                arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                                arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                             )
-                            raw_ssdu_nmse = ssdu_result.get("ssdu_nmse_mean")
-                            if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse):
-                                initial_eval_raw_ssdu_nmses.append(float(raw_ssdu_nmse))
+
+                            raw_grasp_dc_mses.append(dc_mse_raw_grasp)
+                            raw_grasp_dc_maes.append(dc_mae_raw_grasp)
+                            initial_eval_raw_dc_mses.append(dc_mse_raw)
+                            initial_eval_raw_dc_maes.append(dc_mae_raw)
+                            if compute_ssdu_eval:
+                                ssdu_chunk_size = eval_chunk_size if step0_use_sliding_window else None
+                                ssdu_result = compute_ssdu_kspace_nmse(
+                                    model,
+                                    raw_kspace,
+                                    raw_csmaps,
+                                    eval_ktraj,
+                                    eval_dcomp,
+                                    eval_nufft_ob,
+                                    eval_adjnufft_ob,
+                                    spokes_per_frame=int(N_spokes),
+                                    K_folds=ssdu_k_folds,
+                                    baseline_weighting=ssdu_weighting,
+                                    device=device,
+                                    acceleration_encoding=acceleration_encoding,
+                                    start_timepoint_index=start_timepoint_index,
+                                    norm=config["model"]["norm"],
+                                    epoch="val0",
+                                    chunk_size=ssdu_chunk_size,
+                                    chunk_overlap=eval_chunk_overlap,
+                                )
+                                raw_ssdu_nmse = ssdu_result.get("ssdu_nmse_mean")
+                                if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse):
+                                    initial_eval_raw_ssdu_nmses.append(float(raw_ssdu_nmse))
 
                     step0_val_batches += 1
                     if max_step0_val_batches is not None and step0_val_batches >= int(max_step0_val_batches):
@@ -3091,9 +3135,15 @@ def main():
                         val_dro_kspace_batch = val_dro_kspace_batch.squeeze(0).to(device) # Remove batch dim
                         val_dro_grasp_img = val_dro_grasp_img.to(device)
 
-                        val_raw_kspace = val_raw_kspace.squeeze(0).to(device) # Remove batch dim
-                        val_raw_grasp_img = val_raw_grasp_img.to(device)
-                        val_raw_csmaps = val_raw_csmaps.squeeze(0).to(device)
+                        raw_eval_available = _raw_eval_available(val_raw_csmaps)
+                        if raw_eval_available:
+                            val_raw_kspace = val_raw_kspace.squeeze(0).to(device) # Remove batch dim
+                            val_raw_grasp_img = val_raw_grasp_img.to(device)
+                            val_raw_csmaps = val_raw_csmaps.squeeze(0).to(device)
+                        else:
+                            val_raw_kspace = None
+                            val_raw_grasp_img = None
+                            val_raw_csmaps = None
 
                         # calculate acceleration factor
                         N_spokes = eval_ktraj.shape[1] / config['data']['samples']
@@ -3124,12 +3174,24 @@ def main():
                                 if device.type == "cuda":
                                     torch.cuda.synchronize(device)
                                 val_infer_times_local.append(float(time.perf_counter() - infer_start))
-                                if epoch_use_sliding_window:
-                                    val_raw_x_recon, _ = sliding_window_inference(H, W, N_time_eval, eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob, eval_chunk_size, eval_chunk_overlap, val_raw_kspace, val_raw_csmaps, acceleration_encoding, start_timepoint_index, model, epoch="val0", device=device, norm=config["model"]["norm"], collect_adj_loss=use_adj_loss)  
-                                else:
-                                    val_raw_x_recon, *_ = model(
-                                    val_raw_kspace.to(device), eval_physics, val_raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="val0", norm=config['model']['norm']
-                                    )
+                                val_raw_x_recon = None
+                                if raw_eval_available:
+                                    if epoch_use_sliding_window:
+                                        val_raw_x_recon, _ = sliding_window_inference(
+                                            H, W, N_time_eval,
+                                            eval_ktraj, eval_dcomp, eval_nufft_ob, eval_adjnufft_ob,
+                                            eval_chunk_size, eval_chunk_overlap,
+                                            val_raw_kspace, val_raw_csmaps,
+                                            acceleration_encoding, start_timepoint_index,
+                                            model, epoch="val0", device=device,
+                                            norm=config["model"]["norm"], collect_adj_loss=use_adj_loss
+                                        )
+                                    else:
+                                        val_raw_x_recon, *_ = model(
+                                            val_raw_kspace.to(device), eval_physics, val_raw_csmaps,
+                                            acceleration_encoding, start_timepoint_index,
+                                            epoch="val0", norm=config['model']['norm']
+                                        )
 
                                 # fix orientation of raw k-space recon
                                 # val_raw_x_recon = torch.rot90(val_raw_x_recon, k=2, dims=[-3,-2])
@@ -3244,72 +3306,75 @@ def main():
                                     dl_dc_mae_bestfit = temporal_metrics.get("dl_dc_mae_bestfit")
 
                                 # raw k-space eval
-                                dc_mse_raw, dc_mae_raw, _ = eval_sample(
-                                    val_raw_kspace,
-                                    val_raw_csmaps,
-                                    val_ground_truth,
-                                    val_raw_x_recon,
-                                    eval_physics,
-                                    val_mask,
-                                    val_raw_grasp_img,
-                                    acceleration,
-                                    int(N_spokes),
-                                    eval_dir,
-                                    label=f'epoch{epoch}',
-                                    device=device,
-                                    cluster=cluster,
-                                    dro_eval=False,
-                                    grasp_path=grasp_path,
-                                    raw_slice_idx=raw_grasp_slice_idx,
-                                    rescale=config['evaluation']['rescale'],
-                                    plot_arrival=True,
-                                    arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
-                                    arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
-                                    arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
-                                    arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
-                                    arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
-                                    arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
-                                    arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
-                                    arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
-                                )
-
+                                dc_mse_raw = None
+                                dc_mae_raw = None
                                 dc_mse_raw_grasp = None
                                 dc_mae_raw_grasp = None
-                                if collect_grasp_baseline:
-                                    dc_mse_raw_grasp, dc_mae_raw_grasp = eval_grasp(
+                                raw_ssdu_nmse = None
+                                if raw_eval_available:
+                                    dc_mse_raw, dc_mae_raw, _, _ = eval_sample(
                                         val_raw_kspace,
                                         val_raw_csmaps,
                                         val_ground_truth,
-                                        val_raw_grasp_img,
+                                        val_raw_x_recon,
                                         eval_physics,
-                                        device,
+                                        val_mask,
+                                        val_raw_grasp_img,
+                                        acceleration,
+                                        int(N_spokes),
                                         eval_dir,
-                                        rescale=config['evaluation']['rescale'],
-                                        dro_eval=False,
-                                    )
-                                raw_ssdu_nmse = None
-                                if compute_ssdu_eval:
-                                    ssdu_chunk_size = eval_chunk_size if epoch_use_sliding_window else None
-                                    ssdu_result = compute_ssdu_kspace_nmse(
-                                        model,
-                                        val_raw_kspace,
-                                        val_raw_csmaps,
-                                        eval_ktraj,
-                                        eval_dcomp,
-                                        eval_nufft_ob,
-                                        eval_adjnufft_ob,
-                                        spokes_per_frame=int(N_spokes),
-                                        K_folds=ssdu_k_folds,
-                                        baseline_weighting=ssdu_weighting,
+                                        label=f'epoch{epoch}',
                                         device=device,
-                                        acceleration_encoding=acceleration_encoding,
-                                        start_timepoint_index=start_timepoint_index,
-                                        norm=config["model"]["norm"],
-                                        epoch=f"val{epoch}",
-                                        chunk_size=ssdu_chunk_size,
-                                        chunk_overlap=eval_chunk_overlap,
+                                        cluster=cluster,
+                                        dro_eval=False,
+                                        grasp_path=grasp_path,
+                                        raw_slice_idx=raw_grasp_slice_idx,
+                                        rescale=config['evaluation']['rescale'],
+                                        plot_arrival=True,
+                                        arrival_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                        arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
+                                        arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
+                                        arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
+                                        arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+                                        arrival_pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
+                                        arrival_baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
+                                        arrival_total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
                                     )
-                                    raw_ssdu_nmse = ssdu_result.get("ssdu_nmse_mean")
+
+                                    if collect_grasp_baseline:
+                                        dc_mse_raw_grasp, dc_mae_raw_grasp, _ = eval_grasp(
+                                            val_raw_kspace,
+                                            val_raw_csmaps,
+                                            val_ground_truth,
+                                            val_raw_grasp_img,
+                                            eval_physics,
+                                            device,
+                                            eval_dir,
+                                            rescale=config['evaluation']['rescale'],
+                                            dro_eval=False,
+                                        )
+                                    if compute_ssdu_eval:
+                                        ssdu_chunk_size = eval_chunk_size if epoch_use_sliding_window else None
+                                        ssdu_result = compute_ssdu_kspace_nmse(
+                                            model,
+                                            val_raw_kspace,
+                                            val_raw_csmaps,
+                                            eval_ktraj,
+                                            eval_dcomp,
+                                            eval_nufft_ob,
+                                            eval_adjnufft_ob,
+                                            spokes_per_frame=int(N_spokes),
+                                            K_folds=ssdu_k_folds,
+                                            baseline_weighting=ssdu_weighting,
+                                            device=device,
+                                            acceleration_encoding=acceleration_encoding,
+                                            start_timepoint_index=start_timepoint_index,
+                                            norm=config["model"]["norm"],
+                                            epoch=f"val{epoch}",
+                                            chunk_size=ssdu_chunk_size,
+                                            chunk_overlap=eval_chunk_overlap,
+                                        )
+                                        raw_ssdu_nmse = ssdu_result.get("ssdu_nmse_mean")
                                 if distributed_eval_this_epoch:
                                     local_eval_records.append(
                                         {
@@ -3329,8 +3394,8 @@ def main():
                                                 if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit)
                                                 else None
                                             ),
-                                            "raw_dc_mse": float(dc_mse_raw),
-                                            "raw_dc_mae": float(dc_mae_raw),
+                                            "raw_dc_mse": (float(dc_mse_raw) if dc_mse_raw is not None else None),
+                                            "raw_dc_mae": (float(dc_mae_raw) if dc_mae_raw is not None else None),
                                             "raw_ssdu_nmse": (
                                                 float(raw_ssdu_nmse)
                                                 if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse)
@@ -3414,8 +3479,10 @@ def main():
                                     if dl_dc_mae_bestfit is not None and np.isfinite(dl_dc_mae_bestfit):
                                         epoch_eval_dl_dc_mae_bestfits.append(float(dl_dc_mae_bestfit))
 
-                                    epoch_eval_raw_dc_mses.append(dc_mse_raw)
-                                    epoch_eval_raw_dc_maes.append(dc_mae_raw)
+                                    if dc_mse_raw is not None:
+                                        epoch_eval_raw_dc_mses.append(dc_mse_raw)
+                                    if dc_mae_raw is not None:
+                                        epoch_eval_raw_dc_maes.append(dc_mae_raw)
                                     if raw_ssdu_nmse is not None and np.isfinite(raw_ssdu_nmse):
                                         epoch_eval_raw_ssdu_nmses.append(float(raw_ssdu_nmse))
                                     if (
@@ -3473,8 +3540,12 @@ def main():
                         epoch_eval_lpipses = [r["lpips"] for r in all_eval_records]
                         epoch_eval_dc_mses = [r["dc_mse"] for r in all_eval_records]
                         epoch_eval_dc_maes = [r["dc_mae"] for r in all_eval_records]
-                        epoch_eval_raw_dc_mses = [r["raw_dc_mse"] for r in all_eval_records]
-                        epoch_eval_raw_dc_maes = [r["raw_dc_mae"] for r in all_eval_records]
+                        epoch_eval_raw_dc_mses = [
+                            r["raw_dc_mse"] for r in all_eval_records if r.get("raw_dc_mse") is not None
+                        ]
+                        epoch_eval_raw_dc_maes = [
+                            r["raw_dc_mae"] for r in all_eval_records if r.get("raw_dc_mae") is not None
+                        ]
                         epoch_eval_curve_corrs = [r["recon_corr"] for r in all_eval_records if r.get("recon_corr") is not None]
                         epoch_eval_curve_maes = [r["curve_mae"] for r in all_eval_records if r.get("curve_mae") is not None]
                         epoch_eval_ttae_secs = [r["ttae_sec"] for r in all_eval_records if r.get("ttae_sec") is not None]

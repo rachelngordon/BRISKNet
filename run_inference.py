@@ -1191,7 +1191,7 @@ def main():
                     )
                 )
 
-            raw_dc_mse, raw_dc_mae, _ = eval_sample(
+            raw_dc_mse, raw_dc_mae, raw_dc_psnr, _ = eval_sample(
                 raw_kspace,
                 raw_csmaps,
                 ground_truth,
@@ -1222,7 +1222,7 @@ def main():
                 early_max_frames=args.early_max_frames,
                 total_scan_seconds=args.total_scan_seconds,
             )
-            raw_grasp_dc_mse, raw_grasp_dc_mae = eval_grasp(
+            raw_grasp_dc_mse, raw_grasp_dc_mae, raw_grasp_dc_psnr = eval_grasp(
                 raw_kspace,
                 raw_csmaps,
                 ground_truth,
@@ -1268,8 +1268,10 @@ def main():
                     sample=label,
                     raw_dc_mse=raw_dc_mse,
                     raw_dc_mae=raw_dc_mae,
+                    raw_dc_psnr=raw_dc_psnr,
                     raw_grasp_dc_mse=raw_grasp_dc_mse,
                     raw_grasp_dc_mae=raw_grasp_dc_mae,
+                    raw_grasp_dc_psnr=raw_grasp_dc_psnr,
                     raw_ssdu_nmse=ssdu_result.get("ssdu_nmse_mean"),
                     raw_grasp_ssdu_nmse=ssdu_grasp_result.get("ssdu_nmse_mean"),
                 )
@@ -1399,8 +1401,10 @@ def main():
             "fg_fraction",
             "raw_dc_mse",
             "raw_dc_mae",
+            "raw_dc_psnr",
             "raw_grasp_dc_mse",
             "raw_grasp_dc_mae",
+            "raw_grasp_dc_psnr",
             "raw_ssdu_nmse",
             "raw_grasp_ssdu_nmse",
         ]
@@ -1462,8 +1466,10 @@ def main():
                 "" if fg_fraction is None else f"{fg_fraction:.6f}",
                 f"{raw_row['raw_dc_mse']:.6f}",
                 f"{raw_row['raw_dc_mae']:.6f}",
+                "" if raw_row.get("raw_dc_psnr") is None else f"{raw_row['raw_dc_psnr']:.6f}",
                 f"{raw_row['raw_grasp_dc_mse']:.6f}",
                 f"{raw_row['raw_grasp_dc_mae']:.6f}",
+                "" if raw_row.get("raw_grasp_dc_psnr") is None else f"{raw_row['raw_grasp_dc_psnr']:.6f}",
                 "" if raw_row.get("raw_ssdu_nmse") is None else f"{raw_row['raw_ssdu_nmse']:.6f}",
                 "" if raw_row.get("raw_grasp_ssdu_nmse") is None else f"{raw_row['raw_grasp_ssdu_nmse']:.6f}",
             ]
@@ -1578,8 +1584,10 @@ def main():
     raw_summary = {
         "raw_dc_mse": _mean_std(raw_results, "raw_dc_mse"),
         "raw_dc_mae": _mean_std(raw_results, "raw_dc_mae"),
+        "raw_dc_psnr": _mean_std(raw_results, "raw_dc_psnr"),
         "raw_grasp_dc_mse": _mean_std(raw_results, "raw_grasp_dc_mse"),
         "raw_grasp_dc_mae": _mean_std(raw_results, "raw_grasp_dc_mae"),
+        "raw_grasp_dc_psnr": _mean_std(raw_results, "raw_grasp_dc_psnr"),
         "raw_ssdu_nmse": _mean_std(raw_results, "raw_ssdu_nmse"),
         "raw_grasp_ssdu_nmse": _mean_std(raw_results, "raw_grasp_ssdu_nmse"),
     }
@@ -1687,18 +1695,20 @@ def main():
         if zf_gain:
             gain_line += f", ZF |c|: {zf_gain}"
         print(gain_line)
-    raw_headers = ["Method", "DC_MSE", "DC_MAE", "SSDU_NMSE"]
+    raw_headers = ["Method", "DC_MSE", "DC_MAE", "DC_PSNR", "SSDU_NMSE"]
     raw_rows = [
         [
             "BRISKNet",
             _format_mean_std_precise(*raw_summary["raw_dc_mse"]),
             _format_mean_std_precise(*raw_summary["raw_dc_mae"]),
+            _format_mean_std_precise(*raw_summary["raw_dc_psnr"]),
             _format_mean_std_precise(*raw_summary["raw_ssdu_nmse"]),
         ],
         [
             "GRASP",
             _format_mean_std_precise(*raw_summary["raw_grasp_dc_mse"]),
             _format_mean_std_precise(*raw_summary["raw_grasp_dc_mae"]),
+            _format_mean_std_precise(*raw_summary["raw_grasp_dc_psnr"]),
             _format_mean_std_precise(*raw_summary["raw_grasp_ssdu_nmse"]),
         ],
     ]
@@ -1801,8 +1811,10 @@ def main():
         grasp_dc_mse = _extract_mean_std(grasp_summary.get("dc_mse"))
         raw_dc_mae = _extract_mean_std(raw_summary.get("raw_dc_mae"))
         raw_dc_mse = _extract_mean_std(raw_summary.get("raw_dc_mse"))
+        raw_dc_psnr = _extract_mean_std(raw_summary.get("raw_dc_psnr"))
         raw_grasp_dc_mae = _extract_mean_std(raw_summary.get("raw_grasp_dc_mae"))
         raw_grasp_dc_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_mse"))
+        raw_grasp_dc_psnr = _extract_mean_std(raw_summary.get("raw_grasp_dc_psnr"))
         raw_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_ssdu_nmse"))
         raw_grasp_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_grasp_ssdu_nmse"))
 
@@ -1815,6 +1827,8 @@ def main():
             "raw_dc_mae_stddev": raw_dc_mae["std"],
             "raw_dc_mse_mean": raw_dc_mse["mean"],
             "raw_dc_mse_stddev": raw_dc_mse["std"],
+            "raw_dc_psnr_mean": raw_dc_psnr["mean"],
+            "raw_dc_psnr_stddev": raw_dc_psnr["std"],
             "raw_ssdu_nmse_mean": raw_ssdu_nmse["mean"],
             "raw_ssdu_nmse_stddev": raw_ssdu_nmse["std"],
         }
@@ -1827,6 +1841,8 @@ def main():
             "raw_dc_mae_stddev": raw_grasp_dc_mae["std"],
             "raw_dc_mse_mean": raw_grasp_dc_mse["mean"],
             "raw_dc_mse_stddev": raw_grasp_dc_mse["std"],
+            "raw_dc_psnr_mean": raw_grasp_dc_psnr["mean"],
+            "raw_dc_psnr_stddev": raw_grasp_dc_psnr["std"],
             "raw_grasp_ssdu_nmse_mean": raw_grasp_ssdu_nmse["mean"],
             "raw_grasp_ssdu_nmse_stddev": raw_grasp_ssdu_nmse["std"],
         }
