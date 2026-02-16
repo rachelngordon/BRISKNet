@@ -41,8 +41,8 @@ class InferenceBatch(submitit.helpers.Checkpointable):
 
 
 def main():
-    job_name = "new_transforms_inference"
-    exp_names = "ei_diffeo_fop_cosine_lr_all_transforms_36spf,ei_diffeo_fop_cosine_lr_no_enh_scale_36spf,ei_diffeo_fop_cosine_lr_no_arrival_shift_36spf,ei_diffeo_fop_cosine_lr_no_rebin_36spf"
+    job_name = "diffeo_accel_inference"
+    exp_names = "ei_diffeo_16spf_slice_sampling,ei_diffeo_8spf_slice_sampling,ei_diffeo_4spf_slice_sampling,ei_diffeo_2spf_slice_sampling"
     exp_base_dir = "/net/projects2/annawoodard/rachelgordon/experiments"
     num_gpus = 4
     extra_args = [

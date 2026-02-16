@@ -373,6 +373,21 @@ def compute_kspace_residual_metrics(
     return metrics
 
 
+def calc_dc_psnr(reference, dc_mse: float, device):
+    """
+    Computes PSNR for k-space data consistency given reference k-space and DC MSE.
+    """
+    if dc_mse is None or not np.isfinite(dc_mse) or dc_mse <= 0:
+        return None
+    ref = from_torch_complex(reference).to(device)
+    max_val = torch.max(ref).item()
+    min_val = torch.min(ref).item()
+    data_range = max_val - min_val
+    if not np.isfinite(data_range) or data_range <= 0:
+        return None
+    return float(20.0 * np.log10(data_range) - 10.0 * np.log10(dc_mse))
+
+
 def _best_fit_complex_scale(pred: torch.Tensor, ref: torch.Tensor) -> complex | None:
     """Least-squares complex scalar c minimizing ||c*pred - ref||_2.
 
@@ -2045,6 +2060,7 @@ def eval_grasp(
 
     # Compute MSE
     dc_mse_grasp, dc_mae_grasp = calc_dc(grasp_kspace, kspace, device)
+    dc_psnr_grasp = calc_dc_psnr(kspace, dc_mse_grasp, device)
     aux = {}
     dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(grasp_kspace, kspace, device)
     if dc_mse_bestfit is not None and dc_scale is not None:
@@ -2096,8 +2112,8 @@ def eval_grasp(
 
     else:
         if return_aux:
-            return dc_mse_grasp, dc_mae_grasp, aux
-        return dc_mse_grasp, dc_mae_grasp
+            return dc_mse_grasp, dc_mae_grasp, dc_psnr_grasp, aux
+        return dc_mse_grasp, dc_mae_grasp, dc_psnr_grasp
 
 
 def eval_zf(
@@ -2277,6 +2293,7 @@ def eval_sample(
 
     # Compute MSE
     dc_mse, dc_mae = calc_dc(recon_kspace, kspace, device)
+    dc_psnr = calc_dc_psnr(kspace, dc_mse, device)
 
     extra_metrics = {}
     dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(recon_kspace, kspace, device)
@@ -3122,7 +3139,7 @@ def eval_sample(
             print("Diagnostic plots saved.")
 
 
-        return dc_mse, dc_mae, temporal_metrics
+        return dc_mse, dc_mae, dc_psnr, temporal_metrics
 
 
 

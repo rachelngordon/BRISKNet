@@ -6,16 +6,16 @@ data:
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 18
+  timeframes: 72
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 18
-  eval_spokes: 16
+  eval_timeframes: 72
+  eval_spokes: 4
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 16
+  train_spokes_per_frame: 4
   slices: 192
   slices_to_eval: 1
   eval_frequency: 5
@@ -103,7 +103,7 @@ model:
       arrival_shift_max_shift: 1
       arrival_shift_percentile: 0.95
       arrival_shift_baseline_k: 2.0
-      arrival_method: fraction
+      arrival_method: threshold
       arrival_fraction: 0.15       # used when method = fraction
       # --- enh_scale params ---
       enh_scale_min: 0.85
@@ -125,7 +125,7 @@ model:
 
 # Training settings
 training:
-  epochs: 90
+  epochs: 100
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"

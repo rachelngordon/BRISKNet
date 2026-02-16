@@ -2133,6 +2133,7 @@ class SimulatedDataset(Dataset):
         dro_csmaps_source="original",
         espirit_csmaps_dir=None,
         dro_sim_source="original",
+        skip_raw_eval_if_invalid_slice: bool = False,
     ):
 
         self.root_dir = root_dir
@@ -2144,6 +2145,7 @@ class SimulatedDataset(Dataset):
         self.grasp_slice_idx = grasp_slice_idx
         self.dataset_key = dataset_key
         self.traj_method = traj_method
+        self.skip_raw_eval_if_invalid_slice = bool(skip_raw_eval_if_invalid_slice)
         self.noise_level_value, self.noise_level_label = self._parse_noise_level(noise_level)
         if self.noise_level_value > 0 and self.traj_method != "get_traj":
             print(f"SimulatedDataset: noise_level={self.noise_level_label} ignored because traj_method={self.traj_method}.")
@@ -2291,46 +2293,69 @@ class SimulatedDataset(Dataset):
         else:
             kspace_torch = kspace_path
 
+        # CSMaps: (H, W, C) -> (1, C, H, W) [batch, coils, h, w]
+        if self.dro_csmaps_source == "original":
+            csmaps_torch = torch.from_numpy(csmaps).permute(2, 0, 1).unsqueeze(0)
+        else:
+            csmaps_torch = torch.from_numpy(csmaps).unsqueeze(0).to(torch.complex64)
+
 
         # load raw k-space and GRASP recon
         fastmri_id = self.get_fastMRI_id(sample_dir)
         patient_id = f"fastMRI_breast_{fastmri_id:03d}_2"
-        slice_idx = self.slice_map.get(patient_id, self.grasp_slice_idx)
-        if slice_idx is None or slice_idx < 0:
-            slice_idx = self.grasp_slice_idx
+        slice_idx = self.slice_map.get(patient_id, None)
+        raw_slice_valid = slice_idx is not None and slice_idx >= 0
+        if (not raw_slice_valid) and self.skip_raw_eval_if_invalid_slice:
+            if _should_log_once(self, "_logged_skip_raw_eval"):
+                print(
+                    "[SimulatedDataset] Skipping raw eval for samples with invalid "
+                    f"largest_tumor_slices.csv entries (e.g., {patient_id})."
+                )
+            raw_grasp_recon = torch.full_like(grasp_recon_torch, float("nan"))
+            raw_kspace_slice = torch.full_like(kspace_torch, float("nan"))
+            raw_csmaps_torch = torch.full_like(csmaps_torch, float("nan")).numpy()
+        else:
+            if slice_idx is None or slice_idx < 0:
+                slice_idx = self.grasp_slice_idx
 
-        raw_grasp_path = os.path.join(os.path.dirname(self.raw_kspace_path), f'{patient_id}/grasp_recon_{self.spokes_per_frame}spf_{self.num_frames}frames_slice{slice_idx}.npy')
-        raw_kspace_path = os.path.join(self.raw_kspace_path, f'{patient_id}.h5')
-        raw_csmap_path = os.path.join(os.path.dirname(self.raw_kspace_path), f'cs_maps/{patient_id}_cs_maps/cs_map_slice_{slice_idx:03d}.npy')
-        
-        raw_csmaps = np.load(raw_csmap_path)
-        # raw_csmaps = rearrange(raw_csmaps, 'c b h w -> b c h w')
+            raw_grasp_path = os.path.join(
+                os.path.dirname(self.raw_kspace_path),
+                f'{patient_id}/grasp_recon_{self.spokes_per_frame}spf_{self.num_frames}frames_slice{slice_idx}.npy'
+            )
+            raw_kspace_path = os.path.join(self.raw_kspace_path, f'{patient_id}.h5')
+            raw_csmap_path = os.path.join(
+                os.path.dirname(self.raw_kspace_path),
+                f'cs_maps/{patient_id}_cs_maps/cs_map_slice_{slice_idx:03d}.npy'
+            )
+            
+            raw_csmaps = np.load(raw_csmap_path)
+            # raw_csmaps = rearrange(raw_csmaps, 'c b h w -> b c h w')
 
-        raw_grasp_recon = np.load(raw_grasp_path).squeeze()
-
-
-        # GRASP Recon: (H, W, T) -> (2, T, H, W) [real/imag, time, h, w]
-        raw_grasp_recon = torch.from_numpy(raw_grasp_recon).permute(2, 0, 1) # T, H, W
-        raw_grasp_recon = torch.stack([raw_grasp_recon.real, raw_grasp_recon.imag], dim=0)
-
-        raw_grasp_recon = torch.flip(raw_grasp_recon, dims=[-3])
-        raw_grasp_recon = torch.rot90(raw_grasp_recon, k=1, dims=[-3,-1])
+            raw_grasp_recon = np.load(raw_grasp_path).squeeze()
 
 
-        with h5py.File(raw_kspace_path, "r") as f:
-            raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
+            # GRASP Recon: (H, W, T) -> (2, T, H, W) [real/imag, time, h, w]
+            raw_grasp_recon = torch.from_numpy(raw_grasp_recon).permute(2, 0, 1) # T, H, W
+            raw_grasp_recon = torch.stack([raw_grasp_recon.real, raw_grasp_recon.imag], dim=0)
 
-        # time-bin k-space
-        N_spokes_prep = self.num_frames * self.spokes_per_frame
+            raw_grasp_recon = torch.flip(raw_grasp_recon, dims=[-3])
+            raw_grasp_recon = torch.rot90(raw_grasp_recon, k=1, dims=[-3,-1])
 
-        ksp_redu = raw_kspace_slice[:, :N_spokes_prep, :] # (16, 288, 640)
-        ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
-        ksp_prep_shape = ksp_prep.shape
-        ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
 
-        ksp_prep = torch.flip(ksp_prep, dims=[-1])
+            with h5py.File(raw_kspace_path, "r") as f:
+                raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
 
-        raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(kspace_torch.dtype)
+            # time-bin k-space
+            N_spokes_prep = self.num_frames * self.spokes_per_frame
+
+            ksp_redu = raw_kspace_slice[:, :N_spokes_prep, :] # (16, 288, 640)
+            ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
+            ksp_prep_shape = ksp_prep.shape
+            ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
+
+            ksp_prep = torch.flip(ksp_prep, dims=[-1])
+
+            raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(kspace_torch.dtype)
 
 
         ground_truth_complex = dro['ground_truth_images']
@@ -2360,17 +2385,12 @@ class SimulatedDataset(Dataset):
         ground_truth_torch = torch.from_numpy(ground_truth_complex).permute(2, 0, 1) # T, H, W
         ground_truth_torch = torch.stack([ground_truth_torch.real, ground_truth_torch.imag], dim=0)
 
-        # CSMaps: (H, W, C) -> (1, C, H, W) [batch, coils, h, w]
-        if self.dro_csmaps_source == "original":
-            csmaps_torch = torch.from_numpy(csmaps).permute(2, 0, 1).unsqueeze(0)
-        else:
-            csmaps_torch = torch.from_numpy(csmaps).unsqueeze(0).to(torch.complex64)
+        if raw_slice_valid or (not self.skip_raw_eval_if_invalid_slice):
+            raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
+            raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(csmaps_torch.dtype)
 
-        raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
-        raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(csmaps_torch.dtype)
-
-        raw_csmaps_torch = torch.rot90(raw_csmaps_torch, k=2, dims=[-2, -1])
-        raw_csmaps_torch = raw_csmaps_torch.numpy()
+            raw_csmaps_torch = torch.rot90(raw_csmaps_torch, k=2, dims=[-2, -1])
+            raw_csmaps_torch = raw_csmaps_torch.numpy()
 
         return kspace_torch, csmaps_torch, ground_truth_torch, grasp_recon_torch, mask, grasp_path, raw_kspace_slice, raw_grasp_recon, raw_csmaps_torch #, parMap, aif, S0, T10, mask
     
@@ -2383,7 +2403,16 @@ class SimulatedSPFDataset(Dataset):
     It loads the simulated k-space, coil sensitivity maps, and the
     ground truth dynamic image (DRO).
     """
-    def __init__(self, root_dir, raw_kspace_path, model_type, patient_ids, dataset_key, grasp_slice_idx=95):
+    def __init__(
+        self,
+        root_dir,
+        raw_kspace_path,
+        model_type,
+        patient_ids,
+        dataset_key,
+        grasp_slice_idx=95,
+        skip_raw_eval_if_invalid_slice: bool = False,
+    ):
         self.model_type = model_type
         self.root_dir = root_dir
         self.patient_ids = patient_ids
@@ -2392,6 +2421,7 @@ class SimulatedSPFDataset(Dataset):
         self.grasp_slice_idx = grasp_slice_idx
         self.dataset_key = dataset_key
         self.slice_map = load_slice_map(SLICE_MAP_PATH)
+        self.skip_raw_eval_if_invalid_slice = bool(skip_raw_eval_if_invalid_slice)
 
         # set default parameters to be changed before each call
         self.spokes_per_frame = 16
@@ -2507,48 +2537,65 @@ class SimulatedSPFDataset(Dataset):
         # load raw k-space and GRASP recon
         fastmri_id = self.get_fastMRI_id(sample_dir)
         patient_id = f"fastMRI_breast_{fastmri_id:03d}_2"
-        slice_idx = self.slice_map.get(patient_id, self.grasp_slice_idx)
-        if slice_idx is None or slice_idx < 0:
-            slice_idx = self.grasp_slice_idx
+        slice_idx = self.slice_map.get(patient_id, None)
+        raw_slice_valid = slice_idx is not None and slice_idx >= 0
+        if (not raw_slice_valid) and self.skip_raw_eval_if_invalid_slice:
+            if _should_log_once(self, "_logged_skip_raw_eval"):
+                print(
+                    "[SimulatedSPFDataset] Skipping raw eval for samples with invalid "
+                    f"largest_tumor_slices.csv entries (e.g., {patient_id})."
+                )
+            raw_grasp_recon = torch.full_like(grasp_recon_torch, float("nan"))
+            raw_kspace_slice = torch.full_like(simImg_torch, float("nan"))
+            raw_csmaps_torch = torch.full_like(smap_torch, float("nan")).numpy()
+        else:
+            if slice_idx is None or slice_idx < 0:
+                slice_idx = self.grasp_slice_idx
 
-        raw_grasp_path = os.path.join(os.path.dirname(self.raw_kspace_path), f'{patient_id}/grasp_recon_{self.spokes_per_frame}spf_{self.num_frames}frames_slice{slice_idx}.npy')
-        raw_kspace_path = os.path.join(self.raw_kspace_path, f'{patient_id}.h5')
-        raw_csmap_path = os.path.join(os.path.dirname(self.raw_kspace_path), f'cs_maps/{patient_id}_cs_maps/cs_map_slice_{slice_idx:03d}.npy')
-        
-        raw_csmaps = np.load(raw_csmap_path)
-        # raw_csmaps = rearrange(raw_csmaps, 'c b h w -> b c h w')
+            raw_grasp_path = os.path.join(
+                os.path.dirname(self.raw_kspace_path),
+                f'{patient_id}/grasp_recon_{self.spokes_per_frame}spf_{self.num_frames}frames_slice{slice_idx}.npy'
+            )
+            raw_kspace_path = os.path.join(self.raw_kspace_path, f'{patient_id}.h5')
+            raw_csmap_path = os.path.join(
+                os.path.dirname(self.raw_kspace_path),
+                f'cs_maps/{patient_id}_cs_maps/cs_map_slice_{slice_idx:03d}.npy'
+            )
+            
+            raw_csmaps = np.load(raw_csmap_path)
+            # raw_csmaps = rearrange(raw_csmaps, 'c b h w -> b c h w')
 
-        raw_grasp_recon = np.load(raw_grasp_path).squeeze()
-
-
-        # GRASP Recon: (H, W, T) -> (2, T, H, W) [real/imag, time, h, w]
-        raw_grasp_recon = torch.from_numpy(raw_grasp_recon).permute(2, 0, 1) # T, H, W
-        raw_grasp_recon = torch.stack([raw_grasp_recon.real, raw_grasp_recon.imag], dim=0)
-
-        raw_grasp_recon = torch.flip(raw_grasp_recon, dims=[-3])
-        raw_grasp_recon = torch.rot90(raw_grasp_recon, k=3, dims=[-3,-1])
+            raw_grasp_recon = np.load(raw_grasp_path).squeeze()
 
 
-        with h5py.File(raw_kspace_path, "r") as f:
-            raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
+            # GRASP Recon: (H, W, T) -> (2, T, H, W) [real/imag, time, h, w]
+            raw_grasp_recon = torch.from_numpy(raw_grasp_recon).permute(2, 0, 1) # T, H, W
+            raw_grasp_recon = torch.stack([raw_grasp_recon.real, raw_grasp_recon.imag], dim=0)
 
-        # time-bin k-space
-        N_spokes_prep = self.num_frames * self.spokes_per_frame
+            raw_grasp_recon = torch.flip(raw_grasp_recon, dims=[-3])
+            raw_grasp_recon = torch.rot90(raw_grasp_recon, k=3, dims=[-3,-1])
 
-        ksp_redu = raw_kspace_slice[:, :N_spokes_prep, :] # (16, 288, 640)
-        ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
-        ksp_prep_shape = ksp_prep.shape
-        ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
-        
-        ksp_prep = torch.flip(ksp_prep, dims=[-1])
 
-        raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(smap_torch.dtype)
+            with h5py.File(raw_kspace_path, "r") as f:
+                raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
 
-        raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
-        raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(smap_torch.dtype)
+            # time-bin k-space
+            N_spokes_prep = self.num_frames * self.spokes_per_frame
 
-        raw_csmaps_torch = torch.rot90(raw_csmaps_torch, k=2, dims=[-2, -1])
-        raw_csmaps_torch = raw_csmaps_torch.numpy()
+            ksp_redu = raw_kspace_slice[:, :N_spokes_prep, :] # (16, 288, 640)
+            ksp_prep = np.swapaxes(ksp_redu, 0, 1) # (288, 16, 640)
+            ksp_prep_shape = ksp_prep.shape
+            ksp_prep = np.reshape(ksp_prep, [self.num_frames, self.spokes_per_frame] + list(ksp_prep_shape[1:]))
+            
+            ksp_prep = torch.flip(ksp_prep, dims=[-1])
+
+            raw_kspace_slice = rearrange(ksp_prep, 't sp c sam -> c (sp sam) t').to(smap_torch.dtype)
+
+            raw_csmaps_torch = torch.from_numpy(raw_csmaps)#.permute(2, 0, 1).unsqueeze(0)
+            raw_csmaps_torch = rearrange(raw_csmaps_torch, 'c b h w -> b c h w').to(smap_torch.dtype)
+
+            raw_csmaps_torch = torch.rot90(raw_csmaps_torch, k=2, dims=[-2, -1])
+            raw_csmaps_torch = raw_csmaps_torch.numpy()
 
 
         return smap_torch, simImg_torch, grasp_recon_torch, mask, grasp_path, raw_kspace_slice, raw_csmaps_torch, raw_grasp_recon #, parMap, aif, S0, T10, mask
