@@ -591,7 +591,7 @@ def main():
         dro_eval=True,
     )
 
-    raw_dc_mse, raw_dc_mae, _ = eval_sample(
+    raw_dc_mse, raw_dc_mae, raw_dc_psnr, _ = eval_sample(
         raw_kspace,
         raw_csmaps,
         ground_truth,
@@ -613,7 +613,7 @@ def main():
         arrival_method=arrival_method,
         arrival_fraction=arrival_fraction,
     )
-    raw_grasp_dc_mse, raw_grasp_dc_mae = eval_grasp(
+    raw_grasp_dc_mse, raw_grasp_dc_mae, raw_grasp_dc_psnr = eval_grasp(
         raw_kspace,
         raw_csmaps,
         ground_truth,
@@ -647,8 +647,10 @@ def main():
             "grasp_dc_mae",
             "raw_dc_mse",
             "raw_dc_mae",
+            "raw_dc_psnr",
             "raw_grasp_dc_mse",
             "raw_grasp_dc_mae",
+            "raw_grasp_dc_psnr",
             "raw_ssdu_nmse",
             "raw_grasp_ssdu_nmse",
         ]
@@ -670,8 +672,10 @@ def main():
             f"{grasp_dc_mae:.6f}",
             f"{raw_dc_mse:.6f}",
             f"{raw_dc_mae:.6f}",
+            "" if raw_dc_psnr is None else f"{raw_dc_psnr:.6f}",
             f"{raw_grasp_dc_mse:.6f}",
             f"{raw_grasp_dc_mae:.6f}",
+            "" if raw_grasp_dc_psnr is None else f"{raw_grasp_dc_psnr:.6f}",
             "" if ssdu_result.get("ssdu_nmse_mean") is None else f"{ssdu_result['ssdu_nmse_mean']:.6f}",
             "" if ssdu_grasp_result.get("ssdu_nmse_mean") is None else f"{ssdu_grasp_result['ssdu_nmse_mean']:.6f}",
         ]
