@@ -1830,3 +1830,47 @@ Current best BRISKNet in this sweep (`707694` at ep35): SSIM `0.872`, PSNR `39.2
     - PSNR/SSIM trend vs best prior (`43.57 / 0.971`),
     - temporal `rho_early` and `t_arr` behavior,
     - whether multiobjective variants avoid early image collapse under new settings.
+
+### 2026-02-16 Break-plateau campaign refresh (latest overlay + live runs)
+- User request:
+  - check the last campaign, refresh overlays, summarize what we learned.
+
+- Fresh overlay generated:
+  - `/net/projects2/annawoodard/experiments/m36_bk_overlay_20260216_180725/`
+  - files:
+    - `eval_metrics_overlay.png`
+    - `eval_temporal_metrics_overlay.png`
+    - `eval_temporal_metrics_student_vs_grasp_overlay.png`
+    - `training_metrics_overlay.png`
+    - `overlay_metric_tables.txt`
+
+- Current active jobs (at refresh):
+  - `714043` `m36_bk_absmae_nomc_w3_long_2n4g` (running)
+  - `714404` `m36_bk_highcap_mse_norelease_1n4g_fastq` (running)
+  - `714406` `m36_bk_mobjfix_nomc_imgmse_tdw04_1n4g_fastq` (running)
+
+- Completed jobs from this campaign:
+  - `714401` `m36_bk_absmse_mc010_lr5e5_1n4g_fastq`
+  - `714402` `m36_bk_absmse_nomc_freq005_1n4g_fastq`
+  - `714403` `m36_bk_absmse_nomc_w1_long_1n4g_fastq`
+  - `714405` `m36_bk_mobjada_nomc_imgmse_tdw06_1n4g_fastq`
+
+- Best-performing run so far in this campaign: `714043`.
+  - Latest eval (`step1020`, from log):
+    - Student-vs-DRO: SSIM `0.9742`, PSNR `44.2091`, LPIPS `0.0123`, MSE `0.0681`
+    - Student-vs-GRASP: SSIM `0.9880`, PSNR `44.7587`, LPIPS `0.0131`, MSE `0.0573`
+    - Student-vs-GRASP temporal: `rho_early 0.7188`, `t_arr error 9.0069s`, `t_peak error 9.6251s`
+  - Comparison to prior best baseline (`713639`, `m36_meetgrasp_abs_w220_mcmse010_flatlr_2n4g`):
+    - image metrics improved (PSNR ~`43.6 -> 44.2`, LPIPS ~`0.0162 -> 0.0123`)
+    - early timing still problematic (`t_arr` remains much larger than desired and oscillatory).
+
+- Other campaign outcomes:
+  - `714402` and `714403` are near-identical trajectories; frequency weighting tweak showed little effect in this regime.
+  - `714406` remains clearly below top trajectory (best checkpoint still at step 20, no competitive recovery yet).
+  - `714404` (high-capacity) remains far below in image and temporal metrics (PSNR ~`38.8` at step 1000); not competitive currently.
+
+- Key takeaways:
+  - Absolute supervised distill with stronger weight (`714043`) gives the best image-quality gains so far.
+  - Plateau was partially breakable for image metrics, but timing metrics (especially arrival-time error) remain unstable and weak.
+  - Capacity increase alone did not help in this setup; high-cap run underperforms despite longer training.
+  - Multiobjective variant needs rework/tuning before it can compete with the simple strong absolute-distill recipe.
