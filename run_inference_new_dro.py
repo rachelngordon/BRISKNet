@@ -217,7 +217,8 @@ class NewDROMatDataset(Dataset):
     Expects files:
       - <sample>_dro.mat (contains simImg, smap, mask)
       - <sample>_kspace_<spf>spf.mat (contains kspace)
-      - <sample>_recon_<spf>spf.mat (contains grasp_bart)
+      - <sample>_recon_<spf>spf.mat (contains grasp_bart) when dro_csmaps_source=original
+      - espirit_grasp_recons/grasp_<sample>_<spf>spf.npy when dro_csmaps_source=espirit
     """
 
     def __init__(
@@ -232,6 +233,7 @@ class NewDROMatDataset(Dataset):
         num_frames: int = 8,
         dro_csmaps_source: str = "espirit",
         espirit_csmaps_dir: str | None = None,
+        espirit_grasp_recons_dir: str | None = None,
         skip_raw_eval_if_invalid_slice: bool = False,
     ):
         self.root_dir = root_dir
@@ -251,6 +253,7 @@ class NewDROMatDataset(Dataset):
         self.raw_num_frames = self.raw_total_spokes // self.spokes_per_frame
         self.dro_csmaps_source = dro_csmaps_source
         self.espirit_csmaps_dir = espirit_csmaps_dir
+        self.espirit_grasp_recons_dir = espirit_grasp_recons_dir
         if self.dro_csmaps_source not in ("original", "espirit"):
             raise ValueError(
                 f"Unsupported dro_csmaps_source '{self.dro_csmaps_source}'. "
@@ -361,25 +364,57 @@ class NewDROMatDataset(Dataset):
         kspace = rearrange(kspace, "c t sp sam -> c (sp sam) t")
         return kspace
 
-    def _load_grasp_recon(self, sample_id: str) -> np.ndarray:
-        recon_path = os.path.join(
+    def _resolve_grasp_recon_path(self, sample_id: str) -> str:
+        if self.dro_csmaps_source == "espirit":
+            esp_root = self.espirit_grasp_recons_dir or os.path.join(
+                self.root_dir, "espirit_grasp_recons"
+            )
+            return os.path.join(
+                esp_root, f"grasp_{sample_id}_{self.spokes_per_frame}spf.npy"
+            )
+        return os.path.join(
             self.root_dir, f"{sample_id}_recon_{self.spokes_per_frame}spf.mat"
         )
-        if not os.path.exists(recon_path):
-            raise FileNotFoundError(f"Missing recon file: {recon_path}")
-        with h5py.File(recon_path, "r") as f:
-            if "grasp_bart" not in f:
-                raise KeyError(f"{recon_path} missing required key 'grasp_bart'.")
-            grasp = _read_h5_float(f["grasp_bart"]).astype(np.float32)
 
+    def _coerce_grasp_thw(self, grasp: np.ndarray, sample_id: str, grasp_path: str) -> np.ndarray:
         if grasp.ndim != 3:
-            raise ValueError(f"Unexpected grasp_bart shape {grasp.shape} in {recon_path}.")
-        if grasp.shape[0] != self.num_frames:
-            raise ValueError(
-                f"grasp_bart frames ({grasp.shape[0]}) != expected num_frames ({self.num_frames}) "
-                f"for {sample_id}. Use --eval_frames to match the DRO files."
-            )
-        return grasp
+            raise ValueError(f"Unexpected GRASP shape {grasp.shape} in {grasp_path}.")
+        if grasp.shape[0] == self.num_frames:
+            return grasp
+        if grasp.shape[1] == self.num_frames:
+            return np.transpose(grasp, (1, 0, 2))
+        if grasp.shape[2] == self.num_frames:
+            return np.transpose(grasp, (2, 0, 1))
+        raise ValueError(
+            f"GRASP frames ({grasp.shape}) do not match expected num_frames ({self.num_frames}) "
+            f"for {sample_id}. Use --eval_frames to match the DRO files."
+        )
+
+    def _load_grasp_recon(self, sample_id: str) -> tuple[np.ndarray, str]:
+        recon_path = self._resolve_grasp_recon_path(sample_id)
+        if not os.path.exists(recon_path):
+            if self.dro_csmaps_source == "espirit":
+                raise FileNotFoundError(
+                    f"Missing ESPIRiT GRASP recon file: {recon_path}. "
+                    "Pass --dro_espirit_grasp_dir to override."
+                )
+            raise FileNotFoundError(f"Missing recon file: {recon_path}")
+
+        if self.dro_csmaps_source == "espirit":
+            grasp = np.load(recon_path)
+            grasp = np.squeeze(grasp)
+            if np.iscomplexobj(grasp):
+                grasp = grasp.astype(np.complex64, copy=False)
+            else:
+                grasp = grasp.astype(np.float32, copy=False)
+        else:
+            with h5py.File(recon_path, "r") as f:
+                if "grasp_bart" not in f:
+                    raise KeyError(f"{recon_path} missing required key 'grasp_bart'.")
+                grasp = _read_h5_float(f["grasp_bart"]).astype(np.float32)
+
+        grasp = self._coerce_grasp_thw(grasp, sample_id, recon_path)
+        return grasp, recon_path
 
     def _load_espirit_csmaps(self, sample_id: str, expected_coils: int) -> np.ndarray:
         esp_root = self.espirit_csmaps_dir or os.path.join(self.root_dir, "csmaps_espirit")
@@ -414,16 +449,19 @@ class NewDROMatDataset(Dataset):
         if self.dro_csmaps_source == "espirit":
             smap = self._load_espirit_csmaps(sample_id, expected_coils=smap.shape[0])
         kspace = self._load_kspace_mat(sample_id)
-        grasp = self._load_grasp_recon(sample_id)
+        grasp, grasp_path = self._load_grasp_recon(sample_id)
 
         # Ground truth: (T, H, W) -> (2, T, H, W)
         gt_torch = torch.from_numpy(sim_img)
         gt_torch = torch.stack([gt_torch, torch.zeros_like(gt_torch)], dim=0)
 
-        # GRASP recon (already correctly oriented): (T, H, W) -> (2, T, H, W)
+        # GRASP recon (T, H, W) -> (2, H, T, W) with real/imag channels.
         grasp_torch = torch.from_numpy(grasp)
         grasp_torch = grasp_torch.permute(1, 0, 2)  # (H, T, W)
-        grasp_torch = torch.stack([grasp_torch, torch.zeros_like(grasp_torch)], dim=0)
+        if torch.is_complex(grasp_torch):
+            grasp_torch = torch.stack([grasp_torch.real, grasp_torch.imag], dim=0)
+        else:
+            grasp_torch = torch.stack([grasp_torch, torch.zeros_like(grasp_torch)], dim=0)
 
         # CSMaps: (C, H, W)
         csmaps_torch = torch.from_numpy(smap).to(torch.complex64)
@@ -490,9 +528,6 @@ class NewDROMatDataset(Dataset):
             raw_csmaps_torch = torch.rot90(raw_csmaps_torch, k=2, dims=[-2, -1])
             raw_csmaps_torch = raw_csmaps_torch.numpy()
 
-        grasp_path = os.path.join(
-            self.root_dir, f"{sample_id}_recon_{self.spokes_per_frame}spf.mat"
-        )
         return (
             kspace_torch,
             csmaps_torch,
@@ -637,6 +672,11 @@ def parse_args():
         "--dro_espirit_csmaps_dir",
         default=None,
         help="Override ESPIRiT csmaps dir (default: <dro_root>/csmaps_espirit).",
+    )
+    parser.add_argument(
+        "--dro_espirit_grasp_dir",
+        default=None,
+        help="Override ESPIRiT GRASP recon dir (default: <dro_root>/espirit_grasp_recons).",
     )
     parser.add_argument(
         "--dro_noise_level",
@@ -1189,6 +1229,7 @@ def main():
         "csmaps_style": dro_csmaps_source,
         "dro_sim_source": dro_sim_source,
         "dro_espirit_csmaps_dir": args.dro_espirit_csmaps_dir,
+        "dro_espirit_grasp_dir": args.dro_espirit_grasp_dir,
         "traj_method": args.traj_method,
         "output_root": output_root,
         "baseline": {
@@ -1259,6 +1300,9 @@ def main():
     dro_dataset_root = args.new_dro_root
 
     resolved_espirit_dir = args.dro_espirit_csmaps_dir or os.path.join(dro_dataset_root, "csmaps_espirit")
+    resolved_espirit_grasp_dir = args.dro_espirit_grasp_dir or os.path.join(
+        dro_dataset_root, "espirit_grasp_recons"
+    )
 
     print("=== Inference Configuration (resolved) ===")
     print(f"DRO dataset root: {dro_dataset_root}")
@@ -1267,6 +1311,7 @@ def main():
     print(f"DRO csmaps source: {dro_csmaps_source}")
     if dro_csmaps_source == "espirit":
         print(f"DRO ESPIRiT csmaps dir: {resolved_espirit_dir}")
+        print(f"DRO ESPIRiT GRASP dir: {resolved_espirit_grasp_dir}")
     else:
         print("DRO csmaps source path: smap inside each DRO .mat")
     print(f"Trajectory method: {traj_method}")
@@ -1294,6 +1339,7 @@ def main():
         grasp_slice_idx=raw_grasp_slice_idx,
         dro_csmaps_source=dro_csmaps_source,
         espirit_csmaps_dir=args.dro_espirit_csmaps_dir,
+        espirit_grasp_recons_dir=args.dro_espirit_grasp_dir,
     )
 
     val_loader = DataLoader(
@@ -1324,6 +1370,7 @@ def main():
             "num_samples": int(num_samples),
             "phase_index": resolved_phase_index if resolved_phase_index is not None else "none",
             "dro_espirit_csmaps_dir": resolved_espirit_dir,
+            "dro_espirit_grasp_dir": resolved_espirit_grasp_dir,
             "dro_csmaps_source": dro_csmaps_source,
             "dro_sim_source": dro_sim_source,
             "traj_method": traj_method,
@@ -1340,6 +1387,7 @@ def main():
     inference_settings["data"]["dro_dataset_root"] = dro_dataset_root
     inference_settings["traj_method"] = traj_method
     inference_settings["dro_espirit_csmaps_dir"] = resolved_espirit_dir
+    inference_settings["dro_espirit_grasp_dir"] = resolved_espirit_grasp_dir
     inference_settings["eval_params"]["phase_index"] = (
         resolved_phase_index if resolved_phase_index is not None else "none"
     )
