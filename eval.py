@@ -1823,7 +1823,6 @@ def eval_grasp(
     return_aux: bool = False,
 ):
 
-
     # ==========================================================
     # EVALUATE DATA CONSISTENCY
     # ==========================================================
@@ -2059,7 +2058,6 @@ def eval_sample(
     x_recon_complex = to_torch_complex(x_recon).squeeze()
     kspace = kspace.squeeze()
 
-
     recon_kspace = physics(False, x_recon_complex, csmap)
 
 
@@ -2097,8 +2095,7 @@ def eval_sample(
         ):
             x_recon_scale_np = np.transpose(x_recon_np, (0, 1, 4, 2, 3))
 
-    denom = float(np.dot(x_recon_scale_np.flatten(), x_recon_scale_np.flatten()))
-    c = float(np.dot(x_recon_scale_np.flatten(), ground_truth_np.flatten()) / (denom + 1e-12)) if denom > 0 else 1.0
+    
     grasp_recon_scale_np = grasp_recon_np
     if (
         grasp_recon_np.ndim == 5
@@ -2115,23 +2112,28 @@ def eval_sample(
         elif grasp_recon_np.shape[4] == T:
             grasp_recon_scale_np = np.transpose(grasp_recon_np, (0, 1, 4, 2, 3))
 
-    denom_grasp = float(np.dot(grasp_recon_scale_np.flatten(), grasp_recon_scale_np.flatten()))
-    c_grasp = (
-        float(np.dot(grasp_recon_scale_np.flatten(), ground_truth_np.flatten()) / (denom_grasp + 1e-12))
-        if denom_grasp > 0
-        else 1.0
-    )
-
-    extra_metrics.update(
-        {
-            "dl_img_scale": c,
-            "grasp_img_scale": c_grasp,
-        }
-    )
 
     if rescale:
+        denom = float(np.dot(x_recon_scale_np.flatten(), x_recon_scale_np.flatten()))
+        c = float(np.dot(x_recon_scale_np.flatten(), ground_truth_np.flatten()) / (denom + 1e-12)) if denom > 0 else 1.0
+
+        denom_grasp = float(np.dot(grasp_recon_scale_np.flatten(), grasp_recon_scale_np.flatten()))
+        c_grasp = (
+            float(np.dot(grasp_recon_scale_np.flatten(), ground_truth_np.flatten()) / (denom_grasp + 1e-12))
+            if denom_grasp > 0
+            else 1.0
+        )
+
+        extra_metrics.update(
+            {
+                "dl_img_scale": c,
+                "grasp_img_scale": c_grasp,
+            }
+        )
+
         recon_complex_scaled = torch.tensor(c * x_recon_np, device=device)
         grasp_img = torch.tensor(c_grasp * grasp_recon_np, device=device)
+
     else:
         recon_complex_scaled = torch.tensor(x_recon_np, device=device)
         grasp_img = torch.tensor(grasp_recon_np, device=device)
@@ -2236,7 +2238,17 @@ def eval_sample(
         if arrival_fraction_plot is None:
             arrival_fraction_plot = arrival_fraction
 
+        recon_corr = None
+        grasp_corr = None
         temporal_metrics = {}
+        gt_frames = int(gt_mag_np.shape[2])
+        if num_frames != gt_frames:
+            print(
+                f"Skipping temporal metrics/plots: recon frames ({num_frames}) "
+                f"!= GT frames ({gt_frames})."
+            )
+            return ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics
+
         if 'malignant' in masks_np and masks_np['malignant'].any():
             dl_metrics = compute_temporal_metrics(
                 gt_mag_np,
@@ -2506,6 +2518,13 @@ def eval_sample(
         aif_time_points = np.linspace(0, total_scan_seconds, num_frames)
 
         temporal_metrics = {}
+        gt_frames = int(gt_mag_np.shape[2])
+        if num_frames != gt_frames:
+            print(
+                f"Skipping temporal metrics/plots: raw frames ({num_frames}) "
+                f"!= GT frames ({gt_frames})."
+            )
+            return dc_mse, dc_mae, dc_psnr, temporal_metrics
         if 'malignant' in masks_np and masks_np['malignant'].any():
             dl_metrics = compute_temporal_metrics(
                 gt_mag_np,
