@@ -5,7 +5,7 @@ This script:
   - Extracts a single fixed slice (center by default) from raw k-space.
   - Time-bins k-space to specified spokes-per-frame (same as training).
   - Times BRISKNet inference and GRASP (sigpy HighDimensionalRecon) per sample.
-  - Prints a LaTeX table with acceleration, seconds/frame, and mean times.
+  - Prints a LaTeX table with acceleration, seconds/frame, and mean±std times.
 """
 
 from __future__ import annotations
@@ -184,6 +184,18 @@ def _format_float(val: float | None, decimals: int = 3) -> str:
         return ""
     return f"{val:.{decimals}f}"
 
+def _format_mean_std(mean: float | None, std: float | None, decimals: int = 3) -> str:
+    if mean is None:
+        return ""
+    std_val = 0.0 if std is None else float(std)
+    return f"${mean:.{decimals}f} \\pm {std_val:.{decimals}f}$"
+
+
+def _std_or_zero(values: List[float]) -> float:
+    if len(values) > 1:
+        return float(np.std(values, ddof=1))
+    return 0.0
+
 
 def _latex_table(rows: List[Dict]) -> str:
     lines = []
@@ -197,8 +209,8 @@ def _latex_table(rows: List[Dict]) -> str:
                 int(row["spokes_per_frame"]),
                 _format_float(row["acceleration"], 2),
                 _format_float(row["seconds_per_frame"], 2),
-                _format_float(row["brisknet_time"], 3),
-                _format_float(row["grasp_time"], 3),
+                _format_mean_std(row["brisknet_time"], row["brisknet_std"], 3),
+                _format_mean_std(row["grasp_time"], row["grasp_std"], 3),
             )
         )
     lines.append("\\bottomrule")
@@ -471,7 +483,9 @@ def main() -> None:
                 "acceleration": acceleration,
                 "seconds_per_frame": seconds_per_frame,
                 "brisknet_time": float(np.mean(brisk_times)),
+                "brisknet_std": _std_or_zero(brisk_times),
                 "grasp_time": float(np.mean(grasp_times)),
+                "grasp_std": _std_or_zero(grasp_times),
                 "num_samples": len(brisk_times),
             }
         )
