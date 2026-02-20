@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Loop over DRO variable-frame samples, simulate k-space, compute/load ESPIRiT csmaps,
-and run GRASP reconstructions. Designed to be resumable (skips existing outputs).
+Loop over DRO variable-frame samples, simulate k-space, and compute/load ESPIRiT csmaps.
+Designed to be resumable (skips existing outputs).
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ FRAME_TO_SPF = {
     144: 2,
 }
 FRAME_ORDER = [8, 12, 18, 36, 72, 144]
+CSMAPS_FRAMES = 8
 
 
 def trajGR(Nkx, Nspokes):
@@ -241,14 +242,27 @@ def _normalize_suffix(suffix: str) -> str:
     return suffix
 
 
-def _find_mat_path(sample_dir: str, frames: int) -> str:
-    pattern = os.path.join(sample_dir, f"*dro_{frames}frames.mat")
+def _collect_dro_files(dro_root: str) -> dict[str, dict[int, str]]:
+    pattern = os.path.join(dro_root, "sample_*_dro_*frames.mat")
     matches = sorted(glob.glob(pattern))
     if not matches:
-        raise FileNotFoundError(f"No .mat found for {frames} frames in {sample_dir}")
-    if len(matches) > 1:
-        raise ValueError(f"Multiple .mat files found for {frames} frames in {sample_dir}: {matches}")
-    return matches[0]
+        raise FileNotFoundError(
+            f"No DRO .mat files found under {dro_root} matching {pattern}"
+        )
+    sample_map: dict[str, dict[int, str]] = {}
+    for path in matches:
+        base = os.path.basename(path)
+        match = re.match(r"^(sample_\d+_sub\d+)_dro_(\d+)frames\.mat$", base)
+        if not match:
+            continue
+        sample_id, frames_str = match.groups()
+        frames = int(frames_str)
+        sample_map.setdefault(sample_id, {})[frames] = path
+    if not sample_map:
+        raise FileNotFoundError(
+            f"No DRO .mat files matched expected naming in {dro_root}."
+        )
+    return sample_map
 
 
 def _load_dro(mat_path: str, key: Optional[str]) -> tuple[np.ndarray, np.ndarray]:
@@ -410,12 +424,12 @@ def _parse_sigpy_device(device: str) -> sp.Device:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Simulate k-space and GRASP reconstructions for DRO variable-frame .mat files."
+        description="Simulate k-space and ESPIRiT csmaps for DRO variable-frame .mat files."
     )
     parser.add_argument(
         "--dro-root",
         default="/net/scratch2/rachelgordon/dro_var_frames",
-        help="Root directory containing sub*/sample_*_dro_*frames.mat files.",
+        help="Root directory containing sample_*_dro_*frames.mat files.",
     )
     parser.add_argument(
         "--key",
@@ -431,7 +445,7 @@ def parse_args():
         "--sigpy-device",
         choices=("cpu", "cuda"),
         default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device for ESPIRiT calibration and GRASP recon.",
+        help="Device for ESPIRiT calibration.",
     )
     parser.add_argument(
         "--traj-method",
@@ -452,24 +466,6 @@ def parse_args():
         help="Optional RNG seed for k-space noise.",
     )
     parser.add_argument(
-        "--lamda",
-        type=float,
-        default=0.001,
-        help="GRASP TV weight.",
-    )
-    parser.add_argument(
-        "--max-iter",
-        type=int,
-        default=10,
-        help="GRASP max iterations.",
-    )
-    parser.add_argument(
-        "--rho",
-        type=float,
-        default=0.1,
-        help="GRASP ADMM rho.",
-    )
-    parser.add_argument(
         "--suffix",
         default="",
         help="Optional suffix to append to output filenames (before .npy).",
@@ -483,53 +479,86 @@ def main() -> None:
     sigpy_device = _parse_sigpy_device(args.sigpy_device)
     suffix = _normalize_suffix(args.suffix)
 
-    sample_dirs = sorted(
-        [
-            os.path.join(args.dro_root, d)
-            for d in os.listdir(args.dro_root)
-            if d.startswith("sub") and os.path.isdir(os.path.join(args.dro_root, d))
-        ],
-        key=lambda p: int(re.search(r"sub(\d+)", os.path.basename(p)).group(1))
-        if re.search(r"sub(\d+)", os.path.basename(p))
-        else os.path.basename(p),
+    sample_map = _collect_dro_files(args.dro_root)
+    sample_ids = sorted(
+        sample_map,
+        key=lambda s: (
+            int(re.search(r"sample_(\d+)", s).group(1))
+            if re.search(r"sample_(\d+)", s)
+            else s
+        ),
     )
-    if not sample_dirs:
-        raise FileNotFoundError(f"No sub* directories found under {args.dro_root}")
 
-    for sample_dir in sample_dirs:
-        sample_name = os.path.basename(sample_dir)
-        for frames in FRAME_ORDER:
+    for sample_id in sample_ids:
+        available_frames = sample_map[sample_id]
+        ordered_frames = [f for f in FRAME_ORDER if f in available_frames]
+        if not ordered_frames:
+            ordered_frames = sorted(available_frames)
+        csmaps_dir = os.path.join(args.dro_root, "csmaps_espirit")
+        os.makedirs(csmaps_dir, exist_ok=True)
+        csmaps_path = os.path.join(csmaps_dir, f"csmaps_{sample_id}{suffix}.npy")
+        csmaps_np = None
+        kspace_cache: dict[int, np.ndarray] = {}
+
+        if not os.path.exists(csmaps_path):
+            if CSMAPS_FRAMES not in available_frames:
+                raise FileNotFoundError(
+                    f"{sample_id} missing {CSMAPS_FRAMES}-frame DRO file required for ESPIRiT csmaps."
+                )
+            spf_csmaps = FRAME_TO_SPF[CSMAPS_FRAMES]
+            mat_path = available_frames[CSMAPS_FRAMES]
+            kspace_csmaps_path = os.path.join(
+                args.dro_root,
+                f"{sample_id}_kspace_{spf_csmaps}spf_{CSMAPS_FRAMES}frames{suffix}.npy",
+            )
+            if os.path.exists(kspace_csmaps_path):
+                kspace_csmaps_np = np.load(kspace_csmaps_path)
+            else:
+                img, smaps_chw = _load_dro(mat_path, args.key)
+                kspace_csmaps_np = _simulate_kspace(
+                    img=img,
+                    smaps_chw=smaps_chw,
+                    spf=spf_csmaps,
+                    frames=CSMAPS_FRAMES,
+                    device=device,
+                    traj_method=args.traj_method,
+                    noise_std=args.kspace_noise_std,
+                    noise_seed=args.kspace_noise_seed,
+                )
+                np.save(kspace_csmaps_path, kspace_csmaps_np)
+                print(f"  saved kspace (for csmaps): {kspace_csmaps_path}")
+            kspace_cache[CSMAPS_FRAMES] = kspace_csmaps_np
+            csmaps_np = _compute_csmaps(
+                kspace_np=kspace_csmaps_np,
+                spf=spf_csmaps,
+                frames=CSMAPS_FRAMES,
+                device=sigpy_device,
+            )
+            np.save(csmaps_path, csmaps_np)
+            print(f"  saved csmaps: {csmaps_path}")
+        else:
+            csmaps_np = np.load(csmaps_path)
+        for frames in ordered_frames:
+            if frames not in FRAME_TO_SPF:
+                print(f"[skip] {sample_id} frames={frames}: no SPF mapping available.")
+                continue
             spf = FRAME_TO_SPF[frames]
-            mat_path = _find_mat_path(sample_dir, frames)
+            mat_path = available_frames[frames]
 
             kspace_path = os.path.join(
-                sample_dir,
-                f"simulated_kspace_spf{spf}_frames{frames}{suffix}.npy",
-            )
-            csmaps_path = os.path.join(
-                sample_dir,
-                f"csmaps_espirit_spf{spf}_frames{frames}{suffix}.npy",
-            )
-            recon_path = os.path.join(
-                sample_dir,
-                f"grasp_spf{spf}_frames{frames}{suffix}.npy",
+                args.dro_root,
+                f"{sample_id}_kspace_{spf}spf_{frames}frames{suffix}.npy",
             )
 
             need_kspace = not os.path.exists(kspace_path)
-            need_csmaps = not os.path.exists(csmaps_path)
-            need_recon = not os.path.exists(recon_path)
-
-            if not (need_kspace or need_csmaps or need_recon):
-                print(f"[skip] {sample_name} frames={frames} (all outputs exist)")
+            if not need_kspace:
+                print(f"[skip] {sample_id} frames={frames} (kspace exists)")
                 continue
 
-            print(
-                f"[run] {sample_name} frames={frames} spf={spf} "
-                f"(kspace={need_kspace}, csmaps={need_csmaps}, recon={need_recon})"
-            )
+            print(f"[run] {sample_id} frames={frames} spf={spf} (kspace={need_kspace})")
 
-            kspace_np = None
-            if need_kspace:
+            kspace_np = kspace_cache.get(frames)
+            if kspace_np is None and need_kspace:
                 img, smaps_chw = _load_dro(mat_path, args.key)
                 kspace_np = _simulate_kspace(
                     img=img,
@@ -543,36 +572,11 @@ def main() -> None:
                 )
                 np.save(kspace_path, kspace_np)
                 print(f"  saved kspace: {kspace_path}")
-            else:
+                kspace_cache[frames] = kspace_np
+            elif kspace_np is None:
                 kspace_np = np.load(kspace_path)
 
-            csmaps_np = None
-            if need_csmaps:
-                csmaps_np = _compute_csmaps(
-                    kspace_np=kspace_np,
-                    spf=spf,
-                    frames=frames,
-                    device=sigpy_device,
-                )
-                np.save(csmaps_path, csmaps_np)
-                print(f"  saved csmaps: {csmaps_path}")
-            else:
-                csmaps_np = np.load(csmaps_path)
-
-            if need_recon:
-                recon_np = _run_grasp(
-                    kspace_np=kspace_np,
-                    csmaps_np=csmaps_np,
-                    spf=spf,
-                    frames=frames,
-                    traj_method=args.traj_method,
-                    lamda=args.lamda,
-                    max_iter=args.max_iter,
-                    rho=args.rho,
-                    device=sigpy_device,
-                )
-                np.save(recon_path, recon_np)
-                print(f"  saved recon: {recon_path}")
+            # GRASP recon now handled in a separate script.
 
 
 if __name__ == "__main__":

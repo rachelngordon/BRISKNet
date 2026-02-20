@@ -94,7 +94,7 @@ class Trainer(submitit.helpers.Checkpointable):
 
 def main():
     # --- Executor Configuration ---
-    job_name = "ei_diffeo_4spf_slice_sampling"
+    job_name = "ei_diffeo_4spf_slice_sampling_extended"
     config_path = "/home/rachelgordon/mri_recon/radial-breast-ddei/configs/config_sampling_4spf.yaml"
     num_nodes = 4
     gpus_per_node = 4

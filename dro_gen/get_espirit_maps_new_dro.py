@@ -86,8 +86,8 @@ def _load_kspace_and_traj(kspace_path: str):
     return kspace, traj
 
 
-def _load_dro_csmaps(root_dir: str, sample_id: str):
-    dro_path = os.path.join(root_dir, f"{sample_id}_dro.mat")
+def _load_dro_csmaps(root_dir: str, sample_id: str, num_frames: int):
+    dro_path = os.path.join(root_dir, f"{sample_id}_dro_{num_frames}frames.mat")
     with h5py.File(dro_path, "r") as f:
         if "smap" not in f:
             raise KeyError(f"{dro_path} missing required key 'smap'.")
@@ -164,7 +164,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Generate ESPIRiT maps for new DRO kspace.")
     parser.add_argument(
         "--root_dir",
-        default="/net/scratch2/rachelgordon/dro",
+        default="/net/scratch2/rachelgordon/dro_var_frames_kspace",
         help="Root directory containing DRO .mat files.",
     )
     parser.add_argument(
@@ -172,6 +172,12 @@ def parse_args():
         type=int,
         default=36,
         help="Spokes per frame to select kspace files (e.g., 36).",
+    )
+    parser.add_argument(
+        "--total_spokes",
+        type=int,
+        default=288,
+        help="Total spokes for calculating number of frames.",
     )
     parser.add_argument(
         "--device",
@@ -189,7 +195,9 @@ def main():
     out_dir = os.path.join(args.root_dir, "csmaps_espirit")
     os.makedirs(out_dir, exist_ok=True)
 
-    pattern = os.path.join(args.root_dir, f"sample_*_kspace_{args.spokes_per_frame}spf.mat")
+    num_frames = int(args.total_spokes / args.spokes_per_frame)
+
+    pattern = os.path.join(args.root_dir, f"sample_*_kspace_{args.spokes_per_frame}spf_{num_frames}frames.mat")
     kspace_files = sorted(glob.glob(pattern))
     if not kspace_files:
         raise FileNotFoundError(f"No kspace files found for pattern: {pattern}")
@@ -212,7 +220,7 @@ def main():
         np.save(out_path, espirit_maps)
         print(f"Saved ESPIRiT maps to {out_path}")
 
-        dro_csmaps = _load_dro_csmaps(args.root_dir, sample_id)
+        dro_csmaps = _load_dro_csmaps(args.root_dir, sample_id, num_frames)
         plot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"csmaps_compare_{sample_id}.png")
         _plot_csmaps_compare(dro_csmaps, espirit_maps, plot_path)
         print(f"Saved comparison plot to {plot_path}")

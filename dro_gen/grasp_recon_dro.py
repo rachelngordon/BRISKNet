@@ -231,6 +231,12 @@ def parse_args():
         help="Spokes per frame (e.g., 2).",
     )
     parser.add_argument(
+        "--total-spokes",
+        type=int,
+        default=288,
+        help="Total spokes (spf * frames).",
+    )
+    parser.add_argument(
         "--spokes-per-frame-list",
         type=int,
         nargs="+",
@@ -240,19 +246,19 @@ def parse_args():
     parser.add_argument(
         "--root-dir",
         type=str,
-        default="/net/scratch2/rachelgordon/dro",
+        default="/net/scratch2/rachelgordon/dro_var_frames_kspace",
         help="Root directory containing DRO kspace .mat files.",
     )
     parser.add_argument(
         "--csmaps-dir",
         type=str,
-        default="/net/scratch2/rachelgordon/dro/csmaps_espirit",
+        default="/net/scratch2/rachelgordon/dro_var_frames_kspace/csmaps_espirit",
         help="Directory containing ESPIRiT CSMAPS .npy files.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="/net/scratch2/rachelgordon/dro/espirit_grasp_recons",
+        default="/net/scratch2/rachelgordon/dro_var_frames_kspace/espirit_grasp_recons",
         help="Output directory for GRASP reconstructions.",
     )
     parser.add_argument(
@@ -306,7 +312,7 @@ def _load_split_ids(split_file: str, split_key: str):
     return data[split_key]
 
 
-def _run_recon(sample_id: str, spf: int, kspace_path: str, csmaps_path: str, args):
+def _run_recon(sample_id: str, spf: int, num_frames: int, kspace_path: str, csmaps_path: str, args):
     if not os.path.exists(kspace_path):
         raise FileNotFoundError(f"K-space file not found: {kspace_path}")
     if not os.path.exists(csmaps_path):
@@ -376,7 +382,7 @@ def _run_recon(sample_id: str, spf: int, kspace_path: str, csmaps_path: str, arg
         recon_np = np.transpose(recon_np, (1, 2, 0))
 
     os.makedirs(args.output_dir, exist_ok=True)
-    output_path = os.path.join(args.output_dir, f"grasp_{sample_id}_{spf}spf.npy")
+    output_path = os.path.join(args.output_dir, f"grasp_{sample_id}_{spf}spf_{num_frames}frames.npy")
     np.save(output_path, recon_np)
     print(f"[done] saved GRASP recon to {output_path}")
 
@@ -391,13 +397,14 @@ def main():
         for raw_id in sample_ids:
             sample_id = _resolve_sample_id(raw_id)
             for spf in args.spokes_per_frame_list:
+                num_frames = int(args.total_spokes / spf)
                 kspace_path = os.path.join(
-                    args.root_dir, f"{sample_id}_kspace_{spf}spf.mat"
+                    args.root_dir, f"{sample_id}_kspace_{spf}spf_{num_frames}frames.mat"
                 )
                 csmaps_path = os.path.join(
                     args.csmaps_dir, f"csmaps_{sample_id}.npy"
                 )
-                _run_recon(sample_id, spf, kspace_path, csmaps_path, args)
+                _run_recon(sample_id, spf, num_frames, kspace_path, csmaps_path, args)
         return
 
     if args.kspace_path is None:
@@ -405,7 +412,8 @@ def main():
             raise ValueError("Provide --sample-id and --spokes-per-frame, or pass --kspace-path.")
         sample_id = _resolve_sample_id(args.sample_id)
         spf = args.spokes_per_frame
-        kspace_path = os.path.join(args.root_dir, f"{sample_id}_kspace_{spf}spf.mat")
+        num_frames = int(args.total_spokes / spf)
+        kspace_path = os.path.join(args.root_dir, f"{sample_id}_kspace_{spf}spf_{num_frames}frames.mat")
     else:
         kspace_path = args.kspace_path
         sample_id = _resolve_sample_id(args.sample_id) or _parse_sample_id_from_name(kspace_path)
@@ -416,7 +424,7 @@ def main():
     else:
         csmaps_path = args.csmaps_path
 
-    _run_recon(sample_id, spf, kspace_path, csmaps_path, args)
+    _run_recon(sample_id, spf, num_frames, kspace_path, csmaps_path, args)
 
 
 if __name__ == "__main__":

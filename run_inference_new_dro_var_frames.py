@@ -163,14 +163,52 @@ def _available_frames(paths: list[str], token: str, suffix: str) -> list[int]:
     return sorted(set(frames))
 
 
-def _prep_nufft_from_dro_traj(kspace_mat_path: str, spokes_per_frame: int, num_frames: int, expected_samples: int | None = None):
-    with h5py.File(kspace_mat_path, "r") as f:
+def _prep_nufft_from_dro_traj(
+    kspace_path: str,
+    spokes_per_frame: int,
+    num_frames: int,
+    expected_samples: int | None = None,
+    traj_method: str = "get_traj",
+):
+    if kspace_path.endswith(".npy"):
+        kspace = np.load(kspace_path, mmap_mode="r")
+        if kspace.ndim == 4 and kspace.shape[-1] == 2 and not np.iscomplexobj(kspace):
+            kspace = kspace[..., 0] + 1j * kspace[..., 1]
+        if kspace.ndim != 3:
+            raise ValueError(f"Unexpected kspace shape {kspace.shape} in {kspace_path}.")
+        if kspace.shape[-1] != num_frames:
+            if kspace.shape[1] == num_frames:
+                kspace = np.transpose(kspace, (0, 2, 1))
+            elif kspace.shape[0] == num_frames:
+                kspace = np.transpose(kspace, (1, 2, 0))
+            else:
+                raise ValueError(
+                    f"kspace frames ({kspace.shape[-1]}) != expected num_frames ({num_frames}) "
+                    f"for {kspace_path}. Use --eval_frames to match the DRO files."
+                )
+        total_samples = kspace.shape[1]
+        if total_samples % spokes_per_frame != 0:
+            raise ValueError(
+                f"kspace samples ({total_samples}) not divisible by spf {spokes_per_frame} "
+                f"for {kspace_path}."
+            )
+        samples = total_samples // spokes_per_frame
+        if expected_samples is not None and int(samples) != int(expected_samples):
+            raise ValueError(
+                f"kspace samples/spoke ({samples}) != expected_samples ({expected_samples})."
+            )
+        ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
+            int(samples), int(spokes_per_frame), int(num_frames), traj_method=traj_method
+        )
+        return ktraj, dcomp, nufft_ob, adjnufft_ob, int(samples)
+
+    with h5py.File(kspace_path, "r") as f:
         if "traj" not in f:
-            raise KeyError(f"{kspace_mat_path} missing required key 'traj'.")
+            raise KeyError(f"{kspace_path} missing required key 'traj'.")
         traj = _read_h5_complex(f["traj"]).astype(np.complex64)
 
     if traj.ndim != 2:
-        raise ValueError(f"Unexpected traj shape {traj.shape} in {kspace_mat_path}.")
+        raise ValueError(f"Unexpected traj shape {traj.shape} in {kspace_path}.")
     total_spokes, samples = traj.shape
     expected_spokes = int(spokes_per_frame) * int(num_frames)
     if samples == expected_spokes and total_spokes != expected_spokes:
@@ -189,9 +227,7 @@ def _prep_nufft_from_dro_traj(kspace_mat_path: str, spokes_per_frame: int, num_f
     max_abs = float(np.max(np.abs(traj)))
     if max_abs <= 1.0:
         traj = traj * (2 * np.pi)
-        print(
-            f"[DRO traj] Scaling normalized traj by 2π (max_abs={max_abs:.3g})."
-        )
+        print(f"[DRO traj] Scaling normalized traj by 2π (max_abs={max_abs:.3g}).")
 
     traj = traj.reshape(num_frames, spokes_per_frame, samples)
     kx = traj.real
@@ -239,8 +275,8 @@ class NewDROMatDataset(Dataset):
     Expects files:
       - <sample>_dro_<frames>frames.mat (contains simImg, smap, mask)
         - legacy: <sample>_dro.mat
-      - <sample>_kspace_<spf>spf_<frames>frames.mat (contains kspace)
-        - legacy: <sample>_kspace_<spf>spf.mat
+      - <sample>_kspace_<spf>spf_<frames>frames.npy (contains kspace)
+        - legacy: <sample>_kspace_<spf>spf.npy
       - <sample>_recon_<spf>spf_<frames>frames.mat (contains grasp_bart) when dro_csmaps_source=original
         - legacy: <sample>_recon_<spf>spf.mat
       - espirit_grasp_recons/grasp_<sample>_<spf>spf_<frames>frames.npy when dro_csmaps_source=espirit
@@ -383,30 +419,36 @@ class NewDROMatDataset(Dataset):
 
     def _load_kspace_mat(self, sample_id: str) -> np.ndarray:
         kspace_path = self._resolve_kspace_mat_path(sample_id)
-        with h5py.File(kspace_path, "r") as f:
-            if "kspace" not in f:
-                raise KeyError(f"{kspace_path} missing required key 'kspace'.")
-            kspace = _read_h5_complex(f["kspace"]).astype(np.complex64)
+        if kspace_path.endswith(".npy"):
+            kspace = np.load(kspace_path)
+            if kspace.ndim == 4 and kspace.shape[-1] == 2 and not np.iscomplexobj(kspace):
+                kspace = kspace[..., 0] + 1j * kspace[..., 1]
+        else:
+            with h5py.File(kspace_path, "r") as f:
+                if "kspace" not in f:
+                    raise KeyError(f"{kspace_path} missing required key 'kspace'.")
+                kspace = _read_h5_complex(f["kspace"])
 
         if kspace.ndim != 3:
             raise ValueError(f"Unexpected kspace shape {kspace.shape} in {kspace_path}.")
-        total_spokes = kspace.shape[1]
-        if total_spokes % self.spokes_per_frame != 0:
+        if kspace.shape[-1] != self.num_frames:
+            if kspace.shape[1] == self.num_frames:
+                kspace = np.transpose(kspace, (0, 2, 1))
+            elif kspace.shape[0] == self.num_frames:
+                kspace = np.transpose(kspace, (1, 2, 0))
+            else:
+                raise ValueError(
+                    f"kspace frames ({kspace.shape[-1]}) != expected num_frames ({self.num_frames}) "
+                    f"for {sample_id}. Use --eval_frames to match the DRO files."
+                )
+
+        total_samples = kspace.shape[1]
+        if total_samples % self.spokes_per_frame != 0:
             raise ValueError(
-                f"kspace spokes dimension {total_spokes} not divisible by spf {self.spokes_per_frame} "
+                f"kspace samples ({total_samples}) not divisible by spf {self.spokes_per_frame} "
                 f"for {sample_id}."
             )
-        inferred_frames = total_spokes // self.spokes_per_frame
-        if inferred_frames != self.num_frames:
-            raise ValueError(
-                f"kspace frames ({inferred_frames}) != expected num_frames ({self.num_frames}) "
-                f"for {sample_id}. Use --eval_frames to match the DRO files."
-            )
-
-        kspace = kspace.reshape(
-            kspace.shape[0], self.num_frames, self.spokes_per_frame, kspace.shape[2]
-        )
-        kspace = rearrange(kspace, "c t sp sam -> c (sp sam) t")
+        kspace = kspace.astype(np.complex64, copy=False)
         return kspace
 
     def _resolve_dro_mat_path(self, sample_id: str) -> str:
@@ -432,10 +474,10 @@ class NewDROMatDataset(Dataset):
         candidates = [
             os.path.join(
                 self.root_dir,
-                f"{sample_id}_kspace_{self.spokes_per_frame}spf_{self.num_frames}frames.mat",
+                f"{sample_id}_kspace_{self.spokes_per_frame}spf_{self.num_frames}frames.npy",
             ),
             os.path.join(
-                self.root_dir, f"{sample_id}_kspace_{self.spokes_per_frame}spf.mat"
+                self.root_dir, f"{sample_id}_kspace_{self.spokes_per_frame}spf.npy"
             ),
         ]
         for path in candidates:
@@ -443,12 +485,12 @@ class NewDROMatDataset(Dataset):
                 return path
         alt_pattern = os.path.join(
             self.root_dir,
-            f"{sample_id}_kspace_{self.spokes_per_frame}spf_*frames.mat",
+            f"{sample_id}_kspace_{self.spokes_per_frame}spf_*frames.npy",
         )
         alt_files = glob.glob(alt_pattern)
         if alt_files:
             token = f"_kspace_{self.spokes_per_frame}spf_"
-            frames = _available_frames(alt_files, token=token, suffix="frames.mat")
+            frames = _available_frames(alt_files, token=token, suffix="frames.npy")
             frames_str = ", ".join(str(f) for f in frames) if frames else "unknown"
             raise FileNotFoundError(
                 f"Missing kspace file for {sample_id} with spf={self.spokes_per_frame} "
@@ -696,6 +738,239 @@ def _build_model(config: dict, device, block_dir: str):
     return model
 
 
+def _mean_std(values, key):
+    vals = [v.get(key) for v in values if v.get(key) is not None and np.isfinite(v.get(key))]
+    if not vals:
+        return None, None
+    mean = sum(vals) / len(vals)
+    std = statistics.stdev(vals) if len(vals) > 1 else 0.0
+    return mean, std
+
+
+def _compute_summaries(results, grasp_results, raw_results, zf_results):
+    dl_summary = {
+        "ssim": _mean_std(results, "ssim"),
+        "psnr": _mean_std(results, "psnr"),
+        "psnr_fg": _mean_std(results, "dl_psnr_fg"),
+        "mse": _mean_std(results, "mse"),
+        "mse_fg": _mean_std(results, "dl_mse_fg"),
+        "lpips": _mean_std(results, "lpips"),
+        "dc_mse": _mean_std(results, "dc_mse"),
+        "dc_mae": _mean_std(results, "dc_mae"),
+        "dc_mse_bestfit": _mean_std(results, "dl_dc_mse_bestfit"),
+        "dc_mae_bestfit": _mean_std(results, "dl_dc_mae_bestfit"),
+        "dc_scale_abs": _mean_std(results, "dl_dc_scale_abs"),
+        "img_scale": _mean_std(results, "dl_img_scale"),
+        "recon_corr": _mean_std(results, "recon_corr"),
+        "grasp_corr": _mean_std(results, "grasp_corr"),
+        "fg_fraction": _mean_std(results, "fg_fraction"),
+    }
+
+    grasp_summary = {
+        "ssim": _mean_std(grasp_results, "ssim"),
+        "psnr": _mean_std(grasp_results, "psnr"),
+        "psnr_fg": _mean_std(results, "grasp_psnr_fg"),
+        "mse": _mean_std(grasp_results, "mse"),
+        "mse_fg": _mean_std(results, "grasp_mse_fg"),
+        "lpips": _mean_std(grasp_results, "lpips"),
+        "dc_mse": _mean_std(grasp_results, "dc_mse"),
+        "dc_mae": _mean_std(grasp_results, "dc_mae"),
+        "dc_mse_bestfit": _mean_std(grasp_results, "grasp_dc_mse_bestfit"),
+        "dc_mae_bestfit": _mean_std(grasp_results, "grasp_dc_mae_bestfit"),
+        "dc_scale_abs": _mean_std(grasp_results, "grasp_dc_scale_abs"),
+        "img_scale": _mean_std(results, "grasp_img_scale"),
+    }
+
+    raw_summary = {
+        "raw_dc_mse": _mean_std(raw_results, "raw_dc_mse"),
+        "raw_dc_mae": _mean_std(raw_results, "raw_dc_mae"),
+        "raw_dc_psnr": _mean_std(raw_results, "raw_dc_psnr"),
+        "raw_grasp_dc_mse": _mean_std(raw_results, "raw_grasp_dc_mse"),
+        "raw_grasp_dc_mae": _mean_std(raw_results, "raw_grasp_dc_mae"),
+        "raw_grasp_dc_psnr": _mean_std(raw_results, "raw_grasp_dc_psnr"),
+        "raw_ssdu_nmse": _mean_std(raw_results, "raw_ssdu_nmse"),
+        "raw_grasp_ssdu_nmse": _mean_std(raw_results, "raw_grasp_ssdu_nmse"),
+    }
+
+    zf_summary = None
+    if zf_results:
+        zf_summary = {
+            "ssim": _mean_std(zf_results, "ssim"),
+            "psnr": _mean_std(zf_results, "psnr"),
+            "psnr_fg": _mean_std(zf_results, "zf_psnr_fg"),
+            "mse": _mean_std(zf_results, "mse"),
+            "mse_fg": _mean_std(zf_results, "zf_mse_fg"),
+            "lpips": _mean_std(zf_results, "lpips"),
+            "dc_mse": _mean_std(zf_results, "dc_mse"),
+            "dc_mae": _mean_std(zf_results, "dc_mae"),
+            "dc_mse_bestfit": _mean_std(zf_results, "zf_dc_mse_bestfit"),
+            "dc_mae_bestfit": _mean_std(zf_results, "zf_dc_mae_bestfit"),
+            "dc_scale_abs": _mean_std(zf_results, "zf_dc_scale_abs"),
+            "img_scale": _mean_std(zf_results, "zf_img_scale"),
+        }
+
+    return dl_summary, grasp_summary, raw_summary, zf_summary
+
+
+def _write_metrics_csv(
+    metrics_path: str,
+    results,
+    grasp_results,
+    raw_results,
+    zf_results,
+):
+    with open(metrics_path, "w") as f:
+        headers = [
+            "sample",
+            "dro_csmap_scale",
+            "dl_ssim",
+            "dl_psnr",
+            "dl_psnr_fg",
+            "dl_mse",
+            "dl_mse_fg",
+            "dl_lpips",
+            "dl_dc_mse",
+            "dl_dc_mae",
+            "dl_dc_mse_bestfit",
+            "dl_dc_mae_bestfit",
+            "dl_dc_scale_abs",
+            "dl_dc_scale_phase",
+            "dl_img_scale",
+            "dl_recon_corr",
+            "grasp_corr",
+            "grasp_ssim",
+            "grasp_psnr",
+            "grasp_psnr_fg",
+            "grasp_mse",
+            "grasp_mse_fg",
+            "grasp_lpips",
+            "grasp_dc_mse",
+            "grasp_dc_mae",
+            "grasp_dc_mse_bestfit",
+            "grasp_dc_mae_bestfit",
+            "grasp_dc_scale_abs",
+            "grasp_dc_scale_phase",
+            "grasp_img_scale",
+            "zf_ssim",
+            "zf_psnr",
+            "zf_psnr_fg",
+            "zf_mse",
+            "zf_mse_fg",
+            "zf_lpips",
+            "zf_dc_mse",
+            "zf_dc_mae",
+            "zf_dc_mse_bestfit",
+            "zf_dc_mae_bestfit",
+            "zf_dc_scale_abs",
+            "zf_dc_scale_phase",
+            "zf_img_scale",
+            "fg_fraction",
+            "raw_dc_mse",
+            "raw_dc_mae",
+            "raw_dc_psnr",
+            "raw_grasp_dc_mse",
+            "raw_grasp_dc_mae",
+            "raw_grasp_dc_psnr",
+            "raw_ssdu_nmse",
+            "raw_grasp_ssdu_nmse",
+        ]
+        f.write(",".join(headers) + "\n")
+        zf_lookup = {row["sample"]: row for row in zf_results}
+        for dro_row, grasp_row, raw_row in zip(results, grasp_results, raw_results):
+            zf_row = zf_lookup.get(dro_row["sample"], {})
+            dl_psnr_fg = dro_row.get("dl_psnr_fg")
+            dl_mse_fg = dro_row.get("dl_mse_fg")
+            grasp_psnr_fg = dro_row.get("grasp_psnr_fg")
+            grasp_mse_fg = dro_row.get("grasp_mse_fg")
+            fg_fraction = dro_row.get("fg_fraction")
+            zf_psnr_fg = zf_row.get("zf_psnr_fg")
+            zf_mse_fg = zf_row.get("zf_mse_fg")
+            row = [
+                dro_row["sample"],
+                "" if dro_row.get("dro_csmap_scale") is None else f"{dro_row['dro_csmap_scale']:.6f}",
+                f"{dro_row['ssim']:.6f}",
+                f"{dro_row['psnr']:.6f}",
+                "" if dl_psnr_fg is None else f"{dl_psnr_fg:.6f}",
+                f"{dro_row['mse']:.6f}",
+                "" if dl_mse_fg is None else f"{dl_mse_fg:.6f}",
+                f"{dro_row['lpips']:.6f}",
+                f"{dro_row['dc_mse']:.6f}",
+                f"{dro_row['dc_mae']:.6f}",
+                "" if dro_row.get("dl_dc_mse_bestfit") is None else f"{dro_row['dl_dc_mse_bestfit']:.6f}",
+                "" if dro_row.get("dl_dc_mae_bestfit") is None else f"{dro_row['dl_dc_mae_bestfit']:.6f}",
+                "" if dro_row.get("dl_dc_scale_abs") is None else f"{dro_row['dl_dc_scale_abs']:.6f}",
+                "" if dro_row.get("dl_dc_scale_phase") is None else f"{dro_row['dl_dc_scale_phase']:.6f}",
+                "" if dro_row.get("dl_img_scale") is None else f"{dro_row['dl_img_scale']:.6f}",
+                "" if dro_row["recon_corr"] is None else f"{dro_row['recon_corr']:.6f}",
+                "" if dro_row["grasp_corr"] is None else f"{dro_row['grasp_corr']:.6f}",
+                f"{grasp_row['ssim']:.6f}",
+                f"{grasp_row['psnr']:.6f}",
+                "" if grasp_psnr_fg is None else f"{grasp_psnr_fg:.6f}",
+                f"{grasp_row['mse']:.6f}",
+                "" if grasp_mse_fg is None else f"{grasp_mse_fg:.6f}",
+                f"{grasp_row['lpips']:.6f}",
+                f"{grasp_row['dc_mse']:.6f}",
+                f"{grasp_row['dc_mae']:.6f}",
+                "" if grasp_row.get("grasp_dc_mse_bestfit") is None else f"{grasp_row['grasp_dc_mse_bestfit']:.6f}",
+                "" if grasp_row.get("grasp_dc_mae_bestfit") is None else f"{grasp_row['grasp_dc_mae_bestfit']:.6f}",
+                "" if grasp_row.get("grasp_dc_scale_abs") is None else f"{grasp_row['grasp_dc_scale_abs']:.6f}",
+                "" if grasp_row.get("grasp_dc_scale_phase") is None else f"{grasp_row['grasp_dc_scale_phase']:.6f}",
+                "" if dro_row.get("grasp_img_scale") is None else f"{dro_row['grasp_img_scale']:.6f}",
+                "" if not zf_row else f"{zf_row.get('ssim', float('nan')):.6f}",
+                "" if not zf_row else f"{zf_row.get('psnr', float('nan')):.6f}",
+                "" if zf_psnr_fg is None else f"{zf_psnr_fg:.6f}",
+                "" if not zf_row else f"{zf_row.get('mse', float('nan')):.6f}",
+                "" if zf_mse_fg is None else f"{zf_mse_fg:.6f}",
+                "" if not zf_row else f"{zf_row.get('lpips', float('nan')):.6f}",
+                "" if not zf_row else f"{zf_row.get('dc_mse', float('nan')):.6f}",
+                "" if not zf_row else f"{zf_row.get('dc_mae', float('nan')):.6f}",
+                "" if zf_row.get("zf_dc_mse_bestfit") is None else f"{zf_row['zf_dc_mse_bestfit']:.6f}",
+                "" if zf_row.get("zf_dc_mae_bestfit") is None else f"{zf_row['zf_dc_mae_bestfit']:.6f}",
+                "" if zf_row.get("zf_dc_scale_abs") is None else f"{zf_row['zf_dc_scale_abs']:.6f}",
+                "" if zf_row.get("zf_dc_scale_phase") is None else f"{zf_row['zf_dc_scale_phase']:.6f}",
+                "" if zf_row.get("zf_img_scale") is None else f"{zf_row['zf_img_scale']:.6f}",
+                "" if fg_fraction is None else f"{fg_fraction:.6f}",
+                f"{raw_row['raw_dc_mse']:.6f}",
+                f"{raw_row['raw_dc_mae']:.6f}",
+                "" if raw_row.get("raw_dc_psnr") is None else f"{raw_row['raw_dc_psnr']:.6f}",
+                f"{raw_row['raw_grasp_dc_mse']:.6f}",
+                f"{raw_row['raw_grasp_dc_mae']:.6f}",
+                "" if raw_row.get("raw_grasp_dc_psnr") is None else f"{raw_row['raw_grasp_dc_psnr']:.6f}",
+                "" if raw_row.get("raw_ssdu_nmse") is None else f"{raw_row['raw_ssdu_nmse']:.6f}",
+                "" if raw_row.get("raw_grasp_ssdu_nmse") is None else f"{raw_row['raw_grasp_ssdu_nmse']:.6f}",
+            ]
+            f.write(",".join(row) + "\n")
+
+
+def _write_temporal_metrics_csv(
+    inference_dir: str,
+    results,
+    metric_names: list[str],
+    suffix: str,
+):
+    for label, prefix in (("malignant", ""), ("benign", "benign_")):
+        for subset in ("all", "top10", "top20"):
+            keys = [
+                f"{prefix}{model}_{subset}_{metric}"
+                for model in ("dl", "grasp")
+                for metric in metric_names
+            ]
+            temporal_metrics_path = os.path.join(
+                inference_dir, f"metrics_temporal_{label}_{subset}{suffix}.csv"
+            )
+            with open(temporal_metrics_path, "w") as f:
+                f.write(",".join(["sample"] + keys) + "\n")
+                for dro_row in results:
+                    row = [dro_row["sample"]]
+                    for key in keys:
+                        value = dro_row.get(key, np.nan)
+                        if value is None or (isinstance(value, float) and np.isnan(value)):
+                            row.append("")
+                        else:
+                            row.append(f"{value:.6f}")
+                    f.write(",".join(row) + "\n")
+
+
 def _load_weights(model, ckpt_path: str):
     ckpt = _torch_load_checkpoint(ckpt_path, map_location="cpu")
     state_dict = ckpt.get("model_state_dict", ckpt)
@@ -720,14 +995,14 @@ def parse_args():
         "--use_best_checkpoint",
         dest="use_best_checkpoint",
         action="store_true",
-        default=True,
-        help="Use <exp>_best_model.pth if available (default).",
+        default=False,
+        help="Use <exp>_best_model.pth if available.",
     )
     ckpt_group.add_argument(
         "--use_last_checkpoint",
         dest="use_best_checkpoint",
         action="store_false",
-        help="Use <exp>_model.pth (last checkpoint).",
+        help="Use <exp>_model.pth (last checkpoint, default).",
     )
     parser.add_argument(
         "--store_logs",
@@ -785,7 +1060,24 @@ def parse_args():
     parser.add_argument(
         "--dro_espirit_grasp_dir",
         default=None,
-        help="Override ESPIRiT GRASP recon dir (default: <dro_root>/espirit_grasp_recons).",
+        help=(
+            "Override ESPIRiT GRASP recon dir "
+            "(default: <dro_root>/espirit_grasp_recons_lam{grasp_lamda})."
+        ),
+    )
+    parser.add_argument(
+        "--grasp_lamda",
+        type=float,
+        default=0.001,
+        help=(
+            "GRASP TV weight used to select the ESPIRiT GRASP recon directory "
+            "(espirit_grasp_recons_lam{lamda}) when --dro_espirit_grasp_dir is not set."
+        ),
+    )
+    parser.add_argument(
+        "--grasp_lamdas",
+        default=None,
+        help="Comma-separated list of GRASP lambda values to evaluate (overrides --grasp_lamda).",
     )
     parser.add_argument(
         "--dro_noise_level",
@@ -795,7 +1087,7 @@ def parse_args():
     )
     parser.add_argument(
         "--new_dro_root",
-        default="/net/scratch2/rachelgordon/dro/",
+        default="/net/scratch2/rachelgordon/dro_var_frames",
         help="Root directory containing the new DRO .mat files.",
     )
     parser.add_argument(
@@ -969,6 +1261,67 @@ def _normalize_mask(mask, T: int, H: int, W: int):
     else:
         return None
     return mask_stack > 0
+
+
+def _parse_float_list(value: str) -> list[float]:
+    if not value:
+        return []
+    parts = [v.strip() for v in value.split(",") if v.strip()]
+    return [float(v) for v in parts]
+
+
+def _coerce_grasp_thw(grasp: np.ndarray, num_frames: int, sample_id: str, grasp_path: str) -> np.ndarray:
+    if grasp.ndim != 3:
+        raise ValueError(f"Unexpected GRASP shape {grasp.shape} in {grasp_path}.")
+    if grasp.shape[0] == num_frames:
+        return grasp
+    if grasp.shape[1] == num_frames:
+        return np.transpose(grasp, (1, 0, 2))
+    if grasp.shape[2] == num_frames:
+        return np.transpose(grasp, (2, 0, 1))
+    raise ValueError(
+        f"GRASP frames ({grasp.shape}) do not match expected num_frames ({num_frames}) "
+        f"for {sample_id}. Use --eval_frames to match the DRO files."
+    )
+
+
+def _load_grasp_from_dir(
+    sample_id: str,
+    spf: int,
+    num_frames: int,
+    grasp_dir: str,
+) -> tuple[np.ndarray, str]:
+    candidates = [
+        os.path.join(grasp_dir, f"grasp_{sample_id}_{spf}spf_{num_frames}frames.npy"),
+        os.path.join(grasp_dir, f"grasp_{sample_id}_{spf}spf.npy"),
+    ]
+    recon_path = None
+    for path in candidates:
+        if os.path.exists(path):
+            recon_path = path
+            break
+    if recon_path is None:
+        raise FileNotFoundError(
+            f"Missing ESPIRiT GRASP recon file in {grasp_dir} for {sample_id} "
+            f"(spf={spf}, frames={num_frames})."
+        )
+    grasp = np.load(recon_path).squeeze()
+    if np.iscomplexobj(grasp):
+        grasp = grasp.astype(np.complex64, copy=False)
+    else:
+        grasp = grasp.astype(np.float32, copy=False)
+    grasp = _coerce_grasp_thw(grasp, num_frames, sample_id, recon_path)
+    return grasp, recon_path
+
+
+def _grasp_np_to_torch(grasp: np.ndarray) -> torch.Tensor:
+    grasp_torch = torch.from_numpy(grasp)
+    grasp_torch = grasp_torch.permute(1, 0, 2)  # (H, T, W)
+    if torch.is_complex(grasp_torch):
+        grasp_torch = torch.stack([grasp_torch.real, grasp_torch.imag], dim=0)
+    else:
+        grasp_torch = torch.stack([grasp_torch, torch.zeros_like(grasp_torch)], dim=0)
+    return grasp_torch
 
 
 def _compute_dro_csmap_scale(csmap: torch.Tensor, mask) -> float | None:
@@ -1237,6 +1590,13 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
+    grasp_lamdas = (
+        _parse_float_list(args.grasp_lamdas) if args.grasp_lamdas else [args.grasp_lamda]
+    )
+    if not grasp_lamdas:
+        raise ValueError("No GRASP lambda values provided.")
+    primary_grasp_lamda = grasp_lamdas[0]
+
     exp_name = args.exp_dir.split('/')[-1]
 
     # Resolve config/checkpoint paths and load config.
@@ -1339,6 +1699,8 @@ def main():
         "dro_sim_source": dro_sim_source,
         "dro_espirit_csmaps_dir": args.dro_espirit_csmaps_dir,
         "dro_espirit_grasp_dir": args.dro_espirit_grasp_dir,
+        "grasp_lamda": primary_grasp_lamda,
+        "grasp_lamdas": grasp_lamdas,
         "traj_method": args.traj_method,
         "output_root": output_root,
         "baseline": {
@@ -1409,9 +1771,20 @@ def main():
     dro_dataset_root = args.new_dro_root
 
     resolved_espirit_dir = args.dro_espirit_csmaps_dir or os.path.join(dro_dataset_root, "csmaps_espirit")
-    resolved_espirit_grasp_dir = args.dro_espirit_grasp_dir or os.path.join(
-        dro_dataset_root, "espirit_grasp_recons"
-    )
+    if len(grasp_lamdas) > 1 and args.dro_espirit_grasp_dir:
+        raise ValueError(
+            "Multiple GRASP lambdas requested, but --dro_espirit_grasp_dir was set. "
+            "Use lambda-specific ESPIRiT dirs under the DRO root instead."
+        )
+    if len(grasp_lamdas) > 1 and dro_csmaps_source != "espirit":
+        raise ValueError(
+            "Multiple GRASP lambdas are only supported with dro_csmaps_source=espirit."
+        )
+    grasp_dirs = {
+        lam: os.path.join(dro_dataset_root, f"espirit_grasp_recons_lam{lam:g}")
+        for lam in grasp_lamdas
+    }
+    resolved_espirit_grasp_dir = args.dro_espirit_grasp_dir or grasp_dirs[primary_grasp_lamda]
 
     print("=== Inference Configuration (resolved) ===")
     print(f"DRO dataset root: {dro_dataset_root}")
@@ -1421,6 +1794,8 @@ def main():
     if dro_csmaps_source == "espirit":
         print(f"DRO ESPIRiT csmaps dir: {resolved_espirit_dir}")
         print(f"DRO ESPIRiT GRASP dir: {resolved_espirit_grasp_dir}")
+        if len(grasp_lamdas) > 1:
+            print(f"GRASP lambdas: {', '.join(f'{lam:g}' for lam in grasp_lamdas)}")
     else:
         print("DRO csmaps source path: smap inside each DRO .mat")
     print(f"Trajectory method: {traj_method}")
@@ -1448,7 +1823,7 @@ def main():
         grasp_slice_idx=raw_grasp_slice_idx,
         dro_csmaps_source=dro_csmaps_source,
         espirit_csmaps_dir=args.dro_espirit_csmaps_dir,
-        espirit_grasp_recons_dir=args.dro_espirit_grasp_dir,
+        espirit_grasp_recons_dir=resolved_espirit_grasp_dir,
     )
 
     val_loader = DataLoader(
@@ -1480,6 +1855,8 @@ def main():
             "phase_index": resolved_phase_index if resolved_phase_index is not None else "none",
             "dro_espirit_csmaps_dir": resolved_espirit_dir,
             "dro_espirit_grasp_dir": resolved_espirit_grasp_dir,
+            "grasp_lamda": primary_grasp_lamda,
+            "grasp_lamdas": grasp_lamdas,
             "dro_csmaps_source": dro_csmaps_source,
             "dro_sim_source": dro_sim_source,
             "traj_method": traj_method,
@@ -1497,6 +1874,8 @@ def main():
     inference_settings["traj_method"] = traj_method
     inference_settings["dro_espirit_csmaps_dir"] = resolved_espirit_dir
     inference_settings["dro_espirit_grasp_dir"] = resolved_espirit_grasp_dir
+    inference_settings["grasp_lamda"] = primary_grasp_lamda
+    inference_settings["grasp_lamdas"] = grasp_lamdas
     inference_settings["eval_params"]["phase_index"] = (
         resolved_phase_index if resolved_phase_index is not None else "none"
     )
@@ -1518,6 +1897,10 @@ def main():
         resolved_args=resolved_args,
     )
 
+    with open(os.path.join(inference_dir, "grasp_lambda.txt"), "w") as f:
+        for lam in grasp_lamdas:
+            f.write(f"{lam:g}\n")
+
     # Prep physics for inference.
     N_samples = config["data"]["samples"]
     H, W = config["data"]["height"], config["data"]["width"]
@@ -1532,6 +1915,7 @@ def main():
         spokes_per_frame=int(N_spokes_eval),
         num_frames=int(N_time_eval),
         expected_samples=int(N_samples),
+        traj_method=traj_method,
     )
     print(f"Using DRO traj from: {traj_mat_path}")
     if traj_samples != int(N_samples):
@@ -1575,9 +1959,9 @@ def main():
 
     acceleration_val = torch.tensor([N_full / int(eval_ktraj.shape[1] / config["data"]["samples"])], dtype=torch.float, device=device)
 
-    results = []
+    results_by_lam = {lam: [] for lam in grasp_lamdas}
+    grasp_results_by_lam = {lam: [] for lam in grasp_lamdas}
     raw_results = []
-    grasp_results = []
     zf_results = []
     inference_times = []
 
@@ -1598,6 +1982,17 @@ def main():
                 raw_grasp_img,
                 raw_csmaps,
             ) = batch
+
+            sample_id = val_dataset.sample_ids[idx]
+            if dro_csmaps_source == "espirit":
+                primary_dir = grasp_dirs[primary_grasp_lamda]
+                grasp_np, grasp_path = _load_grasp_from_dir(
+                    sample_id,
+                    int(N_spokes_eval),
+                    int(N_time_eval),
+                    primary_dir,
+                )
+                dro_grasp_img = _grasp_np_to_torch(grasp_np)
 
             # csmap = csmap.squeeze(0).to(device)
             csmap = csmap.to(device)
@@ -1828,64 +2223,114 @@ def main():
                     device=device,
                 )
 
-            x_recon = torch.rot90(x_recon, k=3, dims=[2,3])
-            ground_truth = torch.rot90(ground_truth, k=3, dims=[-2,-1])
-            dro_grasp_img = torch.rot90(dro_grasp_img, k=3, dims=[2,4])
+            x_recon = torch.rot90(x_recon, k=3, dims=[2, 3])
+            ground_truth = torch.rot90(ground_truth, k=3, dims=[-2, -1])
+            dro_grasp_img = dro_grasp_img.unsqueeze(0)
+            grasp_primary = torch.rot90(dro_grasp_img, k=3, dims=[2, 4])
+            dro_grasp_img = grasp_primary
 
             for tissue in mask.keys():
                 mask[tissue] = torch.rot90(mask[tissue], k=3, dims=[-2, -1])
 
-            dro_metrics = eval_sample(
-                dro_kspace,
-                csmap,
-                ground_truth,
-                x_recon,
-                eval_physics,
-                mask,
-                dro_grasp_img,
-                acceleration_val,
-                int(N_spokes_eval),
-                sample_dir,
-                label,
-                device,
-                cluster,
-                dro_eval=True,
-                grasp_path=grasp_path,
-                rescale=rescale,
-                baseline_mode=args.baseline_mode,
-                baseline_seconds=args.baseline_seconds,
-                baseline_fraction=args.baseline_fraction,
-                baseline_min_frames=args.baseline_min_frames,
-                baseline_max_frames=args.baseline_max_frames,
-                arrival_k=arrival_k,
-                arrival_method=arrival_method,
-                arrival_fraction=arrival_fraction,
-                early_seconds=args.early_seconds,
-                early_min_frames=args.early_min_frames,
-                early_max_frames=args.early_max_frames,
-                total_scan_seconds=args.total_scan_seconds,
-            )
+            for grasp_lamda in grasp_lamdas:
+                if grasp_lamda == primary_grasp_lamda:
+                    dro_grasp_img_lam = grasp_primary
+                    grasp_path_lam = grasp_path
+                else:
+                    grasp_np, grasp_path_lam = _load_grasp_from_dir(
+                        sample_id,
+                        int(N_spokes_eval),
+                        int(N_time_eval),
+                        grasp_dirs[grasp_lamda],
+                    )
+                    dro_grasp_img_lam = _grasp_np_to_torch(grasp_np).to(device)
+                    dro_grasp_img_lam = dro_grasp_img_lam.unsqueeze(0)
+                    dro_grasp_img_lam = torch.rot90(dro_grasp_img_lam, k=3, dims=[2, 4])
 
-            (
-                grasp_ssim,
-                grasp_psnr,
-                grasp_mse,
-                grasp_lpips,
-                grasp_dc_mse,
-                grasp_dc_mae,
-                grasp_aux,
-            ) = eval_grasp(
-                dro_kspace,
-                csmap,
-                ground_truth,
-                dro_grasp_img,
-                eval_physics,
-                device,
-                sample_dir,
-                rescale=rescale,
-                dro_eval=True,
-                return_aux=True,
-            )
+                filename_suffix = f"lam{grasp_lamda:g}" if len(grasp_lamdas) > 1 else ""
+
+                dro_metrics = eval_sample(
+                    dro_kspace,
+                    csmap,
+                    ground_truth,
+                    x_recon,
+                    eval_physics,
+                    mask,
+                    dro_grasp_img_lam,
+                    acceleration_val,
+                    int(N_spokes_eval),
+                    sample_dir,
+                    label,
+                    device,
+                    cluster,
+                    dro_eval=True,
+                    grasp_path=grasp_path_lam,
+                    rescale=rescale,
+                    filename_suffix=filename_suffix,
+                    baseline_mode=args.baseline_mode,
+                    baseline_seconds=args.baseline_seconds,
+                    baseline_fraction=args.baseline_fraction,
+                    baseline_min_frames=args.baseline_min_frames,
+                    baseline_max_frames=args.baseline_max_frames,
+                    arrival_k=arrival_k,
+                    arrival_method=arrival_method,
+                    arrival_fraction=arrival_fraction,
+                    early_seconds=args.early_seconds,
+                    early_min_frames=args.early_min_frames,
+                    early_max_frames=args.early_max_frames,
+                    total_scan_seconds=args.total_scan_seconds,
+                )
+
+                (
+                    grasp_ssim,
+                    grasp_psnr,
+                    grasp_mse,
+                    grasp_lpips,
+                    grasp_dc_mse,
+                    grasp_dc_mae,
+                    grasp_aux,
+                ) = eval_grasp(
+                    dro_kspace,
+                    csmap,
+                    ground_truth,
+                    dro_grasp_img_lam,
+                    eval_physics,
+                    device,
+                    sample_dir,
+                    rescale=rescale,
+                    dro_eval=True,
+                    return_aux=True,
+                )
+
+                ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = dro_metrics
+
+                results_by_lam[grasp_lamda].append(
+                    dict(
+                        sample=label,
+                        ssim=ssim,
+                        psnr=psnr,
+                        mse=mse,
+                        lpips=lpips,
+                        dc_mse=dc_mse,
+                        dc_mae=dc_mae,
+                        recon_corr=recon_corr,
+                        grasp_corr=grasp_corr,
+                        dro_csmap_scale=dro_csmap_scale,
+                        **(temporal_metrics or {}),
+                    )
+                )
+                grasp_results_by_lam[grasp_lamda].append(
+                    dict(
+                        sample=label,
+                        ssim=grasp_ssim,
+                        psnr=grasp_psnr,
+                        mse=grasp_mse,
+                        lpips=grasp_lpips,
+                        dc_mse=grasp_dc_mse,
+                        dc_mae=grasp_dc_mae,
+                        **(grasp_aux or {}),
+                    )
+                )
 
             if args.compute_zf_baseline:
                 (
@@ -1970,36 +2415,6 @@ def main():
                 sample_dir,
                 rescale=rescale,
                 dro_eval=False,
-            )
-
-            ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = dro_metrics
-
-            results.append(
-                dict(
-                    sample=label,
-                    ssim=ssim,
-                    psnr=psnr,
-                    mse=mse,
-                    lpips=lpips,
-                    dc_mse=dc_mse,
-                    dc_mae=dc_mae,
-                    recon_corr=recon_corr,
-                    grasp_corr=grasp_corr,
-                    dro_csmap_scale=dro_csmap_scale,
-                    **(temporal_metrics or {}),
-                )
-            )
-            grasp_results.append(
-                dict(
-                    sample=label,
-                    ssim=grasp_ssim,
-                    psnr=grasp_psnr,
-                    mse=grasp_mse,
-                    lpips=grasp_lpips,
-                    dc_mse=grasp_dc_mse,
-                    dc_mae=grasp_dc_mae,
-                    **(grasp_aux or {}),
-                )
             )
             raw_results.append(
                 dict(
@@ -2088,6 +2503,9 @@ def main():
                 f"{acceleration_report:.6f},{seconds_per_frame:.6f},"
                 f"{mean_infer:.6f},{std_infer:.6f}\n"
             )
+
+    results = results_by_lam[primary_grasp_lamda]
+    grasp_results = grasp_results_by_lam[primary_grasp_lamda]
 
     # Save metrics.
     metrics_path = os.path.join(inference_dir, "metrics.csv")
@@ -2485,6 +2903,39 @@ def main():
     _print_temporal_table("Malignant", prefix="")
     _print_temporal_table("Benign", prefix="benign_")
 
+    summaries_by_lam = {
+        primary_grasp_lamda: {
+            "dl_summary": dl_summary,
+            "grasp_summary": grasp_summary,
+            "raw_summary": raw_summary,
+            "zf_summary": zf_summary,
+        }
+    }
+    if len(grasp_lamdas) > 1:
+        for grasp_lamda in grasp_lamdas:
+            if grasp_lamda == primary_grasp_lamda:
+                continue
+            results_lam = results_by_lam[grasp_lamda]
+            grasp_results_lam = grasp_results_by_lam[grasp_lamda]
+            dl_sum, grasp_sum, raw_sum, zf_sum = _compute_summaries(
+                results_lam, grasp_results_lam, raw_results, zf_results
+            )
+            summaries_by_lam[grasp_lamda] = {
+                "dl_summary": dl_sum,
+                "grasp_summary": grasp_sum,
+                "raw_summary": raw_sum,
+                "zf_summary": zf_sum,
+            }
+            suffix = f"_lam{grasp_lamda:g}"
+            _write_metrics_csv(
+                os.path.join(inference_dir, f"metrics{suffix}.csv"),
+                results_lam,
+                grasp_results_lam,
+                raw_results,
+                zf_results,
+            )
+            _write_temporal_metrics_csv(inference_dir, results_lam, metric_names, suffix)
+
     if args.store_logs:
         log_path = os.path.join(os.path.dirname(__file__), "val_inference_logs.json")
         accel_factor = float(acceleration_val.item())
@@ -2512,6 +2963,7 @@ def main():
             "acceleration": accel_factor,
             "seconds_per_frame": seconds_per_frame,
             "DRO_noise_level": val_noise_level,
+            "grasp_lamdas": grasp_lamdas,
             "avg_inference_time": None if mean_infer is None else float(mean_infer),
             "std_inference_time": None if std_infer is None else float(std_infer),
             "num_samples": int(num_samples),
@@ -2528,6 +2980,7 @@ def main():
             "acceleration": accel_factor,
             "seconds_per_frame": seconds_per_frame,
             "DRO_noise_level": val_noise_level,
+            "grasp_lamda": primary_grasp_lamda,
             "num_samples": int(len(grasp_results)),
             "spatial_metrics": {},
             "dc_metrics": {},
@@ -2618,7 +3071,8 @@ def main():
 
         filtered_rows = []
         brisk_exists = False
-        grasp_exists = False
+        grasp_lamda_keys = {str(lam) for lam in grasp_lamdas}
+        grasp_exists_by_lam = {key: False for key in grasp_lamda_keys}
         for row in existing_rows:
             row_type = row.get("type")
             if args.overwrite_logs:
@@ -2627,11 +3081,14 @@ def main():
                 if row_type == "GRASP":
                     row_noise = row.get("DRO_noise_level") or row.get("dro_noise_level")
                     row_accel = row.get("acceleration") or row.get("acceleration_factor")
+                    row_lam = row.get("grasp_lamda")
+                    row_lam_key = str(row_lam) if row_lam is not None else None
                     if (
                         str(row.get("spokes_per_frame")) == str(int(N_spokes_eval))
                         and str(row.get("num_frames")) == str(int(N_time_eval))
                         and str(row_noise) == str(val_noise_level)
                         and str(row_accel) == str(accel_factor)
+                        and row_lam_key in grasp_lamda_keys
                     ):
                         continue
                 filtered_rows.append(row)
@@ -2640,23 +3097,96 @@ def main():
             if row_type == "BRISKNet" and row.get("exp_name") == exp_name:
                 brisk_exists = True
             if row_type == "GRASP":
+                row_lam_key = str(row.get("grasp_lamda")) if row.get("grasp_lamda") is not None else None
                 if (
                     str(row.get("spokes_per_frame")) == str(int(N_spokes_eval))
                     and str(row.get("num_frames")) == str(int(N_time_eval))
                     and str(row.get("DRO_noise_level")) == str(val_noise_level)
                     and str(row.get("acceleration")) == str(accel_factor)
+                    and row_lam_key in grasp_exists_by_lam
                 ):
-                    grasp_exists = True
+                    grasp_exists_by_lam[row_lam_key] = True
             filtered_rows.append(row)
 
         if args.overwrite_logs:
             filtered_rows.append(log_row)
-            filtered_rows.append(grasp_agg_row)
         else:
             if not brisk_exists:
                 filtered_rows.append(log_row)
-            if not grasp_exists:
-                filtered_rows.append(grasp_agg_row)
+
+        for grasp_lamda in grasp_lamdas:
+            if grasp_lamda == primary_grasp_lamda:
+                grasp_row = grasp_agg_row
+                grasp_summary = summaries_by_lam[grasp_lamda]["grasp_summary"]
+                dl_summary = summaries_by_lam[grasp_lamda]["dl_summary"]
+                results_lam = results_by_lam[grasp_lamda]
+            else:
+                results_lam = results_by_lam[grasp_lamda]
+                grasp_results_lam = grasp_results_by_lam[grasp_lamda]
+                dl_summary, grasp_summary, _, _ = _compute_summaries(
+                    results_lam, grasp_results_lam, raw_results, zf_results
+                )
+                grasp_row = {
+                    "type": "GRASP",
+                    "spokes_per_frame": int(N_spokes_eval),
+                    "num_frames": int(N_time_eval),
+                    "acceleration": accel_factor,
+                    "seconds_per_frame": seconds_per_frame,
+                    "DRO_noise_level": val_noise_level,
+                    "grasp_lamda": grasp_lamda,
+                    "num_samples": int(len(grasp_results_lam)),
+                    "spatial_metrics": {},
+                    "dc_metrics": {},
+                    "temporal_metrics": {},
+                }
+                for metric in spatial_keys:
+                    grasp_mean_std = _extract_mean_std(grasp_summary.get(metric))
+                    grasp_row["spatial_metrics"][f"{metric}_mean"] = grasp_mean_std["mean"]
+                    grasp_row["spatial_metrics"][f"{metric}_stddev"] = grasp_mean_std["std"]
+
+                grasp_dc_mae = _extract_mean_std(grasp_summary.get("dc_mae"))
+                grasp_dc_mse = _extract_mean_std(grasp_summary.get("dc_mse"))
+                raw_grasp_dc_mae = _extract_mean_std(raw_summary.get("raw_grasp_dc_mae"))
+                raw_grasp_dc_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_mse"))
+                raw_grasp_dc_psnr = _extract_mean_std(raw_summary.get("raw_grasp_dc_psnr"))
+                raw_grasp_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_grasp_ssdu_nmse"))
+                grasp_row["dc_metrics"] = {
+                    "dro_dc_mae_mean": grasp_dc_mae["mean"],
+                    "dro_dc_mae_stddev": grasp_dc_mae["std"],
+                    "dro_dc_mse_mean": grasp_dc_mse["mean"],
+                    "dro_dc_mse_stddev": grasp_dc_mse["std"],
+                    "raw_dc_mae_mean": raw_grasp_dc_mae["mean"],
+                    "raw_dc_mae_stddev": raw_grasp_dc_mae["std"],
+                    "raw_dc_mse_mean": raw_grasp_dc_mse["mean"],
+                    "raw_dc_mse_stddev": raw_grasp_dc_mse["std"],
+                    "raw_dc_psnr_mean": raw_grasp_dc_psnr["mean"],
+                    "raw_dc_psnr_stddev": raw_grasp_dc_psnr["std"],
+                    "raw_grasp_ssdu_nmse_mean": raw_grasp_ssdu_nmse["mean"],
+                    "raw_grasp_ssdu_nmse_stddev": raw_grasp_ssdu_nmse["std"],
+                }
+
+                temporal_blocks = [
+                    ("all_pixels_malignant", "", "all"),
+                    ("all_pixels_benign", "benign_", "all"),
+                    ("top20_malignant", "", "top20"),
+                    ("top20_benign", "benign_", "top20"),
+                    ("top10_malignant", "", "top10"),
+                    ("top10_benign", "benign_", "top10"),
+                ]
+                for block_name, prefix, subset in temporal_blocks:
+                    grasp_row["temporal_metrics"][block_name] = {}
+                    for metric in metric_names:
+                        grasp_key = f"{prefix}grasp_{subset}_{metric}"
+                        grasp_mean_std = _extract_mean_std(_mean_std(results_lam, grasp_key))
+                        grasp_row["temporal_metrics"][block_name][f"{metric}_mean"] = grasp_mean_std["mean"]
+                        grasp_row["temporal_metrics"][block_name][f"{metric}_stddev"] = grasp_mean_std["std"]
+
+            lam_key = str(grasp_lamda)
+            if args.overwrite_logs:
+                filtered_rows.append(grasp_row)
+            else:
+                if not grasp_exists_by_lam.get(lam_key, False):
+                    filtered_rows.append(grasp_row)
 
         with open(log_path, "w") as f:
             json.dump(filtered_rows, f, indent=2, sort_keys=False)

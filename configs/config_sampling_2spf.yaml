@@ -26,7 +26,7 @@ data:
 experiment:
   output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
   cluster: "DSI"
-  pretrained_checkpoint: '/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_diffeo_36spf/ei_diffeo_36spf_best_model.pth'
+  pretrained_checkpoint: '/net/projects2/annawoodard/rachelgordon/experiments/ei_diffeo_2spf_slice_sampling/ei_diffeo_2spf_slice_sampling_model.pth'
 
 # DataLoader settings
 dataloader:
@@ -75,7 +75,7 @@ model:
   checkpoint_use_reentrant: false
   optimizer:
     name: "Adam"
-    lr: 0.0001
+    lr: 0.00005
     weight_decay: 0.0
     b1: 0.9
     b2: 0.999
@@ -134,6 +134,7 @@ training:
     warmup_mode: cosine
     min_lr_factor: 0.2
     warmup_epochs: 5
+    use_cosine_decay: false
   edge_time_index_sampling: true
   curriculum_learning:
     enabled: False

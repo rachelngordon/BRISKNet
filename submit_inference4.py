@@ -16,9 +16,8 @@ class InferenceBatch(submitit.helpers.Checkpointable):
         command_str = (
             f"source {micromamba_path} && "
             f"micromamba activate {env_name} && "
-            f"python run_inference_new_dro.py "
+            f"python run_inference_new_dro_var_frames.py "
             f"--exp_dir {self.exp_names} "
-            f"--eval_frames 22 "
             f"{extra}"
         )
 
@@ -38,7 +37,8 @@ def main():
     exp_names = "/net/projects2/annawoodard/rachelgordon/experiments/ei_diffeo_fop_cosine_lr_all_transforms_36spf"
     num_gpus = 1
     extra_args = [
-        "--overwrite_logs"
+        "--overwrite_logs",
+        "--grasp_lamdas 0.0001,0.001",
         # "--disable_ssdu",
     ]
 

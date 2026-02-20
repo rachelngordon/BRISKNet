@@ -158,6 +158,21 @@ def _sigpy_device_from_torch(device: torch.device) -> sp.Device:
     return sp.Device(index)
 
 
+def _print_device_info(device: torch.device) -> None:
+    if device.type != "cuda":
+        print(f"[Device] Using {device.type.upper()}.")
+        return
+    index = device.index if device.index is not None else 0
+    try:
+        name = torch.cuda.get_device_name(index)
+        props = torch.cuda.get_device_properties(index)
+        total_gb = props.total_memory / (1024**3)
+        cap = f"{props.major}.{props.minor}"
+        print(f"[Device] CUDA:{index} {name} | CC {cap} | {total_gb:.1f} GB")
+    except Exception as exc:
+        print(f"[Device] CUDA:{index} (failed to query properties: {exc})")
+
+
 def _load_config(config_path: str) -> Dict:
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config not found: {config_path}")
@@ -199,22 +214,30 @@ def _std_or_zero(values: List[float]) -> float:
 
 def _latex_table(rows: List[Dict]) -> str:
     lines = []
-    lines.append("\\begin{tabular}{lrrrr}")
-    lines.append("\\toprule")
-    lines.append("SPF & AF & Sec/frame & BRISKNet (s) & GRASP (s) \\\\")
-    lines.append("\\midrule")
+    lines.append("\\begin{table}")
+    lines.append("\\caption{Timing results.}\\label{tab1}")
+    lines.append("\\begin{tabular}{|l|l|l|l|l|l|l|}")
+    lines.append("\\hline")
+    lines.append(
+        "SPF & AF & Sec/frame & BRISKNet solve (s) & BRISKNet end-to-end (s) "
+        "& GRASP solve (s) & GRASP end-to-end (s) \\\\"
+    )
+    lines.append("\\hline")
     for row in rows:
         lines.append(
-            "{} & {} & {} & {} & {} \\\\".format(
+            "{} & {} & {} & {} & {} & {} & {} \\\\".format(
                 int(row["spokes_per_frame"]),
                 _format_float(row["acceleration"], 2),
                 _format_float(row["seconds_per_frame"], 2),
                 _format_mean_std(row["brisknet_time"], row["brisknet_std"], 3),
+                _format_mean_std(row["brisknet_e2e_time"], row["brisknet_e2e_std"], 3),
                 _format_mean_std(row["grasp_time"], row["grasp_std"], 3),
+                _format_mean_std(row["grasp_e2e_time"], row["grasp_e2e_std"], 3),
             )
         )
-    lines.append("\\bottomrule")
+    lines.append("\\hline")
     lines.append("\\end{tabular}")
+    lines.append("\\end{table}")
     return "\n".join(lines)
 
 
@@ -303,6 +326,7 @@ def main() -> None:
         val_ids = val_ids[: args.num_samples]
 
     device = _resolve_device(args.device)
+    _print_device_info(device)
     sigpy_device = _sigpy_device_from_torch(device)
 
     results = []
@@ -324,7 +348,11 @@ def main() -> None:
         traj_method = config.get("data", {}).get("traj_method", "get_traj")
 
         brisk_times: List[float] = []
+        brisk_e2e_times: List[float] = []
         grasp_times: List[float] = []
+        grasp_e2e_times: List[float] = []
+        per_spf_setup_time = 0.0
+        num_samples_target = max(1, len(val_ids))
 
         # Prepared per spf once we know N_samples/N_time.
         ktraj = None
@@ -338,6 +366,7 @@ def main() -> None:
         coord = None
 
         for patient_id in val_ids:
+            preprocess_start = time.perf_counter()
             kspace_path = _find_kspace_file(args.kspace_root, patient_id)
             kspace_slice = _load_kspace_slice(kspace_path, args.dataset_key, args.slice_idx)
             kspace_binned, n_time, n_samples = _time_bin_kspace_train(
@@ -359,8 +388,10 @@ def main() -> None:
             # Convert to complex k-space (coils, samples, time)
             kspace_cplx = to_torch_complex(kspace_binned.unsqueeze(0)).squeeze(0)
             kspace_cplx = rearrange(kspace_cplx, "t co sp sam -> co (sp sam) t")
+            preprocess_time = time.perf_counter() - preprocess_start
 
             if ktraj is None:
+                setup_start = time.perf_counter()
                 ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
                     n_samples, spf, n_time, traj_method=traj_method
                 )
@@ -372,6 +403,7 @@ def main() -> None:
                 else:
                     ktraj = ktraj.to(device)
                     dcomp = dcomp.to(device)
+                per_spf_setup_time = time.perf_counter() - setup_start
 
                 H = csmap.shape[-2]
                 n_full = H * math.pi / 2.0
@@ -392,10 +424,14 @@ def main() -> None:
                     coord = coord[None, ...]
 
             # --- BRISKNet timing ---
+            transfer_start = time.perf_counter()
             kspace_dev = kspace_cplx.to(device)
             csmap_dev = csmap.to(device).to(kspace_dev.dtype)
+            _sync_torch(device)
+            transfer_time = time.perf_counter() - transfer_start
 
             use_sliding = eval_chunk_size > 0 and eval_chunk_size < n_time
+            physics_time = 0.0
             with torch.no_grad():
                 if use_sliding:
                     _sync_torch(device)
@@ -423,7 +459,9 @@ def main() -> None:
                     _sync_torch(device)
                     brisk_times.append(time.perf_counter() - t0)
                 else:
+                    physics_start = time.perf_counter()
                     physics = MCNUFFT(nufft_ob, adjnufft_ob, ktraj, dcomp)
+                    physics_time = time.perf_counter() - physics_start
                     _sync_torch(device)
                     t0 = time.perf_counter()
                     _ = model(
@@ -437,22 +475,34 @@ def main() -> None:
                     )
                     _sync_torch(device)
                     brisk_times.append(time.perf_counter() - t0)
+            brisk_e2e_times.append(
+                preprocess_time
+                + transfer_time
+                + physics_time
+                + brisk_times[-1]
+                + (per_spf_setup_time / float(num_samples_target))
+            )
 
             # --- GRASP timing ---
             # Prepare kspace/csmaps for sigpy (preprocessing outside timed block).
+            grasp_total_start = time.perf_counter()
             kspace_np = rearrange(
                 kspace_cplx.cpu(), "c (sp sam) t -> t c sp sam", sam=n_samples
             ).unsqueeze(1).unsqueeze(3).numpy()
             csmaps_np = rearrange(csmap, "b c h w -> c b h w").cpu().numpy()
+            coord_np = coord
 
-            _sync_sigpy(sigpy_device)
-            t0 = time.perf_counter()
-            recon = app.HighDimensionalRecon(
-                kspace_np,
-                csmaps_np,
+            # Move arrays to sigpy device before timing.
+            kspace_sp = sp.to_device(kspace_np, sigpy_device)
+            csmaps_sp = sp.to_device(csmaps_np, sigpy_device)
+            coord_sp = sp.to_device(coord_np, sigpy_device)
+
+            recon_op = app.HighDimensionalRecon(
+                kspace_sp,
+                csmaps_sp,
                 combine_echo=False,
                 lamda=args.lamda,
-                coord=coord,
+                coord=coord_sp,
                 regu="TV",
                 regu_axes=[0],
                 max_iter=args.max_iter,
@@ -461,11 +511,17 @@ def main() -> None:
                 device=sigpy_device,
                 show_pbar=False,
                 verbose=False,
-            ).run()
+            )
+
+            _sync_sigpy(sigpy_device)
+            t0 = time.perf_counter()
+            recon_out = recon_op.run()
             _sync_sigpy(sigpy_device)
             grasp_times.append(time.perf_counter() - t0)
+            grasp_e2e_times.append(preprocess_time + (time.perf_counter() - grasp_total_start))
             # Free recon object to keep memory stable.
-            del recon
+            del recon_out
+            del recon_op
 
         if n_time_ref is None:
             raise RuntimeError(f"No samples processed for spf={spf}.")
@@ -484,8 +540,12 @@ def main() -> None:
                 "seconds_per_frame": seconds_per_frame,
                 "brisknet_time": float(np.mean(brisk_times)),
                 "brisknet_std": _std_or_zero(brisk_times),
+                "brisknet_e2e_time": float(np.mean(brisk_e2e_times)),
+                "brisknet_e2e_std": _std_or_zero(brisk_e2e_times),
                 "grasp_time": float(np.mean(grasp_times)),
                 "grasp_std": _std_or_zero(grasp_times),
+                "grasp_e2e_time": float(np.mean(grasp_e2e_times)),
+                "grasp_e2e_std": _std_or_zero(grasp_e2e_times),
                 "num_samples": len(brisk_times),
             }
         )

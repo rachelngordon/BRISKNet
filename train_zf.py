@@ -2556,13 +2556,14 @@ def main():
             epoch_eval_raw_ssdu_nmses = []
 
 
-            # cosine LR with warmup (set before first step of the epoch)
+            # LR schedule with optional cosine decay and warmup (set before first step of the epoch)
             total = epochs
             lr_sched_cfg = config.get("training", {}).get("lr_schedule", {})
             warm = int(lr_sched_cfg.get("warmup_epochs", 5))
             if warm < 0:
                 warm = 0
             warmup_mode = str(lr_sched_cfg.get("warmup_mode", "linear")).lower()
+            use_cosine_decay = bool(lr_sched_cfg.get("use_cosine_decay", True))
             lr_floor = lr_sched_cfg.get("min_lr_factor", 0.2)
             if warm > 0 and epoch <= warm:
                 if warmup_mode == "cosine":
@@ -2570,8 +2571,11 @@ def main():
                 else:
                     lr_scale = epoch / warm
             else:
-                p = (epoch - warm) / max(1, total - warm)
-                lr_scale = lr_floor + (1.0 - lr_floor) * 0.5 * (1 + math.cos(math.pi * p))
+                if use_cosine_decay:
+                    p = (epoch - warm) / max(1, total - warm)
+                    lr_scale = lr_floor + (1.0 - lr_floor) * 0.5 * (1 + math.cos(math.pi * p))
+                else:
+                    lr_scale = 1.0
             for pg in optimizer.param_groups:
                 pg['lr'] = config["model"]["optimizer"]["lr"] * lr_scale
 
