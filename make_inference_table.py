@@ -8,7 +8,7 @@ import yaml
 
 
 SPATIAL_METRICS = ["ssim", "psnr", "mse", "lpips"]
-MC_METRICS = ["dro_dc_mae", "dro_dc_mse","raw_dc_mae", "raw_dc_mse", "raw_ssdu_nmse"]
+MC_METRICS = ["dro_dc_mae", "dro_dc_mse","raw_ssdu_nmse"]
 TEMPORAL_METRICS = [
     "curve_corr",
     "curve_mae",
@@ -69,6 +69,13 @@ def _format_one_decimal(value) -> str:
     if value is None:
         return ""
     return f"{value:.1f}"
+
+
+def _format_int(value) -> str:
+    value = _to_float(value)
+    if value is None:
+        return ""
+    return str(int(value))
 
 
 def _extract_timing_stats(row: Dict[str, str]) -> Tuple[float | None, float | None]:
@@ -197,9 +204,19 @@ def _metric_columns(metric_type: str, temporal_metrics: List[str]) -> List[str]:
     if metric_type == "spatial":
         return ["SSIM", "PSNR", "MSE", "LPIPS"]
     if metric_type == "mc":
-        return ["DRO DC MAE", "DRO DC MSE", "Raw DC MAE", "Raw DC MSE", "Raw SSDU NMSE"]
+        return ["DRO DC MAE", "DRO DC MSE", "Raw SSDU NMSE"]
     if metric_type == "temporal":
-        return temporal_metrics
+        return [
+            "$\\rho_\\text{full}$",
+            "$MAE_\\text{full}$",
+            "$\\rho_\\text{early}$",
+            "$MAE_\\text{early}$",
+            "$t_\\text{arr}$ Error",
+            "$MAE_\\text{wash-in}$",
+            "$iAUC_{10}$ Error",
+            "$MAE_\\text{peak}$",
+            "$t_\\text{peak}$ Error",
+        ]
     if metric_type == "timing":
         return ["Avg Inference Time (s)"]
     raise ValueError(f"Unknown metric_type {metric_type}")
@@ -301,65 +318,84 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
                 metric_type: str, temporal_metrics: List[str], temporal_subset: str, temporal_region: str,
                 decimals: int, caption: str, label: str, config_cols: List[Tuple[str, str]],
                 exp_base_dirs: List[str], config_cache: Dict[str, Dict],
-                include_timing_cols: bool) -> str:
-    timing_cols = ["AF", "Seconds/Frame"] if include_timing_cols else []
+                include_af_spf: bool, include_seconds_per_frame: bool) -> str:
+    timing_cols = []
+    if include_af_spf:
+        timing_cols.extend(["AF", "SPF"])
+    if include_seconds_per_frame:
+        timing_cols.append("Seconds/Frame")
     if config_cols:
         header_cols = ["Method"] + [col for col, _ in config_cols] + timing_cols
     else:
-        header_cols = ["Method", "Exp"] + timing_cols
+        header_cols = ["Method"] + timing_cols
     header_cols += _metric_columns(metric_type, temporal_metrics)
-    col_spec = "|" + "|".join(["l"] + ["c"] * (len(header_cols) - 1)) + "|"
+    col_spec = "|" + "|".join(["l"] * len(header_cols)) + "|"
 
     lines = []
-    lines.append("\\begin{table}[htbp]")
-    lines.append("\\centering")
-    lines.append("\\resizebox{\\textwidth}{!}{%")
+    lines.append("\\begin{table}")
+    lines.append(f"\\caption{{{caption}}}\\label{{{label}}}")
     lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
     lines.append("\\hline")
     lines.append(_format_row(header_cols))
     lines.append("\\hline")
 
     sorted_rows = sorted(rows, key=_row_key)
-    unique_grasp_rows = {}
+    grouped = []
+    group_map: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
     for row in sorted_rows:
-        accel = _format_one_decimal(row.get("acceleration_factor") or row.get("acceleration"))
-        sec_per_frame = _format_one_decimal(row.get("seconds_per_frame"))
-        exp_name = row.get("exp_name") or ""
         match_key = _match_key(row)
-        grasp_row = _select_grasp_row(grasp_index.get(match_key), metric_type) or row
+        if match_key not in group_map:
+            group_map[match_key] = []
+            grouped.append(match_key)
+        group_map[match_key].append(row)
 
-        accel_key = _to_float(row.get("acceleration_factor") or row.get("acceleration") or grasp_row.get("acceleration")) or 0.0
-        if accel_key not in unique_grasp_rows:
-            unique_grasp_rows[accel_key] = grasp_row
+    for match_key in grouped:
+        group_rows = group_map[match_key]
+        grasp_row = _select_grasp_row(grasp_index.get(match_key), metric_type)
 
-        if config_cols:
-            cfg = _load_config(exp_name, exp_base_dirs, config_cache)
-            config_vals = [
-                _format_config_value(_get_config_value(cfg, path))
-                for _, path in config_cols
-            ]
-        else:
-            config_vals = [exp_name]
+        for row in group_rows:
+            accel = _format_one_decimal(row.get("acceleration_factor") or row.get("acceleration"))
+            spf = _format_int(row.get("spokes_per_frame"))
+            sec_per_frame = _format_one_decimal(row.get("seconds_per_frame"))
+            exp_name = row.get("exp_name") or ""
 
-        brisk_vals = _collect_metric_values(
-            row,
-            "dl",
-            metric_type,
-            temporal_metrics,
-            temporal_subset,
-            temporal_region,
-            decimals,
-        )
-        timing_vals = [str(accel), str(sec_per_frame)] if include_timing_cols else []
-        lines.append(_format_row(["BRISKNet"] + config_vals + timing_vals + brisk_vals))
-        lines.append("\\hline")
+            if config_cols:
+                cfg = _load_config(exp_name, exp_base_dirs, config_cache)
+                config_vals = [
+                    _format_config_value(_get_config_value(cfg, path))
+                    for _, path in config_cols
+                ]
+            else:
+                config_vals = []
 
-    if unique_grasp_rows:
-        empty_config_vals = [""] * (len(config_cols) if config_cols else 1)
-        for accel_key in sorted(unique_grasp_rows):
-            grasp_row = unique_grasp_rows[accel_key]
-            grasp_accel = _format_one_decimal(grasp_row.get("acceleration_factor") or grasp_row.get("acceleration"))
-            grasp_sec_per_frame = _format_one_decimal(grasp_row.get("seconds_per_frame"))
+            brisk_vals = _collect_metric_values(
+                row,
+                "dl",
+                metric_type,
+                temporal_metrics,
+                temporal_subset,
+                temporal_region,
+                decimals,
+            )
+            timing_vals = []
+            if include_af_spf:
+                timing_vals.extend([str(accel), str(spf)])
+            if include_seconds_per_frame:
+                timing_vals.append(str(sec_per_frame))
+            lines.append(_format_row(["BRISKNet"] + config_vals + timing_vals + brisk_vals))
+
+        if grasp_row is not None:
+            empty_config_vals = [""] * len(config_cols)
+            ref_row = group_rows[0]
+            grasp_accel = _format_one_decimal(
+                ref_row.get("acceleration_factor")
+                or ref_row.get("acceleration")
+                or grasp_row.get("acceleration")
+            )
+            grasp_spf = _format_int(ref_row.get("spokes_per_frame") or grasp_row.get("spokes_per_frame"))
+            grasp_sec_per_frame = _format_one_decimal(
+                ref_row.get("seconds_per_frame") or grasp_row.get("seconds_per_frame")
+            )
             grasp_vals = _collect_metric_values(
                 grasp_row,
                 "grasp",
@@ -369,14 +405,15 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
                 temporal_region,
                 decimals,
             )
-            timing_vals = [str(grasp_accel), str(grasp_sec_per_frame)] if include_timing_cols else []
+            timing_vals = []
+            if include_af_spf:
+                timing_vals.extend([str(grasp_accel), str(grasp_spf)])
+            if include_seconds_per_frame:
+                timing_vals.append(str(grasp_sec_per_frame))
             lines.append(_format_row(["GRASP"] + empty_config_vals + timing_vals + grasp_vals))
-            lines.append("\\hline")
 
+    lines.append("\\hline")
     lines.append("\\end{tabular}")
-    lines.append("}")
-    lines.append(f"\\caption{{{caption}}}")
-    lines.append(f"\\label{{{label}}}")
     lines.append("\\end{table}")
     return "\n".join(lines)
 
@@ -408,13 +445,42 @@ def main():
         default=",".join(TEMPORAL_METRICS),
         help="Comma-separated temporal metrics to include (overrides defaults).",
     )
-    parser.add_argument("--decimals", type=int, default=2, help="Decimal places for mean/std.")
+    parser.add_argument("--decimals", type=int, default=3, help="Decimal places for mean/std.")
     parser.add_argument("--caption", default="", help="LaTeX table caption.")
     parser.add_argument("--label", default="", help="LaTeX table label.")
+    af_group = parser.add_mutually_exclusive_group()
+    af_group.add_argument(
+        "--include_af_spf",
+        dest="include_af_spf",
+        action="store_true",
+        default=None,
+        help="Include AF and SPF columns (default: enabled).",
+    )
+    af_group.add_argument(
+        "--exclude_af_spf",
+        dest="include_af_spf",
+        action="store_false",
+        help="Exclude AF and SPF columns from the table.",
+    )
     parser.add_argument(
         "--exclude_timing_cols",
+        dest="include_af_spf",
+        action="store_false",
+        help="Deprecated: use --exclude_af_spf.",
+    )
+    sec_group = parser.add_mutually_exclusive_group()
+    sec_group.add_argument(
+        "--include_seconds_per_frame",
+        dest="include_seconds_per_frame",
         action="store_true",
-        help="Exclude AF and Seconds/Frame columns from the table.",
+        default=None,
+        help="Include Seconds/Frame column.",
+    )
+    sec_group.add_argument(
+        "--exclude_seconds_per_frame",
+        dest="include_seconds_per_frame",
+        action="store_false",
+        help="Exclude Seconds/Frame column (default).",
     )
     parser.add_argument(
         "--exp_base_dir",
@@ -442,6 +508,8 @@ def main():
     if fallback_dir not in exp_base_dirs:
         exp_base_dirs.append(fallback_dir)
     config_cache = {}
+    include_af_spf = True if args.include_af_spf is None else args.include_af_spf
+    include_seconds_per_frame = False if args.include_seconds_per_frame is None else args.include_seconds_per_frame
 
     rows = _load_rows(args.log_file)
     exp_rows, grasp_index = _group_rows(rows)
@@ -462,7 +530,8 @@ def main():
                 config_cols,
                 exp_base_dirs,
                 config_cache,
-                include_timing_cols=not args.exclude_timing_cols,
+                include_af_spf=include_af_spf,
+                include_seconds_per_frame=include_seconds_per_frame,
             )
         )
         return
@@ -484,7 +553,8 @@ def main():
                 config_cols,
                 exp_base_dirs,
                 config_cache,
-                include_timing_cols=not args.exclude_timing_cols,
+                include_af_spf=include_af_spf,
+                include_seconds_per_frame=include_seconds_per_frame,
             )
         )
     print("\n\n".join(outputs))

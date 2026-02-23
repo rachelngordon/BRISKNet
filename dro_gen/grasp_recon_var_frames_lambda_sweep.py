@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Run GRASP reconstructions for a single sample/spf across a list of lambda values,
-and plot a panel of the first time point for each lambda.
+plot per-lambda enhancement panels, and save an overlay of enhancement curves
+(optionally including the DRO curve).
 """
 from __future__ import annotations
 
@@ -176,11 +177,78 @@ def _first_frame_magnitude(recon: np.ndarray, frames: int) -> np.ndarray:
     return np.abs(frame)
 
 
-def _read_h5_array(dset: h5py.Dataset) -> np.ndarray:
+def _read_h5_mask_array(dset: h5py.Dataset) -> np.ndarray:
     arr = np.asarray(dset)
     if arr.dtype.kind == "V":
         raise TypeError("Expected numeric dataset for mask, got compound.")
     return arr
+
+
+def _read_h5_complex(dset: h5py.Dataset) -> np.ndarray:
+    type_id = dset.id.get_type()
+    type_class = type_id.get_class()
+    if type_class != h5py.h5t.COMPOUND:
+        raise TypeError("Expected compound dataset for complex values.")
+    memtype = h5py.h5t.create(h5py.h5t.COMPOUND, type_id.get_size())
+    names = []
+    formats = []
+    offsets = []
+    for idx in range(type_id.get_nmembers()):
+        name = type_id.get_member_name(idx)
+        name_str = name.decode() if isinstance(name, (bytes, bytearray)) else str(name)
+        member = type_id.get_member_type(idx)
+        if member.get_class() != h5py.h5t.FLOAT:
+            raise TypeError("Unsupported compound member type in complex dataset.")
+        np_fmt = np.float32 if member.get_size() == 4 else np.float64
+        memtype.insert(
+            name,
+            type_id.get_member_offset(idx),
+            h5py.h5t.NATIVE_FLOAT if np_fmt == np.float32 else h5py.h5t.NATIVE_DOUBLE,
+        )
+        names.append(name_str)
+        formats.append(np_fmt)
+        offsets.append(type_id.get_member_offset(idx))
+    arr = np.empty(
+        dset.shape,
+        dtype=np.dtype(
+            {"names": names, "formats": formats, "offsets": offsets, "itemsize": type_id.get_size()}
+        ),
+    )
+    dset.read_direct(arr)
+    name_map = {n.lower(): n for n in names}
+    real_key = name_map.get("real", names[0])
+    imag_key = name_map.get("imag", names[-1])
+    return arr[real_key] + 1j * arr[imag_key]
+
+
+def _read_h5_array_any(dset: h5py.Dataset) -> np.ndarray:
+    if dset.dtype.kind == "V":
+        return _read_h5_complex(dset)
+    arr = np.asarray(dset)
+    if arr.ndim == 4 and arr.shape[-1] == 2 and not np.iscomplexobj(arr):
+        arr = arr[..., 0] + 1j * arr[..., 1]
+    return arr
+
+
+def _find_h5_dataset(h5: h5py.File, key: Optional[str]) -> tuple[np.ndarray, str]:
+    if key:
+        if key not in h5:
+            raise KeyError(f"Key '{key}' not found in {h5.filename}")
+        return _read_h5_array_any(h5[key]), key
+
+    if "simImg" in h5:
+        return _read_h5_array_any(h5["simImg"]), "simImg"
+
+    candidates = []
+
+    def _visit(name, obj):
+        if isinstance(obj, h5py.Dataset) and obj.ndim == 3:
+            candidates.append(name)
+
+    h5.visititems(_visit)
+    if not candidates:
+        raise ValueError(f"No 3D dataset found in {h5.filename}. Use --dro-key to specify.")
+    return _read_h5_array_any(h5[candidates[0]]), candidates[0]
 
 
 def _collect_mask_dict_from_h5(h5: h5py.File) -> Dict[str, np.ndarray]:
@@ -192,7 +260,7 @@ def _collect_mask_dict_from_h5(h5: h5py.File) -> Dict[str, np.ndarray]:
         return mask_dict
     for key in mask_group.keys():
         try:
-            mask_arr = _read_h5_array(mask_group[key])
+            mask_arr = _read_h5_mask_array(mask_group[key])
         except Exception:
             continue
         mask_dict[key] = mask_arr
@@ -290,6 +358,24 @@ def _ensure_hwt(stack: np.ndarray, frames: int) -> np.ndarray:
     return stack
 
 
+def _to_complex(arr: np.ndarray) -> np.ndarray:
+    if np.iscomplexobj(arr):
+        return arr
+    if arr.ndim >= 3 and arr.shape[-1] == 2:
+        return arr[..., 0] + 1j * arr[..., 1]
+    if arr.ndim >= 3 and arr.shape[0] == 2:
+        return arr[0] + 1j * arr[1]
+    return arr
+
+
+def _to_magnitude_stack(stack: np.ndarray, frames: int) -> np.ndarray:
+    complex_stack = _to_complex(stack)
+    if complex_stack.ndim != 3:
+        raise ValueError(f"Expected 3D stack, got {complex_stack.shape}")
+    stack_hwt = _ensure_hwt(complex_stack, frames)
+    return np.abs(stack_hwt)
+
+
 def _default_frames_to_show(num_frames: int) -> List[int]:
     interval = max(1, round(num_frames / 4))
     frames = [0, interval, min(2 * interval, num_frames - 1), num_frames - 1]
@@ -363,11 +449,14 @@ def _plot_overlay_curves(
     time_points: np.ndarray,
     out_path: str,
     title: str,
+    dro_curve: Optional[np.ndarray] = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, 5))
     colors = plt.cm.viridis(np.linspace(0, 1, len(curves))) if curves else []
     for curve, lamda, color in zip(curves, lamdas, colors):
         ax.plot(time_points, curve, linewidth=2, label=f"lambda={lamda:g}", color=color)
+    if dro_curve is not None:
+        ax.plot(time_points, dro_curve, "k--", linewidth=2.5, label="DRO")
     ax.set_title(title, fontsize=16)
     ax.set_xlabel("Frame", fontsize=12)
     ax.set_ylabel("Mean Signal", fontsize=12)
@@ -464,6 +553,21 @@ def parse_args():
         help="Mask key to use (e.g., malignant, benign, glandular, muscle, full, or auto).",
     )
     parser.add_argument(
+        "--dro-mat",
+        default=None,
+        help="Optional DRO .mat file path for the enhancement curve (default: <dro_root>/<sample_id>_dro_<frames>frames.mat).",
+    )
+    parser.add_argument(
+        "--dro-key",
+        default=None,
+        help="Dataset key inside the DRO .mat to use (default: simImg or first 3D dataset).",
+    )
+    parser.add_argument(
+        "--skip-dro",
+        action="store_true",
+        help="Skip loading and plotting the DRO enhancement curve in the overlay plot.",
+    )
+    parser.add_argument(
         "--time-points",
         default=None,
         help="Comma-separated time points for frames (default: 0..T-1).",
@@ -489,6 +593,10 @@ def main() -> None:
     lamdas = _parse_float_list(args.lamdas)
     if not lamdas:
         raise ValueError("No lambda values provided.")
+    dro_mat_path = args.dro_mat or os.path.join(
+        args.dro_root,
+        f"{args.sample_id}_dro_{frames}frames.mat",
+    )
 
     csmaps_dir = args.csmaps_dir or os.path.join(args.dro_root, "csmaps_espirit")
     out_dir = args.out_dir or os.path.join(args.dro_root, "espirit_grasp_recons")
@@ -521,10 +629,6 @@ def main() -> None:
         else:
             raise ValueError(f"Unsupported mask path: {args.mask_path}")
     else:
-        dro_mat_path = os.path.join(
-            args.dro_root,
-            f"{args.sample_id}_dro_{frames}frames.mat",
-        )
         if os.path.exists(dro_mat_path):
             mask_dict = _load_mask_from_dro_mat(dro_mat_path)
 
@@ -635,6 +739,29 @@ def main() -> None:
     plt.close(fig)
     print(f"Saved panel to {panel_out}")
 
+    dro_curve = None
+    if curves and not args.skip_dro:
+        if not os.path.exists(dro_mat_path):
+            print(f"Warning: DRO .mat file not found: {dro_mat_path}. Skipping DRO curve.")
+        else:
+            with h5py.File(dro_mat_path, "r") as h5:
+                dro_stack, _ = _find_h5_dataset(h5, args.dro_key)
+            dro_mag = _to_magnitude_stack(dro_stack, frames)
+            if dro_mag.shape[2] != frames:
+                raise ValueError(
+                    f"DRO stack frames ({dro_mag.shape[2]}) do not match expected frames ({frames})."
+                )
+            if dro_mag.shape[:2] != (mask_hw.shape[0], mask_hw.shape[1]):
+                raise ValueError(
+                    f"DRO image shape {dro_mag.shape[:2]} does not match mask shape {mask_hw.shape}."
+                )
+            dro_curve = _compute_mean_curve(dro_mag, mask_hw)
+            if dro_curve.size != time_points.size:
+                raise ValueError(
+                    "DRO curve length does not match time_points. "
+                    f"{dro_curve.size} vs {time_points.size}."
+                )
+
     if curves:
         overlay_out = args.overlay_out or os.path.join(
             out_dir, f"grasp_curve_overlay_{args.sample_id}_{args.spf}spf_{frames}frames{suffix}.png"
@@ -643,7 +770,7 @@ def main() -> None:
             f"Enhancement Curves Overlay (SPF={args.spf}, frames={frames})"
             + (f" [{mask_label}]" if mask_label else "")
         )
-        _plot_overlay_curves(curves, lamdas, time_points, overlay_out, overlay_title)
+        _plot_overlay_curves(curves, lamdas, time_points, overlay_out, overlay_title, dro_curve=dro_curve)
         print(f"Saved overlay curves to {overlay_out}")
 
 

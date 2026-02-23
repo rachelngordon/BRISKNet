@@ -16,7 +16,7 @@ class InferenceBatch(submitit.helpers.Checkpointable):
         command_str = (
             f"source {micromamba_path} && "
             f"micromamba activate {env_name} && "
-            f"python run_inference_new_dro_var_frames.py "
+            f"python run_inference_new_dro.py "
             f"--exp_dir {self.exp_names} "
             f"{extra}"
         )
@@ -38,7 +38,7 @@ def main():
     num_gpus = 1
     extra_args = [
         "--overwrite_logs",
-        "--grasp_lamdas 0.0001,0.001",
+        "--new_dro_root /net/scratch2/rachelgordon/dro_var_frames",
         # "--disable_ssdu",
     ]
 
