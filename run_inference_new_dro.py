@@ -1173,6 +1173,14 @@ def parse_args():
             "and apply the same scaling to DRO k-space. Useful for debugging csmap OOD scaling."
         ),
     )
+    parser.add_argument(
+        "--plot_ei_label",
+        action="store_true",
+        help=(
+            "Update BRISKNet spatial quality plot labels to reflect MC vs MC+EI "
+            "based on model.losses.use_ei_loss in the config."
+        ),
+    )
     parser.add_argument("--diagnostics", action="store_true", help="Enable diagnostic plots per sample.")
     parser.add_argument(
         "--compute_zf_baseline",
@@ -1763,7 +1771,17 @@ def main():
         )
         val_noise_level = 0.05
 
-    ei_cfg = config.get("model", {}).get("losses", {}).get("ei_loss", {})
+    losses_cfg = config.get("model", {}).get("losses", {})
+    ei_cfg = losses_cfg.get("ei_loss", {})
+    use_ei_loss = losses_cfg.get("use_ei_loss", False)
+    if isinstance(use_ei_loss, str):
+        use_ei_loss = use_ei_loss.strip().lower() in ("1", "true", "yes", "y")
+    else:
+        use_ei_loss = bool(use_ei_loss)
+    plot_recon_label = None
+    if args.plot_ei_label:
+        label_suffix = "MC + EI" if use_ei_loss else "MC"
+        plot_recon_label = rf"$|\mathrm{{BRISKNet}}_{{\mathrm{{pred}}}}|$ ({label_suffix})"
     arrival_method = (args.arrival_method or ei_cfg.get("arrival_method", "threshold")).lower()
     if args.arrival_fraction is None:
         arrival_fraction = float(ei_cfg.get("arrival_fraction", 0.1))
@@ -2362,6 +2380,8 @@ def main():
                     early_min_frames=args.early_min_frames,
                     early_max_frames=args.early_max_frames,
                     total_scan_seconds=args.total_scan_seconds,
+                    recon_label=plot_recon_label,
+                    plot_malignant_curve=True,
                 )
 
                 (
@@ -2487,6 +2507,8 @@ def main():
                 early_min_frames=args.early_min_frames,
                 early_max_frames=args.early_max_frames,
                 total_scan_seconds=args.total_scan_seconds,
+                recon_label=plot_recon_label,
+                plot_malignant_curve=True,
             )
             raw_grasp_dc_mse, raw_grasp_dc_mae, raw_grasp_dc_psnr = eval_grasp(
                 raw_kspace,

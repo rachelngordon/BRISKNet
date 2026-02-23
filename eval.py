@@ -763,6 +763,7 @@ def plot_spatial_quality(
     spokes_per_frame: int,
     plot_dro: bool = True,
     tumor_mask: np.ndarray | None = None,
+    recon_label: str | None = None,
 ):
     """
     Generates a comparison plot for a single time frame in a 2x4 grid.
@@ -791,6 +792,9 @@ def plot_spatial_quality(
     vmin_recon, vmax_recon = robust_window(recon_img, p_low=1, p_high=99.5)
     vmin_grasp, vmax_grasp = robust_window(grasp_img, p_low=1, p_high=99.5)
     # Use fixed window for error maps (original scaling).
+
+    if recon_label is None:
+        recon_label = r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$"
 
     if plot_dro:
         # Calculate error maps
@@ -838,7 +842,7 @@ def plot_spatial_quality(
 
         axes[0, 1].imshow(recon_img, cmap='gray', vmin=vmin_recon, vmax=vmax_recon)
         _overlay_contours(axes[0, 1])
-        axes[0, 1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
+        axes[0, 1].set_title(recon_label, fontsize=PLOT_FONT_SIZES["title"])
 
         im_err_dl = axes[0, 2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
         axes[0, 2].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
@@ -941,7 +945,7 @@ def plot_spatial_quality(
         top_axes[0].set_title(r"$|\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
         top_axes[1].imshow(recon_img, cmap='gray', vmin=vmin_recon, vmax=vmax_recon)
         _overlay_contours(top_axes[1])
-        top_axes[1].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$", fontsize=PLOT_FONT_SIZES["title"])
+        top_axes[1].set_title(recon_label, fontsize=PLOT_FONT_SIZES["title"])
         top_axes[2].imshow(error_map_dl, cmap='coolwarm', vmin=-0.5, vmax=0.5)
         top_axes[2].set_title(r"$|\mathrm{BRISKNet}_{\mathrm{pred}}| - |\mathrm{DRO}|$", fontsize=PLOT_FONT_SIZES["title"])
         div = make_axes_locatable(top_axes[2])
@@ -2043,6 +2047,8 @@ def eval_sample(
     arrival_pre_contrast_baseline: str = "n_frames",
     arrival_baseline_seconds: float = 20.0,
     arrival_total_seconds: float = 150.0,
+    recon_label: str | None = None,
+    plot_malignant_curve: bool = False,
 ):
 
     acceleration = round(acceleration.item(), 1)
@@ -2376,6 +2382,7 @@ def eval_sample(
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=True,
                 tumor_mask=tumor_mask_for_plot,
+                recon_label=recon_label,
             )
 
             # --- Plot Temporal Curves for Key Regions ---
@@ -2400,6 +2407,27 @@ def eval_sample(
                 arrival_baseline_seconds=arrival_baseline_seconds,
                 arrival_total_seconds=arrival_total_seconds,
             )
+            if plot_malignant_curve and "malignant" in masks_np and masks_np["malignant"].any():
+                plot_temporal_curves(
+                    gt_img_stack=gt_mag_np,
+                    recon_img_stack=recon_mag_np,
+                    grasp_img_stack=grasp_mag_np,
+                    masks={"malignant": masks_np["malignant"]},
+                    time_points=aif_time_points,
+                    filename=os.path.join(output_dir, f"temporal_curves_malignant_{plot_label}{suffix}.png"),
+                    acceleration=acceleration,
+                    spokes_per_frame=spokes_per_frame,
+                    plot_dro=True,
+                    region_label_map=region_label_map,
+                    show_arrival=plot_arrival,
+                    arrival_percentile=arrival_percentile,
+                    arrival_baseline_k=arrival_baseline_k,
+                    arrival_method=arrival_method_plot,
+                    arrival_fraction=arrival_fraction_plot,
+                    arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                    arrival_baseline_seconds=arrival_baseline_seconds,
+                    arrival_total_seconds=arrival_total_seconds,
+                )
             plot_temporal_curves_normalized(
                 gt_img_stack=gt_mag_np,
                 recon_img_stack=recon_mag_np,
@@ -2630,6 +2658,7 @@ def eval_sample(
                 spokes_per_frame=spokes_per_frame,
                 plot_dro=False,
                 tumor_mask=tumor_mask_for_plot,
+                recon_label=recon_label,
             )
 
             # --- Plot Temporal Curves for Key Regions ---
@@ -2654,6 +2683,27 @@ def eval_sample(
                 arrival_baseline_seconds=arrival_baseline_seconds,
                 arrival_total_seconds=arrival_total_seconds,
             )
+            if plot_malignant_curve and "malignant" in masks_np and masks_np["malignant"].any():
+                _ = plot_temporal_curves(
+                    gt_img_stack=gt_mag_np,
+                    recon_img_stack=recon_mag_np,
+                    grasp_img_stack=grasp_mag_np,
+                    masks={"malignant": masks_np["malignant"]},
+                    time_points=aif_time_points,
+                    filename=os.path.join(output_dir, f"non_dro_temporal_curves_malignant_{plot_label}{suffix}.png"),
+                    acceleration=acceleration,
+                    spokes_per_frame=spokes_per_frame,
+                    plot_dro=False,
+                    region_label_map=region_label_map,
+                    show_arrival=plot_arrival,
+                    arrival_percentile=arrival_percentile,
+                    arrival_baseline_k=arrival_baseline_k,
+                    arrival_method=arrival_method_plot,
+                    arrival_fraction=arrival_fraction_plot,
+                    arrival_pre_contrast_baseline=arrival_pre_contrast_baseline,
+                    arrival_baseline_seconds=arrival_baseline_seconds,
+                    arrival_total_seconds=arrival_total_seconds,
+                )
             plot_temporal_curves_normalized(
                 gt_img_stack=gt_mag_np,
                 recon_img_stack=recon_mag_np,
