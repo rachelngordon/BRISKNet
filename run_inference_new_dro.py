@@ -24,7 +24,7 @@ import yaml
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from einops import rearrange
-from radial_lsfp import from_torch_complex
+from radial_lsfp import from_torch_complex, to_torch_complex
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SLICE_MAP_PATH, load_slice_map
@@ -34,6 +34,8 @@ from eval import (
     eval_zf,
     compute_ssdu_kspace_nmse,
     compute_ssdu_kspace_nmse_grasp,
+    calc_dc,
+    calc_dc_psnr,
     _resolve_baseline_frames,
     _load_tumor_mask,
     _load_slice_map,
@@ -320,6 +322,7 @@ class NewDROMatDataset(Dataset):
         espirit_csmaps_dir: str | None = None,
         espirit_grasp_recons_dir: str | None = None,
         skip_raw_eval_if_invalid_slice: bool = False,
+        skip_raw_grasp_metrics: bool = False,
     ):
         self.root_dir = root_dir
         self.raw_kspace_path = raw_kspace_path
@@ -347,6 +350,7 @@ class NewDROMatDataset(Dataset):
                 "Expected 'original' or 'espirit'."
             )
         self.skip_raw_eval_if_invalid_slice = bool(skip_raw_eval_if_invalid_slice)
+        self.skip_raw_grasp_metrics = bool(skip_raw_grasp_metrics)
         self.slice_map = load_slice_map(SLICE_MAP_PATH)
         self.dro_to_fastmri = _load_dro_fastmri_map()
         self.sample_ids = self._collect_sample_ids()
@@ -713,18 +717,45 @@ class NewDROMatDataset(Dataset):
                 f"cs_maps/{patient_id}_cs_maps/cs_map_slice_{slice_idx:03d}.npy",
             )
 
-            raw_csmaps = np.load(raw_csmap_path)
-            raw_grasp_recon = np.load(raw_grasp_path).squeeze()
+            try:
+                raw_csmaps = np.load(raw_csmap_path)
+                if self.skip_raw_grasp_metrics:
+                    raw_grasp_recon = torch.full(
+                        (2, self.raw_num_frames, raw_csmaps.shape[-2], raw_csmaps.shape[-1]),
+                        float("nan"),
+                        dtype=torch.float32,
+                    )
+                else:
+                    raw_grasp_recon = np.load(raw_grasp_path).squeeze()
 
-            # GRASP Recon: (H, W, T) -> (2, T, H, W)
-            raw_grasp_recon = torch.from_numpy(raw_grasp_recon).permute(2, 0, 1)
-            raw_grasp_recon = torch.stack([raw_grasp_recon.real, raw_grasp_recon.imag], dim=0)
+                    # GRASP Recon: (H, W, T) -> (2, T, H, W)
+                    raw_grasp_recon = torch.from_numpy(raw_grasp_recon).permute(2, 0, 1)
+                    raw_grasp_recon = torch.stack([raw_grasp_recon.real, raw_grasp_recon.imag], dim=0)
 
-            raw_grasp_recon = torch.flip(raw_grasp_recon, dims=[-3])
-            raw_grasp_recon = torch.rot90(raw_grasp_recon, k=1, dims=[-3, -1])
+                    raw_grasp_recon = torch.flip(raw_grasp_recon, dims=[-3])
+                    raw_grasp_recon = torch.rot90(raw_grasp_recon, k=1, dims=[-3, -1])
 
-            with h5py.File(raw_kspace_path, "r") as f:
-                raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
+                with h5py.File(raw_kspace_path, "r") as f:
+                    raw_kspace_slice = torch.tensor(f[self.dataset_key][slice_idx])
+            except OSError as exc:
+                print(
+                    f"[Raw] Skipping corrupted raw file for {patient_id}: {raw_kspace_path} "
+                    f"(error: {exc})"
+                )
+                raw_grasp_recon = torch.full_like(grasp_torch, float("nan"))
+                raw_kspace_slice = torch.full_like(kspace_torch, float("nan"))
+                raw_csmaps_torch = torch.full_like(csmaps_torch, float("nan")).numpy()
+                return (
+                    kspace_torch,
+                    csmaps_torch,
+                    gt_torch,
+                    grasp_torch,
+                    mask,
+                    grasp_path,
+                    raw_kspace_slice,
+                    raw_grasp_recon,
+                    raw_csmaps_torch,
+                )
 
             # time-bin k-space
             N_spokes_prep = self.raw_num_frames * self.spokes_per_frame
@@ -1049,7 +1080,7 @@ def _load_weights(model, ckpt_path: str):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run inference on validation samples.")
+    parser = argparse.ArgumentParser(description="Run inference on DRO samples.")
     parser.add_argument("--exp_dir", required=True, help="Experiment directory location.")
     parser.add_argument(
         "--output_root",
@@ -1101,11 +1132,24 @@ def parse_args():
         help="Path to val_inference_logs.json (default: repo root).",
     )
     parser.add_argument("--num_samples", type=int, help="Number of validation samples to evaluate (default: config value).")
+    parser.add_argument(
+        "--split_key",
+        default=None,
+        help=(
+            "Split key to use from data_split.json (e.g., val_dro, test_dro). "
+            "If not set, uses val_dro then falls back to val."
+        ),
+    )
     parser.add_argument("--device", default=None, help="Torch device to use (default: config training.device).")
     parser.add_argument("--eval_spokes", type=int, help="Override spokes per frame for inference.")
     parser.add_argument("--eval_frames", type=int, help="Override number of frames for inference.")
     parser.add_argument("--phase_index", type=int, help="Curriculum phase index to use for eval params (default: last).")
     parser.add_argument("--disable_ssdu", action="store_true", help="Skip SSDU NMSE computation to speed up inference.")
+    parser.add_argument(
+        "--skip_raw_grasp_metrics",
+        action="store_true",
+        help="Skip raw GRASP image metrics/diagnostics (avoids loading raw GRASP recon files). SSDU still runs.",
+    )
     parser.add_argument(
         "--dro_csmaps_source",
         default="espirit",
@@ -1226,7 +1270,7 @@ def parse_args():
     parser.add_argument(
         "--baseline_min_frames",
         type=int,
-        default=4,
+        default=1,
         help="Minimum baseline frames to use.",
     )
     parser.add_argument(
@@ -1727,7 +1771,19 @@ def main():
     with open(config["data"]["split_file"], "r") as fp:
         splits = json.load(fp)
 
-    val_ids = splits.get("val_dro") or splits.get("val") or []
+    if args.split_key:
+        val_ids = splits.get(args.split_key) or []
+        if not val_ids:
+            raise KeyError(
+                f"Split key '{args.split_key}' not found or empty in {config['data']['split_file']}."
+            )
+        print(f"[Split] Using '{args.split_key}' from data_split.json")
+    else:
+        val_ids = splits.get("val_dro") or splits.get("val") or []
+        if not val_ids:
+            raise KeyError(
+                f"No 'val_dro' or 'val' split found in {config['data']['split_file']}."
+            )
 
     _, N_time_eval_raw = _resolve_eval_params(
         config, spokes=None, frames=None, phase_idx=args.phase_index
@@ -1923,6 +1979,7 @@ def main():
         dro_csmaps_source=dro_csmaps_source,
         espirit_csmaps_dir=args.dro_espirit_csmaps_dir,
         espirit_grasp_recons_dir=resolved_espirit_grasp_dir,
+        skip_raw_grasp_metrics=args.skip_raw_grasp_metrics,
     )
 
     val_loader = DataLoader(
@@ -2103,6 +2160,14 @@ def main():
             raw_grasp_img = raw_grasp_img.to(device)
             raw_csmaps = raw_csmaps.squeeze(0).to(device)
 
+            raw_valid = bool(torch.isfinite(raw_kspace).all().item())
+            if raw_valid:
+                raw_valid = bool(torch.isfinite(raw_csmaps).all().item())
+            if not raw_valid:
+                tqdm.write(
+                    f"[Raw] Skipping raw eval for {sample_id}: invalid/corrupted raw k-space."
+                )
+
             dro_csmap_scale = None
             if args.normalize_dro_csmaps:
                 dro_csmap_scale = _compute_dro_csmap_scale(csmap, mask)
@@ -2163,30 +2228,32 @@ def main():
                 tqdm.write(
                     f"[Timing] {label}: DRO recon-only inference time = {infer_time:.3f}s"
                 )
-            if raw_uses_sliding_window:
-                raw_x_recon, _ = sliding_window_inference(
-                    H,
-                    W,
-                    raw_frames,
-                    raw_ktraj,
-                    raw_dcomp,
-                    raw_nufft_ob,
-                    raw_adjnufft_ob,
-                    raw_chunk_size,
-                    raw_chunk_overlap,
-                    raw_kspace,
-                    raw_csmaps,
-                    acceleration_encoding,
-                    start_timepoint_index,
-                    model,
-                    epoch="inference",
-                    device=device,
-                    norm=config["model"]["norm"],
-                )
-            else:
-                raw_x_recon, *_ = model(
-                    raw_kspace, raw_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm=config["model"]["norm"]
-                )
+            raw_x_recon = None
+            if raw_valid:
+                if raw_uses_sliding_window:
+                    raw_x_recon, _ = sliding_window_inference(
+                        H,
+                        W,
+                        raw_frames,
+                        raw_ktraj,
+                        raw_dcomp,
+                        raw_nufft_ob,
+                        raw_adjnufft_ob,
+                        raw_chunk_size,
+                        raw_chunk_overlap,
+                        raw_kspace,
+                        raw_csmaps,
+                        acceleration_encoding,
+                        start_timepoint_index,
+                        model,
+                        epoch="inference",
+                        device=device,
+                        norm=config["model"]["norm"],
+                    )
+                else:
+                    raw_x_recon, *_ = model(
+                        raw_kspace, raw_physics, raw_csmaps, acceleration_encoding, start_timepoint_index, epoch="inference", norm=config["model"]["norm"]
+                    )
 
             sample_dir = os.path.join(inference_dir, f"sample_{idx:02d}")
             os.makedirs(sample_dir, exist_ok=True)
@@ -2240,7 +2307,19 @@ def main():
                     "raw_grasp": raw_grasp_img,
                     "raw_recon": raw_x_recon,
                 }
-                ref_choice = ref_map.get(args.diag_ref)
+                if args.skip_raw_grasp_metrics and args.diag_ref == "raw_grasp":
+                    tqdm.write(
+                        "[Diagnostics] skip_raw_grasp_metrics enabled; "
+                        "using raw_recon as diag_ref instead of raw_grasp."
+                    )
+                    ref_choice = ref_map.get("raw_recon")
+                elif (not raw_valid) and args.diag_ref in ("raw_grasp", "raw_recon"):
+                    tqdm.write(
+                        "[Diagnostics] raw data unavailable; using grasp as diag_ref instead of raw."
+                    )
+                    ref_choice = ref_map.get("grasp")
+                else:
+                    ref_choice = ref_map.get(args.diag_ref)
                 if ref_choice is None:
                     raise ValueError(f"Unknown diag_ref '{args.diag_ref}'.")
                 diag_mask = None
@@ -2261,27 +2340,28 @@ def main():
                         args=args,
                     )
 
-                _, patient_id = _resolve_plot_label(label, grasp_path)
-                slice_map = _load_slice_map()
-                resolved_slice_idx = slice_map.get(patient_id, raw_grasp_slice_idx)
-                raw_tumor_mask = None
-                if resolved_slice_idx is not None and resolved_slice_idx >= 0:
-                    raw_tumor_mask = _load_tumor_mask(cluster, patient_id, slice_idx=resolved_slice_idx)
-                if raw_tumor_mask is not None and np.any(raw_tumor_mask):
-                    save_diagnostics(
-                        sample_dir=sample_dir,
-                        brisk=raw_x_recon,
-                        reference=raw_grasp_img,
-                        mask=raw_tumor_mask,
-                        args=args,
-                        diag_subdir="diagnostics_raw",
-                        ref_label="Raw GRASP",
-                        brisk_label="BRISKNet (raw)",
-                    )
+                if raw_valid and (not args.skip_raw_grasp_metrics):
+                    _, patient_id = _resolve_plot_label(label, grasp_path)
+                    slice_map = _load_slice_map()
+                    resolved_slice_idx = slice_map.get(patient_id, raw_grasp_slice_idx)
+                    raw_tumor_mask = None
+                    if resolved_slice_idx is not None and resolved_slice_idx >= 0:
+                        raw_tumor_mask = _load_tumor_mask(cluster, patient_id, slice_idx=resolved_slice_idx)
+                    if raw_tumor_mask is not None and np.any(raw_tumor_mask):
+                        save_diagnostics(
+                            sample_dir=sample_dir,
+                            brisk=raw_x_recon,
+                            reference=raw_grasp_img,
+                            mask=raw_tumor_mask,
+                            args=args,
+                            diag_subdir="diagnostics_raw",
+                            ref_label="Raw GRASP",
+                            brisk_label="BRISKNet (raw)",
+                        )
 
             ssdu_result = {}
             ssdu_grasp_result = {}
-            if compute_ssdu:
+            if compute_ssdu and raw_valid:
                 ssdu_chunk_size = raw_chunk_size if raw_uses_sliding_window else None
                 ssdu_result = compute_ssdu_kspace_nmse(
                     model,
@@ -2477,50 +2557,67 @@ def main():
                         "to match raw k-space."
                     )
 
-            raw_dc_mse, raw_dc_mae, raw_dc_psnr, _ = eval_sample(
-                raw_kspace,
-                raw_csmaps,
-                raw_ground_truth,
-                raw_x_recon,
-                raw_physics,
-                mask,
-                raw_grasp_img,
-                acceleration_val,
-                int(N_spokes_eval),
-                sample_dir,
-                f"{label}_raw",
-                device,
-                cluster,
-                dro_eval=False,
-                grasp_path=grasp_path,
-                raw_slice_idx=raw_grasp_slice_idx,
-                rescale=rescale,
-                baseline_mode=args.baseline_mode,
-                baseline_seconds=args.baseline_seconds,
-                baseline_fraction=args.baseline_fraction,
-                baseline_min_frames=args.baseline_min_frames,
-                baseline_max_frames=args.baseline_max_frames,
-                arrival_k=arrival_k,
-                arrival_method=arrival_method,
-                arrival_fraction=arrival_fraction,
-                early_seconds=args.early_seconds,
-                early_min_frames=args.early_min_frames,
-                early_max_frames=args.early_max_frames,
-                total_scan_seconds=args.total_scan_seconds,
-                recon_label=plot_recon_label,
-                plot_malignant_curve=True,
-            )
-            raw_grasp_dc_mse, raw_grasp_dc_mae, raw_grasp_dc_psnr = eval_grasp(
-                raw_kspace,
-                raw_csmaps,
-                raw_ground_truth,
-                raw_grasp_img,
-                raw_physics,
-                device,
-                sample_dir,
-                rescale=rescale,
-                dro_eval=False,
-            )
+            if not raw_valid:
+                raw_dc_mse = None
+                raw_dc_mae = None
+                raw_dc_psnr = None
+                raw_grasp_dc_mse = None
+                raw_grasp_dc_mae = None
+                raw_grasp_dc_psnr = None
+            elif args.skip_raw_grasp_metrics:
+                raw_x_recon_complex = to_torch_complex(raw_x_recon).squeeze()
+                raw_kspace_squeezed = raw_kspace.squeeze()
+                recon_kspace = raw_physics(False, raw_x_recon_complex, raw_csmaps)
+                raw_dc_mse, raw_dc_mae = calc_dc(recon_kspace, raw_kspace_squeezed, device)
+                raw_dc_psnr = calc_dc_psnr(raw_kspace_squeezed, raw_dc_mse, device)
+                raw_grasp_dc_mse = None
+                raw_grasp_dc_mae = None
+                raw_grasp_dc_psnr = None
+            else:
+                raw_dc_mse, raw_dc_mae, raw_dc_psnr, _ = eval_sample(
+                    raw_kspace,
+                    raw_csmaps,
+                    raw_ground_truth,
+                    raw_x_recon,
+                    raw_physics,
+                    mask,
+                    raw_grasp_img,
+                    acceleration_val,
+                    int(N_spokes_eval),
+                    sample_dir,
+                    f"{label}_raw",
+                    device,
+                    cluster,
+                    dro_eval=False,
+                    grasp_path=grasp_path,
+                    raw_slice_idx=raw_grasp_slice_idx,
+                    rescale=rescale,
+                    baseline_mode=args.baseline_mode,
+                    baseline_seconds=args.baseline_seconds,
+                    baseline_fraction=args.baseline_fraction,
+                    baseline_min_frames=args.baseline_min_frames,
+                    baseline_max_frames=args.baseline_max_frames,
+                    arrival_k=arrival_k,
+                    arrival_method=arrival_method,
+                    arrival_fraction=arrival_fraction,
+                    early_seconds=args.early_seconds,
+                    early_min_frames=args.early_min_frames,
+                    early_max_frames=args.early_max_frames,
+                    total_scan_seconds=args.total_scan_seconds,
+                    recon_label=plot_recon_label,
+                    plot_malignant_curve=True,
+                )
+                raw_grasp_dc_mse, raw_grasp_dc_mae, raw_grasp_dc_psnr = eval_grasp(
+                    raw_kspace,
+                    raw_csmaps,
+                    raw_ground_truth,
+                    raw_grasp_img,
+                    raw_physics,
+                    device,
+                    sample_dir,
+                    rescale=rescale,
+                    dro_eval=False,
+                )
             raw_results.append(
                 dict(
                     sample=label,

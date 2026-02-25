@@ -8,15 +8,17 @@ import numpy as np
 import torch
 import yaml
 import matplotlib
+import h5py
+from einops import rearrange
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
-from skimage.measure import find_contours
+from skimage.measure import find_contours, label
 
 from cluster_paths import apply_cluster_paths
-from eval import _resolve_baseline_frames
+from eval import _resolve_baseline_frames, _load_tumor_mask
 from radial_lsfp import MCNUFFT
 from run_inference_new_dro import (
     NewDROMatDataset,
@@ -26,7 +28,7 @@ from run_inference_new_dro import (
     _prep_nufft_from_dro_traj,
     _resolve_eval_params,
 )
-from utils import sliding_window_inference
+from utils import prep_nufft, sliding_window_inference
 
 
 PLOT_FONT_SIZES = {
@@ -113,7 +115,7 @@ def parse_args():
         default=0.1,
         help="Baseline fraction when baseline_mode=fraction.",
     )
-    parser.add_argument("--baseline_min_frames", type=int, default=4)
+    parser.add_argument("--baseline_min_frames", type=int, default=1)
     parser.add_argument("--baseline_max_frames", type=int, default=10)
     parser.add_argument(
         "--total_scan_seconds",
@@ -124,7 +126,7 @@ def parse_args():
     parser.add_argument(
         "--dro_curve_mode",
         choices=("low", "high", "both", "off"),
-        default="high",
+        default="low",
         help="Which DRO GT curve(s) to plot: low, high, both, or off (default: high).",
     )
     parser.add_argument(
@@ -137,6 +139,27 @@ def parse_args():
         "--out",
         default="brisknet_grasp_center_frame_compare.png",
         help="Output figure path.",
+    )
+    parser.add_argument(
+        "--use_raw",
+        action="store_true",
+        help="Use raw fastMRI data instead of DRO (plots BRISKNet vs raw GRASP).",
+    )
+    parser.add_argument(
+        "--raw_slice_idx",
+        type=int,
+        default=None,
+        help="Override raw slice index (defaults to slice map or config eval raw_grasp_slice_idx).",
+    )
+    parser.add_argument(
+        "--invert_colormap",
+        action="store_true",
+        help="Invert grayscale colormap for image panels.",
+    )
+    parser.add_argument(
+        "--curves_only",
+        action="store_true",
+        help="Only plot enhancement curves (omit image panels and extra whitespace).",
     )
     return parser.parse_args()
 
@@ -243,6 +266,70 @@ def _compute_roi_curve(mag_thw: np.ndarray, mask_hw: np.ndarray) -> np.ndarray:
         else:
             raise ValueError(f"Mask shape {mask_hw.shape} does not match image {(H, W)}")
     return np.array([mag_thw[t][mask_hw].mean() for t in range(T)])
+
+
+def _largest_component(mask: np.ndarray) -> np.ndarray:
+    labeled = label(mask.astype(np.uint8), connectivity=1)
+    if labeled.max() == 0:
+        return mask
+    counts = np.bincount(labeled.ravel())
+    counts[0] = 0
+    largest = counts.argmax()
+    return labeled == largest
+
+
+def _compute_crop_bbox(
+    img_hw: np.ndarray,
+    tumor_mask: np.ndarray | None,
+    margin_frac: float = 0.08,
+    min_size: int = 96,
+) -> Tuple[int, int, int, int]:
+    H, W = img_hw.shape
+    mask = None
+    if tumor_mask is not None and np.any(tumor_mask):
+        mask = tumor_mask
+    else:
+        finite = np.asarray(img_hw)
+        finite = finite[np.isfinite(finite)]
+        finite = finite[finite > 0]
+        if finite.size > 0:
+            thresh = np.percentile(finite, 10)
+            breast_mask = img_hw > thresh
+            if breast_mask.any():
+                mask = _largest_component(breast_mask)
+
+    if mask is None or not np.any(mask):
+        return 0, H, 0, W
+
+    ys, xs = np.where(mask)
+    y0, y1 = ys.min(), ys.max() + 1
+    x0, x1 = xs.min(), xs.max() + 1
+
+    cy = 0.5 * (y0 + y1)
+    cx = 0.5 * (x0 + x1)
+    size = max(y1 - y0, x1 - x0)
+    size = max(size, min_size)
+    size = int(round(size * (1 + 2 * margin_frac)))
+
+    y0 = int(round(cy - size / 2))
+    y1 = y0 + size
+    x0 = int(round(cx - size / 2))
+    x1 = x0 + size
+
+    if y0 < 0:
+        y1 = min(H, y1 - y0)
+        y0 = 0
+    if x0 < 0:
+        x1 = min(W, x1 - x0)
+        x0 = 0
+    if y1 > H:
+        y0 = max(0, y0 - (y1 - H))
+        y1 = H
+    if x1 > W:
+        x0 = max(0, x0 - (x1 - W))
+        x1 = W
+
+    return y0, y1, x0, x1
 
 
 def _run_single_inference(
@@ -376,6 +463,207 @@ def _run_single_inference(
     }
 
 
+def _load_raw_csmaps(csmap_path: str) -> torch.Tensor:
+    raw_csmaps = np.load(csmap_path)
+    cs_t = torch.from_numpy(raw_csmaps)
+    if cs_t.ndim == 4:
+        cs_t = rearrange(cs_t, "c b h w -> b c h w")
+    elif cs_t.ndim == 3:
+        # Accept (C,H,W) or (H,W,C).
+        if cs_t.shape[0] < cs_t.shape[-1]:
+            cs_t = cs_t.unsqueeze(0)
+        else:
+            cs_t = cs_t.permute(2, 0, 1).unsqueeze(0)
+    else:
+        raise ValueError(f"Unexpected csmap shape {cs_t.shape} in {csmap_path}")
+    cs_t = cs_t.to(torch.complex64)
+    cs_t = torch.rot90(cs_t, k=2, dims=[-2, -1])
+    return cs_t
+
+
+def _load_raw_grasp(raw_grasp_path: str) -> torch.Tensor:
+    raw_grasp = np.load(raw_grasp_path).squeeze()
+    raw_grasp_t = torch.from_numpy(raw_grasp).permute(2, 0, 1)  # (T,H,W)
+    raw_grasp_t = torch.stack([raw_grasp_t.real, raw_grasp_t.imag], dim=0)  # (2,T,H,W)
+    raw_grasp_t = torch.flip(raw_grasp_t, dims=[-3])
+    raw_grasp_t = torch.rot90(raw_grasp_t, k=1, dims=[-3, -1])
+    return raw_grasp_t.unsqueeze(0)  # (1,2,T,H,W)
+
+
+def _load_raw_bundle(
+    dataset: NewDROMatDataset,
+    sample_id: str,
+    raw_kspace_root: str,
+    dataset_key: str,
+    eval_spokes: int,
+    eval_frames: int,
+    cluster: str,
+    raw_slice_idx: int | None,
+) -> Dict[str, object]:
+    fastmri_id = dataset.get_fastmri_id(sample_id)
+    patient_id = f"fastMRI_breast_{fastmri_id:03d}_2"
+    slice_idx = dataset.slice_map.get(patient_id, None)
+    if slice_idx is None or slice_idx < 0:
+        slice_idx = raw_slice_idx if raw_slice_idx is not None else 95
+
+    raw_kspace_path = os.path.join(raw_kspace_root, f"{patient_id}.h5")
+    raw_csmap_path = os.path.join(
+        os.path.dirname(raw_kspace_root),
+        f"cs_maps/{patient_id}_cs_maps/cs_map_slice_{slice_idx:03d}.npy",
+    )
+    raw_grasp_path = os.path.join(
+        os.path.dirname(raw_kspace_root),
+        f"{patient_id}/grasp_recon_{eval_spokes}spf_{eval_frames}frames_slice{slice_idx}.npy",
+    )
+
+    with h5py.File(raw_kspace_path, "r") as f:
+        if dataset_key not in f:
+            raise KeyError(f"{raw_kspace_path} missing key '{dataset_key}'")
+        raw_kspace_slice = np.asarray(f[dataset_key][slice_idx])
+
+    N_spokes_prep = int(eval_spokes) * int(eval_frames)
+    if raw_kspace_slice.shape[1] < N_spokes_prep:
+        raise ValueError(
+            f"Raw k-space spokes ({raw_kspace_slice.shape[1]}) < required ({N_spokes_prep}) "
+            f"for spf={eval_spokes}, frames={eval_frames}."
+        )
+    ksp_redu = raw_kspace_slice[:, :N_spokes_prep, :]
+    ksp_prep = np.swapaxes(ksp_redu, 0, 1)
+    ksp_prep_shape = ksp_prep.shape
+    ksp_prep = np.reshape(
+        ksp_prep,
+        [int(eval_frames), int(eval_spokes)] + list(ksp_prep_shape[1:]),
+    )
+    ksp_prep = torch.flip(torch.from_numpy(ksp_prep), dims=[-1])
+    raw_kspace = rearrange(ksp_prep, "t sp c sam -> c (sp sam) t").to(torch.complex64)
+
+    raw_csmaps = _load_raw_csmaps(raw_csmap_path)
+    raw_grasp = _load_raw_grasp(raw_grasp_path)
+
+    raw_tumor_mask = _load_tumor_mask(cluster, patient_id, slice_idx=slice_idx)
+    masks = {}
+    if raw_tumor_mask is not None:
+        masks["malignant"] = raw_tumor_mask.astype(bool)
+
+    return {
+        "raw_kspace": raw_kspace,
+        "raw_csmaps": raw_csmaps,
+        "raw_grasp": raw_grasp,
+        "masks": masks,
+        "patient_id": patient_id,
+        "slice_idx": int(slice_idx),
+    }
+
+
+def _run_single_inference_raw(
+    config: dict,
+    ckpt_path: str,
+    dataset: NewDROMatDataset,
+    sample_id: str,
+    device: torch.device,
+    eval_spokes: int,
+    eval_frames: int,
+    raw_slice_idx: int | None,
+):
+    samples = int(config["data"]["samples"])
+    eval_chunk_size = config.get("evaluation", {}).get("chunk_size", eval_frames)
+    eval_chunk_overlap = config.get("evaluation", {}).get("chunk_overlap", 0)
+
+    cluster = config.get("experiment", {}).get("cluster", "Randi")
+    raw_kspace_root = config["data"]["root_dir"]
+    raw_bundle = _load_raw_bundle(
+        dataset,
+        sample_id,
+        raw_kspace_root,
+        config["data"]["dataset_key"],
+        eval_spokes,
+        eval_frames,
+        cluster,
+        raw_slice_idx,
+    )
+
+    raw_kspace = raw_bundle["raw_kspace"].to(device)
+    raw_csmaps = raw_bundle["raw_csmaps"].to(device)
+
+    N_samples = raw_kspace.shape[1] // int(eval_spokes)
+    if N_samples <= 0:
+        raise ValueError("Invalid samples/spoke computed from raw k-space.")
+
+    raw_ktraj, raw_dcomp, raw_nufft_ob, raw_adjnufft_ob = prep_nufft(
+        int(N_samples), int(eval_spokes), int(eval_frames), traj_method=config.get("data", {}).get("traj_method", "get_traj")
+    )
+    raw_ktraj = raw_ktraj.to(device)
+    raw_dcomp = raw_dcomp.to(device)
+    raw_nufft_ob = raw_nufft_ob.to(device)
+    raw_adjnufft_ob = raw_adjnufft_ob.to(device)
+    raw_physics = MCNUFFT(raw_nufft_ob, raw_adjnufft_ob, raw_ktraj, raw_dcomp)
+
+    # Model
+    block_dir = os.path.join(os.path.dirname(ckpt_path), "block_outputs")
+    os.makedirs(block_dir, exist_ok=True)
+    model = _build_model(config, device, block_dir)
+    model = _load_weights(model, ckpt_path)
+
+    acceleration_encoding = None
+    if config["model"].get("encode_acceleration", False):
+        N_full = raw_csmaps.shape[-2] * math.pi / 2
+        accel = torch.tensor(
+            [N_full / int(eval_spokes)], dtype=torch.float, device=device
+        )
+        acceleration_encoding = accel
+    start_timepoint_index = (
+        torch.tensor([0], dtype=torch.float, device=device)
+        if config["model"].get("encode_time_index", False)
+        else None
+    )
+
+    model_type_is_temporal_mamba = _is_temporal_mamba(config)
+    eval_uses_sliding = bool(eval_frames > eval_chunk_size and not model_type_is_temporal_mamba)
+
+    with torch.no_grad():
+        if eval_uses_sliding:
+            x_recon, _ = sliding_window_inference(
+                raw_csmaps.shape[-2],
+                raw_csmaps.shape[-1],
+                eval_frames,
+                raw_ktraj,
+                raw_dcomp,
+                raw_nufft_ob,
+                raw_adjnufft_ob,
+                eval_chunk_size,
+                eval_chunk_overlap,
+                raw_kspace,
+                raw_csmaps,
+                acceleration_encoding,
+                start_timepoint_index,
+                model,
+                epoch="inference",
+                device=device,
+                norm=config["model"]["norm"],
+                collect_adj_loss=False,
+            )
+        else:
+            x_recon, *_ = model(
+                raw_kspace,
+                raw_physics,
+                raw_csmaps,
+                acceleration_encoding,
+                start_timepoint_index,
+                epoch="inference",
+                norm=config["model"]["norm"],
+            )
+
+    return {
+        "x_recon": x_recon,
+        "grasp": raw_bundle["raw_grasp"].to(device),
+        "masks": raw_bundle["masks"],
+        "eval_spokes": int(eval_spokes),
+        "eval_frames": int(eval_frames),
+        "patient_id": raw_bundle["patient_id"],
+        "slice_idx": raw_bundle["slice_idx"],
+    }
+
+
 def main():
     args = parse_args()
 
@@ -443,17 +731,34 @@ def main():
     print(f"Low: spf={spf_low}, frames={frames_low}, ckpt={ckpt_low}")
     print(f"High: spf={spf_high}, frames={frames_high}, ckpt={ckpt_high}")
 
-    low_out = _run_single_inference(
-        config_low, ckpt_low, dataset_low, sample_id, device, spf_low, frames_low
-    )
-    high_out = _run_single_inference(
-        config_high, ckpt_high, dataset_high, sample_id, device, spf_high, frames_high
-    )
+    if args.use_raw:
+        raw_slice_idx = args.raw_slice_idx
+        if raw_slice_idx is None:
+            raw_slice_idx = (
+                config_low.get("evaluation", {}).get("raw_grasp_slice_idx")
+                or config_high.get("evaluation", {}).get("raw_grasp_slice_idx")
+                or 95
+            )
+        low_out = _run_single_inference_raw(
+            config_low, ckpt_low, dataset_low, sample_id, device, spf_low, frames_low, raw_slice_idx
+        )
+        high_out = _run_single_inference_raw(
+            config_high, ckpt_high, dataset_high, sample_id, device, spf_high, frames_high, raw_slice_idx
+        )
+        if args.dro_curve_from is not None:
+            print("[Warn] --dro_curve_from ignored when --use_raw is set.")
+    else:
+        low_out = _run_single_inference(
+            config_low, ckpt_low, dataset_low, sample_id, device, spf_low, frames_low
+        )
+        high_out = _run_single_inference(
+            config_high, ckpt_high, dataset_high, sample_id, device, spf_high, frames_high
+        )
 
     # Tumor mask (prefer malignant)
     tumor_mask, mask_key = _pick_tumor_mask(low_out["masks"])
     if tumor_mask is None or not np.any(tumor_mask):
-        raise ValueError("No tumor ROI found in DRO mask.")
+        raise ValueError("No tumor ROI found in mask.")
     print(f"Using ROI mask: {mask_key}")
 
     # Convert to magnitude stacks (T,H,W)
@@ -477,11 +782,10 @@ def main():
 
     brisk_low = mag_to_thw_brisk(low_out["x_recon"], frames_low)
     grasp_low = mag_to_thw_grasp(low_out["grasp"], frames_low)
-    gt_low = mag_to_thw_gt(low_out["gt"], frames_low)
-
     brisk_high = mag_to_thw_brisk(high_out["x_recon"], frames_high)
     grasp_high = mag_to_thw_grasp(high_out["grasp"], frames_high)
-    gt_high = mag_to_thw_gt(high_out["gt"], frames_high)
+    gt_low = None if args.use_raw else mag_to_thw_gt(low_out["gt"], frames_low)
+    gt_high = None if args.use_raw else mag_to_thw_gt(high_out["gt"], frames_high)
 
     # Time axes
     time_low = np.linspace(0, args.total_scan_seconds, frames_low)
@@ -512,15 +816,15 @@ def main():
     curve_grasp_low = _baseline_subtract(_compute_roi_curve(grasp_low, tumor_mask), nbase_low)
     curve_brisk_high = _baseline_subtract(_compute_roi_curve(brisk_high, tumor_mask), nbase_high)
     curve_grasp_high = _baseline_subtract(_compute_roi_curve(grasp_high, tumor_mask), nbase_high)
-    dro_mode = args.dro_curve_mode
+    dro_mode = "off" if args.use_raw else args.dro_curve_mode
     if args.dro_curve_from is not None:
         dro_mode = args.dro_curve_from
 
     curve_dro_low = None
     curve_dro_high = None
-    if dro_mode in ("low", "both"):
+    if dro_mode in ("low", "both") and gt_low is not None:
         curve_dro_low = _baseline_subtract(_compute_roi_curve(gt_low, tumor_mask), nbase_low)
-    if dro_mode in ("high", "both"):
+    if dro_mode in ("high", "both") and gt_high is not None:
         curve_dro_high = _baseline_subtract(_compute_roi_curve(gt_high, tumor_mask), nbase_high)
 
     # Center frames
@@ -530,34 +834,49 @@ def main():
     img_grasp_low = grasp_low[center_low]
     img_brisk_high = brisk_high[center_high]
     img_grasp_high = grasp_high[center_high]
+    img_ref = img_grasp_low if args.use_raw else gt_low[center_low]
+
+    # Crop to zoomed tumor/breast region.
+    y0, y1, x0, x1 = _compute_crop_bbox(img_ref, tumor_mask)
+    img_brisk_low = img_brisk_low[y0:y1, x0:x1]
+    img_grasp_low = img_grasp_low[y0:y1, x0:x1]
+    img_brisk_high = img_brisk_high[y0:y1, x0:x1]
+    img_grasp_high = img_grasp_high[y0:y1, x0:x1]
+    tumor_mask_crop = tumor_mask[y0:y1, x0:x1]
 
     vmin, vmax = _robust_window_multi(
         [img_brisk_low, img_grasp_low, img_brisk_high, img_grasp_high], p_low=1, p_high=99.5
     )
-    contours = find_contours(tumor_mask.astype(float), 0.5) if tumor_mask.any() else []
+    contours = find_contours(tumor_mask_crop.astype(float), 0.5) if tumor_mask_crop.any() else []
 
     # Plot
-    fig = plt.figure(figsize=(14, 7))
-    gs = gridspec.GridSpec(2, 4, figure=fig, height_ratios=[1, 1.1])
-    fig.subplots_adjust(left=0.03, right=0.995, top=0.96, bottom=0.08, wspace=0.02, hspace=0.08)
+    if args.curves_only:
+        fig = plt.figure(figsize=(9, 4.5))
+        fig.subplots_adjust(left=0.1, right=0.98, top=0.95, bottom=0.18)
+        ax_curve = fig.add_subplot(1, 1, 1)
+    else:
+        fig = plt.figure(figsize=(14, 7))
+        gs = gridspec.GridSpec(2, 4, figure=fig, height_ratios=[1, 1.1])
+        fig.subplots_adjust(left=0.03, right=0.995, top=0.96, bottom=0.08, wspace=0.02, hspace=0.08)
 
-    titles = [
-        f"BRISKNet {spf_low} SPF",
-        f"GRASP {spf_low} SPF",
-        f"BRISKNet {spf_high} SPF",
-        f"GRASP {spf_high} SPF",
-    ]
-    images = [img_brisk_low, img_grasp_low, img_brisk_high, img_grasp_high]
+        titles = [
+            f"BRISKNet {spf_low} SPF",
+            f"GRASP {spf_low} SPF",
+            f"BRISKNet {spf_high} SPF",
+            f"GRASP {spf_high} SPF",
+        ]
+        images = [img_brisk_low, img_grasp_low, img_brisk_high, img_grasp_high]
 
-    for i in range(4):
-        ax = fig.add_subplot(gs[0, i])
-        ax.imshow(images[i], cmap="gray", vmin=vmin, vmax=vmax)
-        for contour in contours:
-            ax.plot(contour[:, 1], contour[:, 0], linewidth=1.0, color="red")
-        ax.set_title(titles[i], fontsize=PLOT_FONT_SIZES["image_title"])
-        ax.axis("off")
+        cmap = "gray_r" if args.invert_colormap else "gray"
+        for i in range(4):
+            ax = fig.add_subplot(gs[0, i])
+            ax.imshow(images[i], cmap=cmap, vmin=vmin, vmax=vmax)
+            for contour in contours:
+                ax.plot(contour[:, 1], contour[:, 0], linewidth=1.0, color="red")
+            ax.set_title(titles[i], fontsize=PLOT_FONT_SIZES["image_title"])
+            ax.axis("off")
 
-    ax_curve = fig.add_subplot(gs[1, :])
+        ax_curve = fig.add_subplot(gs[1, :])
     ax_curve.plot(
         time_low,
         curve_brisk_low,
@@ -640,71 +959,76 @@ def main():
             label=f"DRO (GT) {spf_high} SPF",
         )
 
-    # Mark the timepoints shown in the image panels.
-    ax_curve.plot(
-        time_low[center_low],
-        curve_brisk_low[center_low],
-        marker="*",
-        markersize=14,
-        color="tab:red",
-        markeredgecolor="none",
-        label="_nolegend_",
-        zorder=5,
-    )
-    ax_curve.plot(
-        time_low[center_low],
-        curve_grasp_low[center_low],
-        marker="*",
-        markersize=14,
-        color="tab:blue",
-        markeredgecolor="none",
-        label="_nolegend_",
-        zorder=5,
-    )
-    ax_curve.plot(
-        time_high[center_high],
-        curve_brisk_high[center_high],
-        marker="*",
-        markersize=14,
-        color="tab:orange",
-        markeredgecolor="none",
-        label="_nolegend_",
-        zorder=5,
-    )
-    ax_curve.plot(
-        time_high[center_high],
-        curve_grasp_high[center_high],
-        marker="*",
-        markersize=14,
-        color="tab:green",
-        markeredgecolor="none",
-        label="_nolegend_",
-        zorder=5,
-    )
+    if not args.curves_only:
+        # Mark the timepoints shown in the image panels.
+        ax_curve.plot(
+            time_low[center_low],
+            curve_brisk_low[center_low],
+            marker="*",
+            markersize=14,
+            color="tab:red",
+            markeredgecolor="none",
+            label="_nolegend_",
+            zorder=5,
+        )
+        ax_curve.plot(
+            time_low[center_low],
+            curve_grasp_low[center_low],
+            marker="*",
+            markersize=14,
+            color="tab:blue",
+            markeredgecolor="none",
+            label="_nolegend_",
+            zorder=5,
+        )
+        ax_curve.plot(
+            time_high[center_high],
+            curve_brisk_high[center_high],
+            marker="*",
+            markersize=14,
+            color="tab:orange",
+            markeredgecolor="none",
+            label="_nolegend_",
+            zorder=5,
+        )
+        ax_curve.plot(
+            time_high[center_high],
+            curve_grasp_high[center_high],
+            marker="*",
+            markersize=14,
+            color="tab:green",
+            markeredgecolor="none",
+            label="_nolegend_",
+            zorder=5,
+        )
 
     ax_curve.set_xlabel("Time (s)", fontsize=PLOT_FONT_SIZES["label"])
     ax_curve.set_ylabel("Baseline-Subtracted Signal", fontsize=PLOT_FONT_SIZES["label"])
     ax_curve.grid(True, linestyle="--", alpha=0.5)
     ax_curve.tick_params(axis="both", which="major", labelsize=PLOT_FONT_SIZES["tick"])
     handles, labels = ax_curve.get_legend_handles_labels()
-    star_handle = Line2D(
-        [0],
-        [0],
-        marker="*",
-        linestyle="None",
-        color="k",
-        markeredgecolor="none",
-        markersize=12,
-        label="Center Frame",
-    )
-    handles.append(star_handle)
-    labels.append("Center Frame")
+    if not args.curves_only:
+        star_handle = Line2D(
+            [0],
+            [0],
+            marker="*",
+            linestyle="None",
+            color="k",
+            markeredgecolor="none",
+            markersize=12,
+            label="Center Frame",
+        )
+        handles.append(star_handle)
+        labels.append("Center Frame")
+    legend_size = PLOT_FONT_SIZES["legend"]
+    if args.curves_only:
+        legend_size = max(9, int(PLOT_FONT_SIZES["legend"] * 0.8)) + 1
     ax_curve.legend(
         handles,
         labels,
         loc="upper left",
-        ncol=3,
-        fontsize=PLOT_FONT_SIZES["legend"],
+        ncol=3 if not args.curves_only else 2,
+        fontsize=legend_size,
         frameon=True,
     )
 

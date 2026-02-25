@@ -33,12 +33,15 @@ class InferenceBatch(submitit.helpers.Checkpointable):
 
 
 def main():
-    job_name = "new_dro_inference"
+    job_name = "test_set_inference_no_rebin"
     exp_names = "/net/projects2/annawoodard/rachelgordon/experiments/ei_diffeo_fop_cosine_lr_no_rebin_36spf"
     num_gpus = 1
     extra_args = [
         "--overwrite_logs",
-        "--new_dro_root /net/scratch2/rachelgordon/dro_var_frames",
+        "--new_dro_root /net/scratch2/rachelgordon/dro_test_set",
+        "--split_key test_dro",
+        "--num_samples 25",
+        "--skip_raw_grasp_metrics",
         # "--disable_ssdu",
     ]
 
@@ -53,9 +56,10 @@ def main():
         tasks_per_node=1,
         cpus_per_task=8,
         slurm_gres=f"gpu:{num_gpus}",
-        timeout_min=700,
+        timeout_min=200,
         slurm_additional_parameters={"requeue": True, "exclude": "k002"},
         srun_args=["--cpu-bind=none"],
+        qos="burst",
     )
 
     job = executor.submit(

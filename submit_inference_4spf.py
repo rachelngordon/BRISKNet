@@ -34,11 +34,14 @@ class InferenceBatch(submitit.helpers.Checkpointable):
 
 def main():
     job_name = "new_dro_inference"
-    exp_names = "/net/projects2/annawoodard/rachelgordon/experiments/mc_16spf_slice_sampling"
+    exp_names = "/net/projects2/annawoodard/rachelgordon/experiments/ei_diffeo_2spf_slice_sampling"
     num_gpus = 1
     extra_args = [
         "--overwrite_logs",
-        "--new_dro_root /net/scratch2/rachelgordon/dro_var_frames",
+        "--new_dro_root /net/scratch2/rachelgordon/dro_test_set",
+        "--split_key test_dro",
+        "--num_samples 25",
+        "--skip_raw_grasp_metrics",
         # "--disable_ssdu",
     ]
 
