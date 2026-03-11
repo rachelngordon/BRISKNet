@@ -34,7 +34,7 @@ class InferenceBatch(submitit.helpers.Checkpointable):
 
 def main():
     job_name = "test_set_inference_16spf"
-    exp_names = "/net/projects2/annawoodard/rachelgordon/experiments/ei_diffeo_16spf_slice_sampling"
+    exp_names = "/net/projects2/annawoodard/rachelgordon/experiments/ei_8spf_slice_sampling_no_rebin"
     num_gpus = 1
     extra_args = [
         "--overwrite_logs",

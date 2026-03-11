@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import math
 import os
 from typing import Dict, Tuple
@@ -87,6 +88,17 @@ def parse_args():
         type=int,
         default=0,
         help="Index into the sorted intersection of sample ids (default: 0).",
+    )
+    parser.add_argument(
+        "--split_key",
+        help=(
+            "Optional split key from data_split.json to filter DRO samples "
+            "(e.g., val_dro, test_dro). If set, selection is restricted to that split."
+        ),
+    )
+    parser.add_argument(
+        "--split_file",
+        help="Override split file path (default: config_low data.split_file or data/data_split.json).",
     )
     parser.add_argument(
         "--phase_index",
@@ -719,7 +731,31 @@ def main():
     common_ids = sorted(set(dataset_low.sample_ids) & set(dataset_high.sample_ids))
     if not common_ids:
         raise ValueError("No overlapping DRO sample ids between low/high frame counts.")
+    if args.split_key:
+        split_file = (
+            args.split_file
+            or config_low.get("data", {}).get("split_file")
+            or "data/data_split.json"
+        )
+        if not os.path.exists(split_file):
+            raise FileNotFoundError(f"Split file not found: {split_file}")
+        with open(split_file, "r", encoding="utf-8") as f:
+            splits = json.load(f)
+        split_ids = splits.get(args.split_key) or []
+        if not split_ids:
+            raise ValueError(
+                f"Split key '{args.split_key}' not found or empty in {split_file}."
+            )
+        common_ids = [sid for sid in common_ids if sid in split_ids]
+        if not common_ids:
+            raise ValueError(
+                f"No overlapping DRO sample ids after filtering by '{args.split_key}'."
+            )
     if args.sample_id:
+        if args.split_key and args.sample_id not in common_ids:
+            raise ValueError(
+                f"Sample id {args.sample_id} not in split '{args.split_key}'."
+            )
         if args.sample_id not in common_ids:
             raise ValueError(f"Sample id {args.sample_id} not found in both datasets.")
         sample_id = args.sample_id
