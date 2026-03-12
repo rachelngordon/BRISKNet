@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Simulate k-space with torchkbnufft and reconstruct GRASP from a .mat image.
+"""Simulate k-space from a DRO .mat and reconstruct with GRASP.
 
-Loads simImg + smap from a .mat file, simulates multi-coil k-space, and
-reconstructs using sigpy's HighDimensionalRecon. Saves a PNG of the first
-timeframe magnitude.
+Example:
+  python simulate_kspace_grasp_from_mat.py --mat-path /path/to/sample_dro_8frames.mat --spokes-per-frame 36
 """
 
 from __future__ import annotations
@@ -155,8 +154,8 @@ def _ktraj_and_dcomp_from_get_traj(Nsample, Nspokes, Ng, im_size):
 
 
 def prep_nufft(Nsample, Nspokes, Ng, traj_method="trajGR"):
-    overSmaple = 2
-    im_size = (int(Nsample / overSmaple), int(Nsample / overSmaple))
+    oversample = 2
+    im_size = (int(Nsample / oversample), int(Nsample / oversample))
     grid_size = (Nsample, Nsample)
 
     if traj_method == "trajGR":

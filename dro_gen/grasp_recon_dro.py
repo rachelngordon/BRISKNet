@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""
-Generate a single GRASP reconstruction for a DRO k-space .mat file using ESPIRiT CSMAPS.
+"""Run a GRASP reconstruction for a DRO k-space .mat file using ESPIRiT csmaps.
+
+Example:
+  python grasp_recon_dro.py --sample-id sample_001 --spokes-per-frame 36
 """
 import argparse
 import json
@@ -13,6 +15,9 @@ import numpy as np
 import sigpy as sp
 from sigpy.mri import app
 import torch
+
+KSPACE_KEY = "kspace"
+TRAJ_KEY = "traj"
 
 
 def _read_h5_float(dset: h5py.Dataset) -> np.ndarray:
@@ -81,12 +86,12 @@ def _read_h5_complex(dset: h5py.Dataset) -> np.ndarray:
 
 def _load_kspace_and_traj(kspace_path: str):
     with h5py.File(kspace_path, "r") as f:
-        if "kspace" not in f:
-            raise KeyError(f"{kspace_path} missing required key 'kspace'.")
-        if "traj" not in f:
-            raise KeyError(f"{kspace_path} missing required key 'traj'.")
-        kspace = _read_h5_complex(f["kspace"]).astype(np.complex64)
-        traj = _read_h5_complex(f["traj"]).astype(np.complex64)
+        if KSPACE_KEY not in f:
+            raise KeyError(f"{kspace_path} missing required key '{KSPACE_KEY}'.")
+        if TRAJ_KEY not in f:
+            raise KeyError(f"{kspace_path} missing required key '{TRAJ_KEY}'.")
+        kspace = _read_h5_complex(f[KSPACE_KEY]).astype(np.complex64)
+        traj = _read_h5_complex(f[TRAJ_KEY]).astype(np.complex64)
     return kspace, traj
 
 
@@ -190,6 +195,19 @@ def _scale_traj_if_needed(traj: np.ndarray, samples: int) -> np.ndarray:
         traj = traj * base_res
         print(f"[traj] Scaling normalized traj by base_res={base_res} (max_abs={max_abs:.3g}).")
     return traj
+
+
+def _build_coord(traj: np.ndarray, num_frames: int, spf: int, samples: int) -> np.ndarray:
+    traj = np.ascontiguousarray(traj.reshape(num_frames, spf, samples))
+    return np.stack([traj.imag, traj.real], axis=-1).astype(np.float32)
+
+
+def _build_kspace(
+    kspace: np.ndarray, n_coils: int, num_frames: int, spf: int, samples: int
+) -> np.ndarray:
+    kspace = np.ascontiguousarray(kspace.reshape(n_coils, num_frames, spf, samples))
+    kspace = np.transpose(kspace, (1, 0, 2, 3))
+    return kspace[:, None, :, None, :, :]
 
 
 def _parse_spf_from_name(path: str) -> int:
@@ -312,6 +330,12 @@ def _load_split_ids(split_file: str, split_key: str):
     return data[split_key]
 
 
+def _resolve_device(device_id: int | None) -> sp.Device:
+    if device_id is None:
+        return sp.Device(0 if torch.cuda.is_available() else -1)
+    return sp.Device(device_id)
+
+
 def _run_recon(sample_id: str, spf: int, num_frames: int, kspace_path: str, csmaps_path: str, args):
     if not os.path.exists(kspace_path):
         raise FileNotFoundError(f"K-space file not found: {kspace_path}")
@@ -341,13 +365,8 @@ def _run_recon(sample_id: str, spf: int, num_frames: int, kspace_path: str, csma
     print(f"[info] num_frames={num_frames}")
 
     traj = _scale_traj_if_needed(traj, samples)
-
-    traj = np.ascontiguousarray(traj.reshape(num_frames, spf, samples))
-    coord = np.stack([traj.imag, traj.real], axis=-1).astype(np.float32)
-
-    kspace = np.ascontiguousarray(kspace.reshape(n_coils, num_frames, spf, samples))
-    kspace = np.transpose(kspace, (1, 0, 2, 3))
-    kspace = kspace[:, None, :, None, :, :]
+    coord = _build_coord(traj, num_frames, spf, samples)
+    kspace = _build_kspace(kspace, n_coils, num_frames, spf, samples)
 
     csmaps = _standardize_csmaps(csmaps_raw, n_coils)
     csmaps = csmaps[:, None, :, :]
@@ -356,10 +375,7 @@ def _run_recon(sample_id: str, spf: int, num_frames: int, kspace_path: str, csma
     print(f"[shape] csmaps for recon: {csmaps.shape}")
     print(f"[shape] coord for recon: {coord.shape}")
 
-    if args.device is None:
-        device = sp.Device(0 if torch.cuda.is_available() else -1)
-    else:
-        device = sp.Device(args.device)
+    device = _resolve_device(args.device)
 
     recon = app.HighDimensionalRecon(
         kspace,

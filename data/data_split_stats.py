@@ -1,46 +1,58 @@
-import pandas as pd
+"""Summarize lesion and laterality counts per split using DRO-to-fastMRI mappings."""
+
 import json
 import re
 
-# --- Load files ---
-# Path to files
-split_path = "data_split.json"
-mapping_path = "DROSubID_vs_fastMRIbreastID.csv"
-demographics_path = "breast_fastMRI_final.xlsx"
+import pandas as pd
+
+# --- File paths ---
+SPLIT_PATH = "data_split.json"
+MAPPING_PATH = "DROSubID_vs_fastMRIbreastID.csv"
+DEMOGRAPHICS_PATH = "breast_fastMRI_final.xlsx"
+PATIENT_COL = "Patient Coded Name"
+LESION_COL = "Lesion status (0 = negative, 1= malignancy, 2= benign)"
+LATERALITY_COL = "Laterality (1=right, 2=left)"
 
 # Load data split
-with open(split_path, "r") as f:
+with open(SPLIT_PATH, "r") as f:
     splits = json.load(f)
 
 # Load mapping file (fastMRIbreast <-> DRO)
-mapping_df = pd.read_csv(mapping_path)
+mapping_df = pd.read_csv(MAPPING_PATH)
 dro_to_fmri = dict(zip(mapping_df["DRO"], mapping_df["fastMRIbreast"]))
 
-# Convert test_dro and val_dro to fastMRI IDs
+# Convert DRO-style IDs to fastMRI IDs
 def extract_dro_id(s):
     match = re.search(r"sub(\d+)", s)
     return int(match.group(1)) if match else None
 
-test_fmri_ids = [f"fastMRI_breast_{dro_to_fmri[extract_dro_id(dro_id)]:03d}" for dro_id in splits["test_dro"]]
-val_fmri_ids = [f"fastMRI_breast_{dro_to_fmri[extract_dro_id(dro_id)]:03d}" for dro_id in splits["val_dro"]]
+def dro_list_to_fmri_ids(dro_ids):
+    return [
+        f"fastMRI_breast_{dro_to_fmri[extract_dro_id(dro_id)]:03d}"
+        for dro_id in dro_ids
+    ]
+
+
+test_fmri_ids = dro_list_to_fmri_ids(splits["test_dro"])
+val_fmri_ids = dro_list_to_fmri_ids(splits["val_dro"])
 train_fmri_ids = splits["train"]
 
 # --- Load demographics ---
-demo_df = pd.read_excel(demographics_path)
+demo_df = pd.read_excel(DEMOGRAPHICS_PATH)
 
-# Ensure consistent column names
+# Normalize column strings for safe matching
 demo_df.columns = demo_df.columns.str.strip()
-demo_df["Patient Coded Name"] = demo_df["Patient Coded Name"].str.strip()
+demo_df[PATIENT_COL] = demo_df[PATIENT_COL].str.strip()
 
 # Helper to compute stats
 def compute_counts(df_subset):
     total = len(df_subset)
-    no_lesion = (df_subset["Lesion status (0 = negative, 1= malignancy, 2= benign)"] == 0).sum()
-    benign = (df_subset["Lesion status (0 = negative, 1= malignancy, 2= benign)"] == 2).sum()
-    malignant = (df_subset["Lesion status (0 = negative, 1= malignancy, 2= benign)"] == 1).sum()
+    no_lesion = (df_subset[LESION_COL] == 0).sum()
+    benign = (df_subset[LESION_COL] == 2).sum()
+    malignant = (df_subset[LESION_COL] == 1).sum()
 
-    malignant_right = ((df_subset["Lesion status (0 = negative, 1= malignancy, 2= benign)"] == 1) & (df_subset["Laterality (1=right, 2=left)"] == 1)).sum()
-    malignant_left = ((df_subset["Lesion status (0 = negative, 1= malignancy, 2= benign)"] == 1) & (df_subset["Laterality (1=right, 2=left)"] == 2)).sum()
+    malignant_right = ((df_subset[LESION_COL] == 1) & (df_subset[LATERALITY_COL] == 1)).sum()
+    malignant_left = ((df_subset[LESION_COL] == 1) & (df_subset[LATERALITY_COL] == 2)).sum()
 
     return {
         "Total Patients": total,
@@ -52,9 +64,9 @@ def compute_counts(df_subset):
     }
 
 # Filter by split
-train_df = demo_df[demo_df["Patient Coded Name"].isin(train_fmri_ids)]
-val_df = demo_df[demo_df["Patient Coded Name"].isin(val_fmri_ids)]
-test_df = demo_df[demo_df["Patient Coded Name"].isin(test_fmri_ids)]
+train_df = demo_df[demo_df[PATIENT_COL].isin(train_fmri_ids)]
+val_df = demo_df[demo_df[PATIENT_COL].isin(val_fmri_ids)]
+test_df = demo_df[demo_df[PATIENT_COL].isin(test_fmri_ids)]
 
 # Compute stats
 train_stats = compute_counts(train_df)

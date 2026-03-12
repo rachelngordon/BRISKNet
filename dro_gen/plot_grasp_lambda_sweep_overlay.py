@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""
-Plot enhancement curve overlays for precomputed GRASP reconstructions across lambdas,
-optionally including the DRO enhancement curve for the same sample.
+"""Plot enhancement-curve overlays for precomputed GRASP reconstructions.
+
+Example:
+  python plot_grasp_lambda_sweep_overlay.py --sample-id sample_001 --spf 36 --lamdas 0.001,0.002
 """
 from __future__ import annotations
 
@@ -199,6 +200,21 @@ def _load_mask_from_npz(npz_path: str) -> Dict[str, np.ndarray]:
                 except Exception:
                     continue
     return mask_dict
+
+
+def _load_mask_dict(mask_path: Optional[str], dro_mat_path: str) -> Dict[str, np.ndarray]:
+    if mask_path:
+        if mask_path.endswith(".mat"):
+            return _load_mask_from_dro_mat(mask_path)
+        if mask_path.endswith(".npz"):
+            return _load_mask_from_npz(mask_path)
+        if mask_path.endswith(".npy"):
+            return {"mask": np.load(mask_path)}
+        raise ValueError(f"Unsupported mask path: {mask_path}")
+
+    if os.path.exists(dro_mat_path):
+        return _load_mask_from_dro_mat(dro_mat_path)
+    return {}
 
 
 def _normalize_mask(mask: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
@@ -448,19 +464,7 @@ def main() -> None:
         args.dro_root, f"{args.sample_id}_dro_{frames}frames.mat"
     )
 
-    mask_dict: Dict[str, np.ndarray] = {}
-    if args.mask_path:
-        if args.mask_path.endswith(".mat"):
-            mask_dict = _load_mask_from_dro_mat(args.mask_path)
-        elif args.mask_path.endswith(".npz"):
-            mask_dict = _load_mask_from_npz(args.mask_path)
-        elif args.mask_path.endswith(".npy"):
-            mask_arr = np.load(args.mask_path)
-            mask_dict = {"mask": mask_arr}
-        else:
-            raise ValueError(f"Unsupported mask path: {args.mask_path}")
-    elif os.path.exists(dro_mat_path):
-        mask_dict = _load_mask_from_dro_mat(dro_mat_path)
+    mask_dict = _load_mask_dict(args.mask_path, dro_mat_path)
 
     time_points = (
         np.asarray(_parse_float_list(args.time_points), dtype=np.float64)

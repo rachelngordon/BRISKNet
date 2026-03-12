@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
+"""Compute ESPIRiT coil maps from DRO k-space .mat files.
+
+Example:
+  python get_espirit_maps_new_dro.py --root_dir /path/to/dro --spokes_per_frame 36
+"""
 import argparse
 import glob
 import os
 
 import h5py
 import h5py.h5t as h5t
+import matplotlib.pyplot as plt
 import numpy as np
 import sigpy as sp
 from sigpy.mri import app
-import matplotlib.pyplot as plt
+
+KSPACE_KEY = "kspace"
+TRAJ_KEY = "traj"
 
 
 def _read_h5_float(dset: h5py.Dataset) -> np.ndarray:
@@ -77,12 +85,12 @@ def _read_h5_complex(dset: h5py.Dataset) -> np.ndarray:
 
 def _load_kspace_and_traj(kspace_path: str):
     with h5py.File(kspace_path, "r") as f:
-        if "kspace" not in f:
-            raise KeyError(f"{kspace_path} missing required key 'kspace'.")
-        if "traj" not in f:
-            raise KeyError(f"{kspace_path} missing required key 'traj'.")
-        kspace = _read_h5_complex(f["kspace"]).astype(np.complex64)
-        traj = _read_h5_complex(f["traj"]).astype(np.complex64)
+        if KSPACE_KEY not in f:
+            raise KeyError(f"{kspace_path} missing required key '{KSPACE_KEY}'.")
+        if TRAJ_KEY not in f:
+            raise KeyError(f"{kspace_path} missing required key '{TRAJ_KEY}'.")
+        kspace = _read_h5_complex(f[KSPACE_KEY]).astype(np.complex64)
+        traj = _read_h5_complex(f[TRAJ_KEY]).astype(np.complex64)
     return kspace, traj
 
 
@@ -138,14 +146,13 @@ def _prep_coord(traj: np.ndarray, total_spokes: int, samples: int):
     if max_abs <= 1.0:
         traj = traj * base_res
         print(f"[traj] Scaling normalized traj by base_res={base_res} (max_abs={max_abs:.3g}).")
-    # coord = np.stack([traj.real, traj.imag], axis=-1)  # (spokes, samples, 2)
     coord = np.stack([traj.imag, traj.real], axis=-1)
 
     return coord
 
 
 def _get_espirit_maps(kspace: np.ndarray, coord: np.ndarray, device: sp.Device):
-    n_coils, total_spokes, samples = kspace.shape
+    n_coils, _, samples = kspace.shape
     base_res = samples // 2
     ishape = [n_coils, base_res, base_res]
 

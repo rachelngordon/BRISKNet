@@ -1,9 +1,0 @@
-model.optimizer.lr,model.num_layers,ssim,psnr,exp_name
-0.001,2,0.7734,23.3948,grid_run_008_lr_0.001_num_layers_2
-0.01,2,0.7634,22.9041,grid_run_002_lr_0.01_num_layers_2
-0.01,3,0.7527,23.0889,grid_run_003_lr_0.01_num_layers_3
-0.01,1,0.7457,22.439,grid_run_001_lr_0.01_num_layers_1
-0.001,1,0.7417,22.5739,grid_run_007_lr_0.001_num_layers_1
-0.005,3,0.7397,22.6574,grid_run_006_lr_0.005_num_layers_3
-0.005,1,0.7391,22.6842,grid_run_004_lr_0.005_num_layers_1
-0.005,2,0.7281,22.3564,grid_run_005_lr_0.005_num_layers_2

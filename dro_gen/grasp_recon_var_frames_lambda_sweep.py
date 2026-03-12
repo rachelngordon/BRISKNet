@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""
-Run GRASP reconstructions for a single sample/spf across a list of lambda values,
-plot per-lambda enhancement panels, and save an overlay of enhancement curves
-(optionally including the DRO curve).
+"""Sweep GRASP lambda values for one sample/SPF and plot enhancement curves.
+
+Example:
+  python grasp_recon_var_frames_lambda_sweep.py --sample-id sample_001 --spf 36 --lamdas 0.001,0.002
 """
 from __future__ import annotations
 
 import argparse
 import math
 import os
-import re
 from typing import Dict, List, Optional, Tuple
 
 import h5py
@@ -291,6 +290,21 @@ def _load_mask_from_npz(npz_path: str) -> Dict[str, np.ndarray]:
                 except Exception:
                     continue
     return mask_dict
+
+
+def _load_mask_dict(mask_path: Optional[str], dro_mat_path: str) -> Dict[str, np.ndarray]:
+    if mask_path:
+        if mask_path.endswith(".mat"):
+            return _load_mask_from_dro_mat(mask_path)
+        if mask_path.endswith(".npz"):
+            return _load_mask_from_npz(mask_path)
+        if mask_path.endswith(".npy"):
+            return {"mask": np.load(mask_path)}
+        raise ValueError(f"Unsupported mask path: {mask_path}")
+
+    if os.path.exists(dro_mat_path):
+        return _load_mask_from_dro_mat(dro_mat_path)
+    return {}
 
 
 def _normalize_mask(mask: np.ndarray, h: int, w: int) -> Optional[np.ndarray]:
@@ -616,21 +630,8 @@ def main() -> None:
     csmaps_np = np.load(csmaps_path)
 
     # Optional mask loading
-    mask_dict: Dict[str, np.ndarray] = {}
+    mask_dict = _load_mask_dict(args.mask_path, dro_mat_path)
     mask_label: Optional[str] = None
-    if args.mask_path:
-        if args.mask_path.endswith(".mat"):
-            mask_dict = _load_mask_from_dro_mat(args.mask_path)
-        elif args.mask_path.endswith(".npz"):
-            mask_dict = _load_mask_from_npz(args.mask_path)
-        elif args.mask_path.endswith(".npy"):
-            mask_arr = np.load(args.mask_path)
-            mask_dict = {"mask": mask_arr}
-        else:
-            raise ValueError(f"Unsupported mask path: {args.mask_path}")
-    else:
-        if os.path.exists(dro_mat_path):
-            mask_dict = _load_mask_from_dro_mat(dro_mat_path)
 
     time_points = (
         np.asarray(_parse_float_list(args.time_points), dtype=np.float64)

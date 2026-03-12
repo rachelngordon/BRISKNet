@@ -1,8 +1,0 @@
-model.losses.adj_loss.weight,model.losses.ei_loss.weight,ssim,psnr,exp_name
-0.001,100,0.7647,23.2639,grid_run_001_weight_0.001_weight_100
-0.01,0,0.7491,22.334,grid_run_002_weight_0.01_weight_0
-0.01,1,0.7397,22.7287,grid_run_003_weight_0.01_weight_1
-0.01,10,0.7549,22.7351,grid_run_004_weight_0.01_weight_10
-0.01,100,0.7398,22.4987,grid_run_005_weight_0.01_weight_100
-0.1,0,0.7498,22.7784,grid_run_006_weight_0.1_weight_0
-0.1,1,0.7257,22.3144,grid_run_007_weight_0.1_weight_1

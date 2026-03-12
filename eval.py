@@ -11,7 +11,7 @@ import numpy as np
 import torchmetrics
 import time
 from dataloader import SimulatedDataset
-from lsfpnet import to_torch_complex, from_torch_complex
+from lsfpnet_encoding import to_torch_complex, from_torch_complex
 from radial_lsfp import MCNUFFT
 import numpy as np
 from scipy.optimize import curve_fit

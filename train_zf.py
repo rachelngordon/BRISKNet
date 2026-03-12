@@ -34,12 +34,6 @@ import time
 import threading
 import atexit
 import seaborn as sns
-from loss_metrics import (
-    LPIPSVideoMetric,
-    SSIMVideoMetric,
-    HuberVideoMetric,
-    CharbonnierVideoMetric,
-)
 from rebin_loss import RebinConsistencyLoss
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -1274,22 +1268,14 @@ def main():
 
 
     ei_metric_name = str(ei_cfg.get("metric", "MSE")).strip().upper()
-    if ei_metric_name == "LPIPS":
-        ei_loss_metric = LPIPSVideoMetric(net_type='alex')
-    elif ei_metric_name == "SSIM":
-        ei_loss_metric = SSIMVideoMetric()
-    elif ei_metric_name == "HUBER":
-        ei_loss_metric = HuberVideoMetric(delta=float(ei_cfg.get("huber_delta", 1.0)))
-    elif ei_metric_name == "CHARBONNIER":
-        ei_loss_metric = CharbonnierVideoMetric(epsilon=float(ei_cfg.get("charbonnier_eps", 1e-3)))
-    elif ei_metric_name == "MAE":
+    if ei_metric_name == "MAE":
         ei_loss_metric = torch.nn.L1Loss()
     elif ei_metric_name == "MSE":
         ei_loss_metric = torch.nn.MSELoss()
     else:
         raise ValueError(
             f"Unsupported EI Loss Metric '{ei_metric_name}'. Expected one of: "
-            "MSE, MAE, SSIM, LPIPS, HUBER, CHARBONNIER."
+            "MSE, MAE."
         )
 
     ei_no_grad = bool(ei_cfg.get("no_grad", False))

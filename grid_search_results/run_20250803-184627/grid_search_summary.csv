@@ -1,7 +1,0 @@
-model.gamma,model.lambda_step,ssim,psnr,exp_name
-0.1,0.05,0.7369,22.517,grid_run_001_gamma_0.1_lambda_step_0.05
-0.1,0.1,0.759,23.0124,grid_run_002_gamma_0.1_lambda_step_0.1
-0.1,0.5,0.7338,22.4795,grid_run_003_gamma_0.1_lambda_step_0.5
-0.5,0.05,0.7416,22.5821,grid_run_004_gamma_0.5_lambda_step_0.05
-0.5,0.1,0.7426,22.6586,grid_run_005_gamma_0.5_lambda_step_0.1
-0.5,0.5,0.748,22.7308,grid_run_006_gamma_0.5_lambda_step_0.5

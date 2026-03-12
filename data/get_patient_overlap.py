@@ -1,30 +1,23 @@
+"""Map fastMRI patient splits to DRO sample IDs and report overlap."""
+
 import json
+
 import pandas as pd
 
 # --- Configuration ---
+SPLITS_FILE_PATH = (
+    "/gpfs/data/karczmar-lab/workspaces/rachelgordon/breastMRI-recon/ddei/data/patient_splits.json"
+)
 
-# 1. Path to your patient splits JSON file
-splits_file_path = "/gpfs/data/karczmar-lab/workspaces/rachelgordon/breastMRI-recon/ddei/data/patient_splits.json"
-
-# 2. Path to your CSV file containing the DRO and fastMRI ID mapping
-overlap_csv_path = "DROSubID_vs_fastMRIbreastID.csv"
+OVERLAP_CSV_PATH = "DROSubID_vs_fastMRIbreastID.csv"
+FASTMRI_COL = "fastMRIbreast"
+DRO_COL = "DRO"
 
 # --- Main Logic ---
 
 def find_dro_samples_in_splits(splits_path, csv_path):
-    """
-    Loads patient splits (train/val/test) and an overlap CSV to find corresponding DRO samples.
-
-    Args:
-        splits_path (str): Path to the patient_splits.json file.
-        csv_path (str): Path to the CSV file mapping DRO to fastMRI IDs.
-
-    Returns:
-        dict: A dictionary containing all results, or None if an error occurs.
-              Keys: 'total_train_patients', 'total_val_patients', 'total_test_patients',
-                    'dro_train', 'dro_val', 'dro_test', 'dro_unused'.
-    """
-    # --- Step 1: Load all patient splits and get total counts ---
+    """Return DRO IDs per split and any unused DRO IDs, or None on error."""
+    # Load patient splits and counts
     try:
         with open(splits_path, 'r') as f:
             patient_splits = json.load(f)
@@ -39,7 +32,10 @@ def find_dro_samples_in_splits(splits_path, csv_path):
         total_val_count = len(val_patients)
         total_test_count = len(test_patients)
         
-        print(f"Successfully loaded {total_train_count} train, {total_val_count} val, and {total_test_count} test patients from splits file.")
+        print(
+            f"Successfully loaded {total_train_count} train, {total_val_count} val, "
+            f"and {total_test_count} test patients from splits file."
+        )
     except FileNotFoundError:
         print(f"Error: The JSON splits file '{splits_path}' was not found.")
         return None
@@ -47,7 +43,7 @@ def find_dro_samples_in_splits(splits_path, csv_path):
         print(f"Error: Could not decode JSON from '{splits_path}'. Check the file format.")
         return None
 
-    # --- Step 2: Load the overlap data from the CSV file ---
+    # Load overlap CSV
     try:
         overlap_df = pd.read_csv(csv_path)
         print(f"Successfully loaded the overlap data from '{csv_path}'.")
@@ -58,31 +54,28 @@ def find_dro_samples_in_splits(splits_path, csv_path):
         print(f"Error reading CSV file: {e}")
         return None
 
-    # --- Step 3: Create a lookup map and get a set of all DRO IDs ---
-    id_col = 'fastMRIbreast'
-    dro_col = 'DRO'
-
+    # Build lookup map and collect all DRO IDs
     fastmri_to_dro_map = {}
     for _, row in overlap_df.iterrows():
-        fastmri_id_num = row[id_col]
-        dro_id = row[dro_col]
+        fastmri_id_num = row[FASTMRI_COL]
+        dro_id = row[DRO_COL]
         full_fastmri_id = f"fastMRI_breast_{int(fastmri_id_num):03d}"
         fastmri_to_dro_map[full_fastmri_id] = dro_id
 
-    all_dro_ids = set(overlap_df[dro_col].unique())
+    all_dro_ids = set(overlap_df[DRO_COL].unique())
     print(f"Created a lookup map with {len(fastmri_to_dro_map)} entries.")
     print(f"Found {len(all_dro_ids)} unique DRO samples in the overlap CSV.")
 
-    # --- Step 4: Find the corresponding DRO samples for each split ---
+    # Map each split to DRO IDs
     dro_train = sorted([fastmri_to_dro_map[p] for p in train_patients if p in fastmri_to_dro_map])
     dro_val = sorted([fastmri_to_dro_map[p] for p in val_patients if p in fastmri_to_dro_map])
     dro_test = sorted([fastmri_to_dro_map[p] for p in test_patients if p in fastmri_to_dro_map])
     
-    # --- Step 5: Find DRO samples not used in any split ---
+    # DRO samples not used in any split
     found_dro_ids = set(dro_train + dro_val + dro_test)
     unused_dro_ids = all_dro_ids - found_dro_ids
 
-    # --- Step 6: Return all results in a single dictionary ---
+    # Return results
     results = {
         "total_train_patients": total_train_count,
         "total_val_patients": total_val_count,
@@ -97,7 +90,7 @@ def find_dro_samples_in_splits(splits_path, csv_path):
 
 # --- Execute the script and print results ---
 if __name__ == "__main__":
-    results = find_dro_samples_in_splits(splits_file_path, overlap_csv_path)
+    results = find_dro_samples_in_splits(SPLITS_FILE_PATH, OVERLAP_CSV_PATH)
 
     if results:
         print("\n" + "="*60)

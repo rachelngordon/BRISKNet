@@ -1,8 +1,0 @@
-model.lambda_L,model.lambda_S,model.lambda_spatial_L,model.lambda_spatial_S,ssim,psnr,exp_name
-0.0005,0.1,0.05,0.005,0.7368,22.4529,grid_run_001_lambda_L_0.0005_lambda_S_0.1_lambda_spatial_L_0.05_lambda_spatial_S_0.005
-0.0005,0.1,0.05,0.05,0.7576,23.0174,grid_run_002_lambda_L_0.0005_lambda_S_0.1_lambda_spatial_L_0.05_lambda_spatial_S_0.05
-0.0005,0.1,0.05,0.1,0.7331,22.3371,grid_run_003_lambda_L_0.0005_lambda_S_0.1_lambda_spatial_L_0.05_lambda_spatial_S_0.1
-0.0005,0.1,0.1,0.005,0.7458,22.6487,grid_run_004_lambda_L_0.0005_lambda_S_0.1_lambda_spatial_L_0.1_lambda_spatial_S_0.005
-0.0005,0.1,0.1,0.05,0.679,21.13,grid_run_005_lambda_L_0.0005_lambda_S_0.1_lambda_spatial_L_0.1_lambda_spatial_S_0.05
-0.0005,0.1,0.1,0.1,0.7042,21.7455,grid_run_006_lambda_L_0.0005_lambda_S_0.1_lambda_spatial_L_0.1_lambda_spatial_S_0.1
-0.0025,0.005,0.005,0.005,0.7327,22.3347,grid_run_007_lambda_L_0.0025_lambda_S_0.005_lambda_spatial_L_0.005_lambda_spatial_S_0.005
