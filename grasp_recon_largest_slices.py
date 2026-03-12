@@ -1,6 +1,7 @@
+"""Run GRASP recon for the largest-tumor slices listed in a CSV. Run: python3 grasp_recon_largest_slices.py --help"""
+
 import argparse
 import csv
-import os
 from pathlib import Path
 from typing import List, Tuple
 

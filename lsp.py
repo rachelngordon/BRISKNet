@@ -1,8 +1,8 @@
-import torch
-import numpy as np
-from time import time
+"""Low-rank + sparse projection utilities for LSP reconstruction. Run: imported by training scripts (not intended to run directly)."""
 
-dtype=torch.complex64
+import torch
+
+dtype = torch.complex64
 
 def Project_inf(x, c, to_complex=True):
     # torch.cuda.synchronize()

@@ -1,11 +1,12 @@
+"""Spatial/temporal transforms for EI and augmentation. Run: imported by training scripts (not intended to run directly)."""
+
+from typing import Union
 
 import deepinv as dinv
 import torch
+import torch.nn.functional as F
 from deepinv.transform import Transform
 from einops import rearrange
-import torch.nn.functional as F
-from torchvision.transforms.functional import rotate
-from typing import Union
 
 
 

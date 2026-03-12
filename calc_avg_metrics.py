@@ -1,5 +1,8 @@
-import pandas as pd
+"""Summarize mean metrics from a CSV and save category averages. Run: python3 calc_avg_metrics.py (edit csv_path inside)"""
+
 from pathlib import Path
+
+import pandas as pd
 
 # Path to your CSV
 csv_path = Path("/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_warp_large_Lkernel/inference_20260113_163934/metrics_temporal_malignant_all.csv")

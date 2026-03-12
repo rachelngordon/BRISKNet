@@ -1,11 +1,13 @@
-import os
+"""Resample multi-frame NIfTI slices to a target slice count. Run: python3 process_data/dro_matching/resamples_slices_multiple_frames.py (edit paths at bottom)"""
+
 import glob
-import nibabel as nib
-import numpy as np
-from scipy.ndimage import zoom
+import os
 import re
 from collections import defaultdict
 
+import nibabel as nib
+import numpy as np
+from scipy.ndimage import zoom
 def resample_slices_from_directory_4d(input_dir, output_dir, new_slice_count):
     """
     Loads individual slice files with multiple timeframes from a directory, 

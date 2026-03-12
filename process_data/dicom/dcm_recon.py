@@ -1,15 +1,17 @@
+"""Convert reconstructed HDF5 volumes into DICOM series. Run: python3 process_data/dicom/dcm_recon.py --help"""
+
 import argparse
-from datetime import datetime, timedelta
-import h5py
 import os
-import pathlib
+from datetime import datetime, timedelta
+
+import h5py
+import numpy as np
 import pydicom
 # from pydicom import Dataset
 from pydicom.datadict import add_dict_entry
 # from pydicom.dataset import FileDataset, FileMetaDataset
 # from pydicom.uid import UID
 
-import numpy as np
 
 #DIR = os.path.dirname(os.path.realpath(__file__))
 #print("dcm_recon dir: ", DIR)

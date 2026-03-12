@@ -1,9 +1,11 @@
+"""Plot inference metric summaries from JSON logs. Run: python3 plot_inference_metrics.py --help"""
+
 import argparse
 import json
-import os
 from typing import Dict, List, Tuple
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D

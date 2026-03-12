@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Plot BriskNet vs GRASP center comparisons for DRO data. Run: python3 plot_brisknet_grasp_center_compare.py --help"""
 import argparse
 import json
 import math

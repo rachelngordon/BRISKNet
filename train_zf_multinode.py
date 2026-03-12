@@ -1,3 +1,5 @@
+"""Bootstrap distributed env vars before launching training. Run: python3 train_zf_multinode.py"""
+
 import os
 import subprocess
 

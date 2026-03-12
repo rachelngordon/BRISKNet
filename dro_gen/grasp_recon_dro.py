@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run a GRASP reconstruction for a DRO k-space .mat file using ESPIRiT csmaps.
+"""Run a GRASP reconstruction for a DRO k-space .mat file using ESPIRiT csmaps. Run: python3 dro_gen/grasp_recon_dro.py --help
 
 Example:
-  python grasp_recon_dro.py --sample-id sample_001 --spokes-per-frame 36
+  python3 dro_gen/grasp_recon_dro.py --sample-id sample_001 --spokes-per-frame 36
 """
 import argparse
 import json

@@ -1,3 +1,5 @@
+"""Build a summary table from inference metrics JSON logs. Run: python3 make_inference_table.py --help"""
+
 import argparse
 import json
 import os
@@ -8,7 +10,7 @@ import yaml
 
 
 SPATIAL_METRICS = ["ssim", "psnr", "mse", "lpips"]
-MC_METRICS = ["dro_dc_mae", "dro_dc_mse","raw_ssdu_nmse"]
+MC_METRICS = ["dro_dc_mae", "dro_dc_mse", "raw_ssdu_nmse"]
 TEMPORAL_METRICS = [
     "curve_corr",
     "curve_mae",

@@ -1,4 +1,4 @@
-"""Summarize lesion and laterality counts per split using DRO-to-fastMRI mappings."""
+"""Summarize lesion and laterality counts per split. Run: python3 data/data_split_stats.py"""
 
 import json
 import re

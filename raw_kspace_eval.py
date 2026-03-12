@@ -1,22 +1,18 @@
-import json
+"""Evaluate raw k-space recon and metrics for DL/GRASP baselines. Run: python3 raw_kspace_eval.py"""
+
+import glob
 import os
+import random
+
 import h5py
 import numpy as np
 import sigpy as sp
 import torch
-from sigpy.mri import app
-import cupy as cp
-from utils import prep_nufft, to_torch_complex, GRASPRecon, sliding_window_inference, load_checkpoint
-import yaml
-from lsfpnet_encoding import LSFPNet, ArtifactRemovalLSFPNet
-import math
-from radial_lsfp import MCNUFFT
-import time
 from einops import rearrange
-import matplotlib.pyplot as plt
+from sigpy.mri import app
+
 from eval import calc_dc
-import glob
-import random
+from utils import sliding_window_inference, to_torch_complex
 
 
 def get_traj(spokes_per_frame, csmaps=False, N_spokes=13, N_time=1, base_res=320, gind=1):

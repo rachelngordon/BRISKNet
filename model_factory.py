@@ -1,3 +1,5 @@
+"""Model factory helpers for constructing reconstruction networks. Run: imported by training/inference scripts (not intended to run directly)."""
+
 from __future__ import annotations
 
 from typing import Any

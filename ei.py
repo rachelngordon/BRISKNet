@@ -1,3 +1,5 @@
+"""Equivariant imaging loss utilities. Run: imported by training scripts (not intended to run directly)."""
+
 from typing import Union
 
 import torch

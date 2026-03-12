@@ -1,17 +1,21 @@
-import os
-import subprocess
-import matplotlib.pyplot as plt
-import torch
-import numpy as np
-from typing import Optional
-from einops import rearrange
-import torchkbnufft as tkbn
+"""Shared utilities for training, inference, and evaluation. Run: imported by other scripts (not intended to run directly)."""
+
 import csv
-import sigpy as sp
-from sigpy.mri import app
-from radial_lsfp import MCNUFFT
+import os
 import random
+import subprocess
+from typing import Optional
+
+import matplotlib.pyplot as plt
+import numpy as np
+import sigpy as sp
+import torch
+import torchkbnufft as tkbn
+from einops import rearrange
+from sigpy.mri import app
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+from radial_lsfp import MCNUFFT
 from transform import estimate_bolus_arrival_index
 
 

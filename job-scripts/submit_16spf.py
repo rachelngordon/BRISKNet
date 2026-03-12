@@ -1,7 +1,9 @@
+"""Submit a 16-spokes-per-frame training job via submitit. Run: python3 job-scripts/submit_16spf.py"""
+
+import os
+import subprocess
 
 import submitit
-import subprocess
-import os
 
 class Trainer(submitit.helpers.Checkpointable):
     """

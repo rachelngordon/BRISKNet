@@ -1,7 +1,8 @@
+"""Radial NUFFT helpers and complex tensor utilities. Run: imported by training/inference scripts (not intended to run directly)."""
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from time import time
 from einops import rearrange
 
 dtype = torch.complex64

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Plot enhancement-curve overlays for precomputed GRASP reconstructions.
+"""Plot enhancement-curve overlays for precomputed GRASP reconstructions. Run: python3 dro_gen/plot_grasp_lambda_sweep_overlay.py --help
 
 Example:
-  python plot_grasp_lambda_sweep_overlay.py --sample-id sample_001 --spf 36 --lamdas 0.001,0.002
+  python3 dro_gen/plot_grasp_lambda_sweep_overlay.py --sample-id sample_001 --spf 36 --lamdas 0.001,0.002
 """
 from __future__ import annotations
 

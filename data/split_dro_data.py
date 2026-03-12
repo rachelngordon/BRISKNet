@@ -1,4 +1,4 @@
-"""Create train/val/test splits with matching fastMRI and DRO sample IDs."""
+"""Create train/val/test splits with matching fastMRI and DRO sample IDs. Run: python3 data/split_dro_data.py"""
 
 import json
 import random

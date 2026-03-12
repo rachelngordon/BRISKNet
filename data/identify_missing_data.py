@@ -1,4 +1,4 @@
-"""List missing fastMRI IDs (1-300) based on files present in a directory."""
+"""List missing fastMRI IDs (1-300) based on files present in a directory. Run: python3 data/identify_missing_data.py"""
 
 import os
 

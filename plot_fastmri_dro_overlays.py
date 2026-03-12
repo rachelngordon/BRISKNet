@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
+"""Plot fastMRI DCE overlays with tumor masks across time. Run: python3 plot_fastmri_dro_overlays.py --help"""
+
 import argparse
 import csv
 import math
-import os
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import nibabel as nib
+import numpy as np
 from einops import rearrange
-import torch
 
 
 def parse_fastmri_id(raw_id: str) -> str:

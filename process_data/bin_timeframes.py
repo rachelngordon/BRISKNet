@@ -1,7 +1,10 @@
+"""Bin k-space spokes into time frames and save HDF5 outputs. Run: python3 process_data/bin_timeframes.py --help"""
+
+import argparse
+
+import h5py
 import numpy as np
 import sigpy as sp
-import h5py
-import argparse
 
 parser = argparse.ArgumentParser(description='Bin k-space time frames.')
 parser.add_argument('--spokes_per_frame', type=int, required=False, default=24, help='Number of spokes per timeframe')

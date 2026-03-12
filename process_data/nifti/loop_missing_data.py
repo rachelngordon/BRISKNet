@@ -1,4 +1,5 @@
-import os
+"""Run a batch NIfTI conversion loop for a hardcoded patient list. Run: python3 process_data/nifti/loop_missing_data.py"""
+
 import re
 import subprocess
 
@@ -25,7 +26,7 @@ base_dir = "/ess/scratch/scratch1/rachelgordon/fastMRI_breast_data"
 # Function to determine the parent directory based on the patient ID
 def get_parent_dir(patient):
     # Extract the numeric ID from the patient name
-    match = re.search(r'\d+', patient)
+    match = re.search(r"\d+", patient)
     if not match:
         raise ValueError(f"Invalid patient name format: {patient}")
 

@@ -1,10 +1,11 @@
+"""Convert processed HDF5 volumes into per-slice NIfTI files. Run: python3 process_data/nifti/nifti_recon.py --help"""
+
 import argparse
-from datetime import datetime, timedelta
-import h5py
 import os
-import pathlib
-import numpy as np
+
+import h5py
 import nibabel as nib
+import numpy as np
 
 if __name__ == "__main__":
 
@@ -60,7 +61,7 @@ if __name__ == "__main__":
 
 
     #R = np.squeeze(abs(R))
-    if args.keep_complex == False:
+    if not args.keep_complex:
         R = abs(R)
 
     R = np.flip(R, axis=(-2, -1))  # upward orientation
@@ -82,7 +83,7 @@ if __name__ == "__main__":
 
             # Create NIfTI image
 
-            if args.keep_complex == True:
+            if args.keep_complex:
                 # Split real and imaginary parts
                 real_part = np.real(R[z, t])
                 imag_part = np.imag(R[z, t])

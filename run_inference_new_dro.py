@@ -1,3 +1,5 @@
+"""Run DRO and non-DRO inference for one or more experiment checkpoints. Run: python3 run_inference_new_dro.py --help"""
+
 import argparse
 import csv
 import glob
@@ -24,7 +26,7 @@ import yaml
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from einops import rearrange
-from radial_lsfp import from_torch_complex, to_torch_complex
+from radial_lsfp import to_torch_complex
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SLICE_MAP_PATH, load_slice_map

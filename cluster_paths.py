@@ -1,3 +1,5 @@
+"""Cluster path normalization helpers. Run: imported by training/inference scripts (not intended to run directly)."""
+
 import os
 
 # Base directories for each cluster. The "code" base is used for config/output

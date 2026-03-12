@@ -1,8 +1,12 @@
+"""Compute the max magnitude across NIfTI files for SSIM scaling. Run: python3 process_data/data_splits/calc_max_mag.py --help"""
+
+import argparse
+import sys
+from pathlib import Path
+
 import nibabel as nib
 import numpy as np
-import argparse
-from pathlib import Path
-import sys
+
 try:
     from tqdm import tqdm
     USE_TQDM = True

@@ -1,17 +1,17 @@
-# grid_search.py
+"""Run a batched grid search split across multiple jobs. Run: python3 grid_search_batch.py --help"""
 
-import os
-import yaml
-import itertools
-import subprocess
-import pandas as pd
-import shutil
-from datetime import datetime
 import argparse
+import itertools
+import os
+import subprocess
+from datetime import datetime
+
+import pandas as pd
+import yaml
 
 def set_nested_value(d, key_path, value):
     """Sets a value in a nested dictionary using a dot-separated path."""
-    keys = key_path.split('.')
+    keys = key_path.split(".")
     for i, key in enumerate(keys[:-1]):
         if key not in d:
             d[key] = {}
@@ -51,19 +51,19 @@ def parse_results(exp_output_dir):
     
     if not os.path.exists(results_file):
         print(f"Warning: Results file not found at {results_file}")
-        return {'ssim': float('nan'), 'psnr': float('nan')} # Return NaN for failed runs
+        return {"ssim": float("nan"), "psnr": float("nan")}  # Return NaN for failed runs
         
     try:
         df = pd.read_csv(results_file)
         # Assuming the DL model's metrics are in the second row (index 1)
         dl_metrics = df.iloc[0]
         # Assuming the format is like '0.9123 ± 0.0123', we take the mean value
-        ssim = float(dl_metrics['SSIM'].split('±')[0].strip())
-        psnr = float(dl_metrics['PSNR'].split('±')[0].strip())
-        return {'ssim': ssim, 'psnr': psnr}
+        ssim = float(dl_metrics["SSIM"].split("±")[0].strip())
+        psnr = float(dl_metrics["PSNR"].split("±")[0].strip())
+        return {"ssim": ssim, "psnr": psnr}
     except Exception as e:
         print(f"Error parsing results file {results_file}: {e}")
-        return {'ssim': float('nan'), 'psnr': float('nan')}
+        return {"ssim": float("nan"), "psnr": float("nan")}
 
 
 
@@ -72,8 +72,18 @@ def main():
 
     # --- NEW: Add argument parsing ---
     parser = argparse.ArgumentParser(description="Run a batch of a grid search.")
-    parser.add_argument('--total-batches', type=int, required=True, help='The total number of batches to split the grid into.')
-    parser.add_argument('--current-batch', type=int, required=True, help='The index of the batch to run (0-indexed).')
+    parser.add_argument(
+        "--total-batches",
+        type=int,
+        required=True,
+        help="The total number of batches to split the grid into.",
+    )
+    parser.add_argument(
+        "--current-batch",
+        type=int,
+        required=True,
+        help="The index of the batch to run (0-indexed).",
+    )
     args = parser.parse_args()
 
     # 1. DEFINE THE HYPERPARAMETER GRID (as before)

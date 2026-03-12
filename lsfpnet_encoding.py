@@ -1,12 +1,14 @@
+"""LSFPNet encoding and auxiliary model components. Run: imported by training/inference scripts (not intended to run directly)."""
+
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
 import torch
 import torch.nn as nn
 from torch.nn import init
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from lsp import Project_inf, Wxs, Wtxs
-from time import time
 from einops import rearrange
 import matplotlib.pyplot as plt
 import numpy as np

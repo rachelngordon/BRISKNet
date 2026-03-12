@@ -1,3 +1,5 @@
+"""Plot subtraction maps for raw vs GRASP reconstructions. Run: python3 raw_grasp_subtraction_plots.py (edit user inputs)"""
+
 import json
 import os
 

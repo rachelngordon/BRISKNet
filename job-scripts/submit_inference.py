@@ -1,6 +1,9 @@
-import submitit
-import subprocess
+"""Submit inference jobs via submitit for one or more experiments. Run: python3 job-scripts/submit_inference.py"""
+
 import os
+import subprocess
+
+import submitit
 
 
 class InferenceBatch(submitit.helpers.Checkpointable):

@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
+"""Compare aggregate (mean) metrics between two CSVs. Run: python3 compare_metrics.py --help"""
+
 import argparse
 import csv
 import math
 from typing import Dict, List, Tuple
-
-
-def _is_number(x: str) -> bool:
-    try:
-        float(x)
-        return True
-    except (TypeError, ValueError):
-        return False
 
 
 def load_metrics(csv_path: str) -> Tuple[List[str], Dict[str, List[float]]]:
@@ -49,15 +43,15 @@ def format_val(v: float, ndigits: int = 6) -> str:
 
 
 def main():
-    ap = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="Compare aggregate (mean) metrics between two CSVs."
     )
-    ap.add_argument("--csv1", required=True, help="Path to first CSV.")
-    ap.add_argument("--label1", required=True, help="Column label for first CSV.")
-    ap.add_argument("--csv2", required=True, help="Path to second CSV.")
-    ap.add_argument("--label2", required=True, help="Column label for second CSV.")
-    ap.add_argument("--ndigits", type=int, default=6, help="Decimal places to show.")
-    args = ap.parse_args()
+    parser.add_argument("--csv1", required=True, help="Path to first CSV.")
+    parser.add_argument("--label1", required=True, help="Column label for first CSV.")
+    parser.add_argument("--csv2", required=True, help="Path to second CSV.")
+    parser.add_argument("--label2", required=True, help="Column label for second CSV.")
+    parser.add_argument("--ndigits", type=int, default=6, help="Decimal places to show.")
+    args = parser.parse_args()
 
     keys1, metrics1 = load_metrics(args.csv1)
     keys2, metrics2 = load_metrics(args.csv2)

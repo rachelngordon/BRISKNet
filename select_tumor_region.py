@@ -1,8 +1,11 @@
+"""Visualize largest tumor component overlays for a sample slice. Run: python3 select_tumor_region.py"""
+
 from pathlib import Path
-import numpy as np
-import nibabel as nib
-from scipy.ndimage import label
+
 import matplotlib.pyplot as plt
+import nibabel as nib
+import numpy as np
+from scipy.ndimage import label
 
 SEG_ROOT = Path("/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations")
 DATA_ROOT = SEG_ROOT.parent

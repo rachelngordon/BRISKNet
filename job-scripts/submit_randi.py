@@ -1,7 +1,9 @@
+"""Submit a training job on the Randi cluster via submitit. Run: python3 job-scripts/submit_randi.py"""
+
+import os
+import subprocess
 
 import submitit
-import subprocess
-import os
 
 class Trainer(submitit.helpers.Checkpointable):
     """

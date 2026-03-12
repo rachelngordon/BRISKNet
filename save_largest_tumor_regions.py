@@ -1,8 +1,10 @@
+"""Save largest tumor components and write slice indices CSV. Run: python3 save_largest_tumor_regions.py"""
+
 from pathlib import Path
 
+import csv
 import nibabel as nib
 import numpy as np
-import csv
 from scipy.ndimage import label
 
 # Source and destination directories

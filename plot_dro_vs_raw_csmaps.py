@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Plot DRO vs raw fastMRI coil sensitivity maps by slice. Run: python3 plot_dro_vs_raw_csmaps.py --help"""
 import argparse
 import csv
 import re

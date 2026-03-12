@@ -1,3 +1,5 @@
+"""Plot non-DRO raw reconstructions and tumor overlays. Run: python3 raw_non_dro_plots.py (edit user inputs)"""
+
 import json
 import os
 

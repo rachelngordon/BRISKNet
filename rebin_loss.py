@@ -1,3 +1,5 @@
+"""Rebinning consistency loss utilities. Run: imported by training scripts (not intended to run directly)."""
+
 from __future__ import annotations
 
 import re

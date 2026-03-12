@@ -1,36 +1,31 @@
-import os
+"""Evaluation metrics, plots, and utilities. Run: imported by training/inference scripts (not intended to run directly)."""
+
 import csv
+import os
 import warnings
-from pathlib import Path
-import matplotlib.pyplot as plt
-import torch
-from einops import rearrange
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-import numpy as np
-import torchmetrics
-import time
-from dataloader import SimulatedDataset
-from lsfpnet_encoding import to_torch_complex, from_torch_complex
-from radial_lsfp import MCNUFFT
-import numpy as np
-from scipy.optimize import curve_fit
-from transform import estimate_bolus_arrival_index
-from scipy.interpolate import PchipInterpolator
-from tqdm import tqdm # A library for a nice progress bar
-from scipy.stats import mannwhitneyu
-from skimage.metrics import structural_similarity as ssim_map_func
-import matplotlib.gridspec as gridspec
-from skimage.measure import find_contours
-from typing import List, Dict, Optional, Tuple, Callable
-from scipy.stats import pearsonr
-import nibabel as nib
-import pandas as pd
 from functools import lru_cache
-from cluster_paths import _swap_base
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple
+
+import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+import nibabel as nib
+import numpy as np
+import pandas as pd
+import torch
+import torchmetrics
+from einops import rearrange
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.ndimage import binary_fill_holes, label as nd_label
+from scipy.stats import pearsonr
 from skimage.filters import threshold_otsu
+from skimage.measure import find_contours
+from skimage.metrics import structural_similarity as ssim_map_func
+
+from cluster_paths import _swap_base
+from lsfpnet_encoding import to_torch_complex, from_torch_complex
+from radial_lsfp import MCNUFFT
+from transform import estimate_bolus_arrival_index
 
 
 

@@ -1,4 +1,4 @@
-"""Map fastMRI patient splits to DRO sample IDs and report overlap."""
+"""Map fastMRI patient splits to DRO sample IDs and report overlap. Run: python3 data/get_patient_overlap.py"""
 
 import json
 

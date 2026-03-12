@@ -1,5 +1,8 @@
+"""Submit a multi-node 16-spokes-per-frame training job via submitit. Run: python3 job-scripts/submit_16spf_multinode.py"""
+
 import os
 import subprocess
+
 import submitit
 
 

@@ -1,5 +1,8 @@
-import os
+"""Resample a stack of NIfTI slices to a target slice count. Run: python3 process_data/dro_matching/resample_slices.py (edit paths at bottom)"""
+
 import glob
+import os
+
 import nibabel as nib
 import numpy as np
 from scipy.ndimage import zoom

@@ -1,3 +1,5 @@
+"""Plot panel utilities for metric overlays. Run: imported by plotting scripts (not intended to run directly)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

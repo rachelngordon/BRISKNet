@@ -1,7 +1,10 @@
-import torch
-import torch.nn as nn
+"""Noise model utilities. Run: imported by training scripts (not intended to run directly)."""
+
 from typing import Callable
 import warnings
+
+import torch
+import torch.nn as nn
 
 
 class NoiseModel(nn.Module):

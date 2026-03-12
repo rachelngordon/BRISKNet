@@ -1,16 +1,16 @@
-# grid_search.py
+"""Run a local hyperparameter grid search and summarize results. Run: python3 grid_search.py"""
 
-import os
-import yaml
 import itertools
+import os
 import subprocess
-import pandas as pd
-import shutil
 from datetime import datetime
+
+import pandas as pd
+import yaml
 
 def set_nested_value(d, key_path, value):
     """Sets a value in a nested dictionary using a dot-separated path."""
-    keys = key_path.split('.')
+    keys = key_path.split(".")
     for i, key in enumerate(keys[:-1]):
         if key not in d:
             d[key] = {}

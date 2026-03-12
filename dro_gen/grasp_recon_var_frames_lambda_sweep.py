@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Sweep GRASP lambda values for one sample/SPF and plot enhancement curves.
+"""Sweep GRASP lambda values for one sample/SPF and plot enhancement curves. Run: python3 dro_gen/grasp_recon_var_frames_lambda_sweep.py --help
 
 Example:
-  python grasp_recon_var_frames_lambda_sweep.py --sample-id sample_001 --spf 36 --lamdas 0.001,0.002
+  python3 dro_gen/grasp_recon_var_frames_lambda_sweep.py --sample-id sample_001 --spf 36 --lamdas 0.001,0.002
 """
 from __future__ import annotations
 

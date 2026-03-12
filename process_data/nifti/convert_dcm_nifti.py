@@ -1,8 +1,10 @@
+"""Convert DICOM folders to NIfTI files. Run: python3 process_data/nifti/convert_dcm_nifti.py (edit paths at bottom)"""
+
 import os
+
 import nibabel as nib
 import numpy as np
 import pydicom
-from pydicom import dcmread
 
 def convert_dicom_to_nifti(input_dir, output_dir):
     print(f"Processing input directory: {input_dir}")

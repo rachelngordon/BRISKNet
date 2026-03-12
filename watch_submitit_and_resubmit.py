@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Watch submitit logs and resubmit failed jobs. Run: python3 watch_submitit_and_resubmit.py --help"""
 import argparse
 import glob
 import json

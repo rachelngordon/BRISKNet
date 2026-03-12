@@ -1,6 +1,9 @@
+"""Undersample k-space HDF5 files by random spoke masking. Run: python3 process_data/nifti/undersample_data.py"""
+
+import os
+
 import h5py
 import numpy as np
-import os
 
 def process_file(file_path, output_dir, percentage_to_keep=0.1):
     """

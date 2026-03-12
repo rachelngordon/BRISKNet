@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Overlay evaluation metrics from multiple experiments. Run: python3 overlay_metrics.py --help"""
 import argparse
 import glob
 import json

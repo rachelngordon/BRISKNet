@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Compute ESPIRiT coil maps from DRO k-space .mat files.
+"""Compute ESPIRiT coil maps from DRO k-space .mat files. Run: python3 dro_gen/get_espirit_maps_new_dro.py --help
 
 Example:
-  python get_espirit_maps_new_dro.py --root_dir /path/to/dro --spokes_per_frame 36
+  python3 dro_gen/get_espirit_maps_new_dro.py --root_dir /path/to/dro --spokes_per_frame 36
 """
 import argparse
 import glob

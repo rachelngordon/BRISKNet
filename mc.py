@@ -1,9 +1,10 @@
+"""Measurement-consistency loss for k-space supervision. Run: imported by training scripts (not intended to run directly)."""
+
 from typing import Union
 
 import torch
 from deepinv.loss.loss import Loss
 from deepinv.loss.metric.metric import Metric
-from deepinv.transform.base import Transform
 from radial_lsfp import to_torch_complex
 
 
