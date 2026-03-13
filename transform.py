@@ -8,30 +8,6 @@ import torch.nn.functional as F
 from deepinv.transform import Transform
 
 
-
-# class VideoRotate(dinv.transform.Rotate):
-#     """A Rotate transform that correctly handles 5D video tensors by flattening time into the batch dimension."""
-
-#     def _transform(self, x: torch.Tensor, **params) -> torch.Tensor:
-#         # First, check if we even need to flatten. If it's already 4D, just rotate.
-#         if not self._check_x_5D(x):
-#             return super()._transform(x, **params)
-
-#         # It's a 5D video tensor. Flatten time into the batch dimension.
-#         B = x.shape[0]
-#         x_flat = dinv.physics.TimeMixin.flatten(x)  # (B, C, T, H, W) -> (B*T, C, H, W)
-
-#         # The parent's _transform method can now work correctly on the 4D tensor (batch of 2D images).
-#         # We need to get the right parameters for this new batch size.
-#         # The `get_params` is usually called before `_transform`, so we should be okay.
-#         # However, to be safe, let's pass a modified params dictionary.
-#         flat_params = self.get_params(x_flat)
-
-#         transformed_flat = super()._transform(x_flat, **flat_params)
-
-#         # Unflatten to restore the original 5D video shape.
-#         return dinv.physics.TimeMixin.unflatten(transformed_flat, batch_size=B)
-
 class VideoRotate(Transform):
     r"""
     CORRECTED 2D Rotation for Videos (Handles deepinv composition).
