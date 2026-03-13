@@ -19,7 +19,7 @@ class InferenceBatch(submitit.helpers.Checkpointable):
         command_str = (
             f"source {micromamba_path} && "
             f"micromamba activate {env_name} && "
-            f"python run_inference_new_dro.py "
+            f"python -m inference.run_inference_new_dro "
             f"--exp_dir {self.exp_names} "
             f"{extra}"
         )

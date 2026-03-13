@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot BriskNet vs GRASP center comparisons for DRO data. Run: python3 plot_brisknet_grasp_center_compare.py --help"""
+"""Plot BriskNet vs GRASP center comparisons for DRO data. Run: python3 -m inference.plot_brisknet_grasp_center_compare --help"""
 import argparse
 import json
 import math
@@ -20,9 +20,9 @@ from matplotlib.lines import Line2D
 from skimage.measure import find_contours, label
 
 from cluster_paths import apply_cluster_paths
-from eval import _resolve_baseline_frames, _load_tumor_mask
+from inference.eval import _resolve_baseline_frames, _load_tumor_mask
 from radial_lsfp import MCNUFFT
-from run_inference_new_dro import (
+from inference.run_inference_new_dro import (
     NewDROMatDataset,
     _build_model,
     _grasp_np_to_torch,

@@ -1,4 +1,4 @@
-"""Plot inference metric summaries from JSON logs. Run: python3 plot_inference_metrics.py --help"""
+"""Plot inference metric summaries from JSON logs. Run: python3 -m inference.plot_inference_metrics --help"""
 
 import argparse
 import json

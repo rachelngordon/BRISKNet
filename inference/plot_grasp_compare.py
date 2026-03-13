@@ -1,4 +1,4 @@
-"""Compare GRASP reconstructions across different spokes/frame settings. Run: python3 plot_grasp_compare.py"""
+"""Compare GRASP reconstructions across different spokes/frame settings. Run: python3 -m inference.plot_grasp_compare"""
 import os
 import re
 import numpy as np

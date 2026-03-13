@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare aggregate (mean) metrics between two CSVs. Run: python3 compare_metrics.py --help"""
+"""Compare aggregate (mean) metrics between two CSVs. Run: python3 -m inference.compare_metrics --help"""
 
 import argparse
 import csv

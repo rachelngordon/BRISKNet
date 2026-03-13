@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot fastMRI DCE overlays with tumor masks across time. Run: python3 plot_fastmri_dro_overlays.py --help"""
+"""Plot fastMRI DCE overlays with tumor masks across time. Run: python3 -m inference.plot_fastmri_dro_overlays --help"""
 
 import argparse
 import csv

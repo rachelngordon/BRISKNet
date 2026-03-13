@@ -1,4 +1,4 @@
-"""Build a summary table from inference metrics JSON logs. Run: python3 make_inference_table.py --help"""
+"""Build a summary table from inference metrics JSON logs. Run: python3 -m inference.make_inference_table --help"""
 
 import argparse
 import json

@@ -1,4 +1,4 @@
-"""Run GRASP recon for the largest-tumor slices listed in a CSV. Run: python3 grasp_recon_largest_slices.py --help"""
+"""Run GRASP recon for the largest-tumor slices listed in a CSV. Run: python3 -m inference.grasp_recon_largest_slices --help"""
 
 import argparse
 import csv
@@ -9,7 +9,7 @@ import numpy as np
 import sigpy as sp
 import torch
 
-from raw_kspace_eval import process_kspace, raw_grasp_recon
+from inference.raw_kspace_eval import process_kspace, raw_grasp_recon
 
 
 def normalize_patient_id(pid: str) -> str:

@@ -1,4 +1,4 @@
-"""Plot non-DRO raw reconstructions and tumor overlays. Run: python3 raw_non_dro_plots.py (edit user inputs)"""
+"""Plot non-DRO raw reconstructions and tumor overlays. Run: python3 -m inference.raw_non_dro_plots (edit user inputs)"""
 
 import json
 import os
@@ -12,7 +12,7 @@ from skimage.measure import find_contours
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SimulatedDataset
-from eval import _get_patient_id_from_grasp_path, _load_slice_map, _load_tumor_mask
+from inference.eval import _get_patient_id_from_grasp_path, _load_slice_map, _load_tumor_mask
 from radial_lsfp import MCNUFFT
 from run_inference import _build_model, _load_weights, _resolve_eval_params
 from utils import prep_nufft, set_seed, sliding_window_inference, to_torch_complex

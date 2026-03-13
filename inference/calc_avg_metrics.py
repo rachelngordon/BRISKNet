@@ -1,4 +1,4 @@
-"""Summarize mean metrics from a CSV and save category averages. Run: python3 calc_avg_metrics.py (edit csv_path inside)"""
+"""Summarize mean metrics from a CSV and save category averages. Run: python3 -m inference.calc_avg_metrics (edit csv_path inside)"""
 
 from pathlib import Path
 

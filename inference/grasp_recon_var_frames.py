@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run GRASP reconstructions for DRO variable-frame samples using precomputed k-space and ESPIRiT csmaps. Run: python3 grasp_recon_var_frames.py --help"""
+"""Run GRASP reconstructions for DRO variable-frame samples using precomputed k-space and ESPIRiT csmaps. Run: python3 -m inference.grasp_recon_var_frames --help"""
 from __future__ import annotations
 
 import argparse

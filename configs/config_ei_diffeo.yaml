@@ -88,10 +88,6 @@ model:
       weight: 10000
       warmup: 10
       duration: 5
-      subsample_ratio_min: 0.7
-      subsample_ratio_max: 0.95
-      warp_ratio_min: 0.6
-      warp_ratio_max: 0.95
       no_grad: false
   norm: "both"
 

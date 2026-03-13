@@ -1,4 +1,4 @@
-"""Time BRISKNet vs GRASP reconstructions on raw fastMRI validation slices. Run: python3 time_raw_inference_slice.py --help
+"""Time BRISKNet vs GRASP reconstructions on raw fastMRI validation slices. Run: python3 -m inference.time_raw_inference_slice --help
 
 This script:
   - Loads the 15 validation IDs from data/data_split.json ("val").

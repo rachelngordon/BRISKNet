@@ -1,4 +1,4 @@
-"""Plot a row of temporal metrics from inference logs. Run: python3 plot_temporal_metrics_row.py --help"""
+"""Plot a row of temporal metrics from inference logs. Run: python3 -m inference.plot_temporal_metrics_row --help"""
 
 import argparse
 import json

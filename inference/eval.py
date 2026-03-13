@@ -32,7 +32,8 @@ from transform import estimate_bolus_arrival_index
 TUMOR_SEG_ROOT = os.environ.get("TUMOR_SEG_ROOT", "/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations_lcr")
 TUMOR_SEG_WARN = os.environ.get("TUMOR_SEG_WARN", "1") not in ("0", "false", "False")
 _MISSING_TUMOR_SEGS = set()
-SLICE_MAP_PATH = Path(__file__).resolve().parent / "data" / "largest_tumor_slices.csv"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SLICE_MAP_PATH = REPO_ROOT / "data" / "largest_tumor_slices.csv"
 
 # Plot styling 
 PLOT_FONT_SIZES = {

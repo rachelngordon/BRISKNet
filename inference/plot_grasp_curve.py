@@ -1,4 +1,4 @@
-"""Plot GRASP enhancement curves for a DRO sample. Run: python3 plot_grasp_curve.py --help"""
+"""Plot GRASP enhancement curves for a DRO sample. Run: python3 -m inference.plot_grasp_curve --help"""
 
 import argparse
 import glob

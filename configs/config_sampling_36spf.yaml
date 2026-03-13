@@ -95,10 +95,6 @@ model:
       weight: 10000
       warmup: 0
       duration: 40
-      subsample_ratio_min: 0.7
-      subsample_ratio_max: 0.95
-      warp_ratio_min: 0.6
-      warp_ratio_max: 0.95
       # --- arrival_shift params ---
       arrival_shift_max_shift: 1
       arrival_shift_percentile: 0.95

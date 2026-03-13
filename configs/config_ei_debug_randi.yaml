@@ -89,10 +89,6 @@ model:
       weight: 10000
       warmup: 20
       duration: 5
-      subsample_ratio_min: 0.7
-      subsample_ratio_max: 0.95
-      warp_ratio_min: 0.6
-      warp_ratio_max: 0.95
       pre_contrast_baseline: "m_seconds"
       baseline_seconds: 20.0
       total_seconds: 150.0

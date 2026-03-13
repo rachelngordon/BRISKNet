@@ -1,4 +1,4 @@
-"""Compute and plot GRASP MSE versus temporal resolution. Run: python3 plot_grasp_mse.py"""
+"""Compute and plot GRASP MSE versus temporal resolution. Run: python3 -m inference.plot_grasp_mse"""
 
 import json
 import os
@@ -9,7 +9,7 @@ import numpy as np
 from einops import rearrange
 from radial_lsfp import MCNUFFT
 from dataloader import SimulatedSPFDataset
-from eval import eval_grasp
+from inference.eval import eval_grasp
 from utils import prep_nufft
 import seaborn as sns
 

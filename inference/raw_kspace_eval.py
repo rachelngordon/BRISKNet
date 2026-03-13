@@ -1,4 +1,4 @@
-"""Evaluate raw k-space recon and metrics for DL/GRASP baselines. Run: python3 raw_kspace_eval.py"""
+"""Evaluate raw k-space recon and metrics for DL/GRASP baselines. Run: python3 -m inference.raw_kspace_eval"""
 
 import glob
 import os
@@ -11,7 +11,7 @@ import torch
 from einops import rearrange
 from sigpy.mri import app
 
-from eval import calc_dc
+from inference.eval import calc_dc
 from utils import sliding_window_inference, to_torch_complex
 
 

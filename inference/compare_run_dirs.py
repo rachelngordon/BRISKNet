@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Overlay eval and loss curves from two experiment output directories. Run: python3 compare_run_dirs.py --help"""
+"""Overlay eval and loss curves from two experiment output directories. Run: python3 -m inference.compare_run_dirs --help"""
 
 import argparse
 import glob

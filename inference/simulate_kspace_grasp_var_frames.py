@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loop over DRO variable-frame samples, simulate k-space, and compute/load ESPIRiT csmaps. Run: python3 simulate_kspace_grasp_var_frames.py --help"""
+"""Loop over DRO variable-frame samples, simulate k-space, and compute/load ESPIRiT csmaps. Run: python3 -m inference.simulate_kspace_grasp_var_frames --help"""
 from __future__ import annotations
 
 import argparse

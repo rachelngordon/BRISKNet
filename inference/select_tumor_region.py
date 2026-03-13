@@ -1,4 +1,4 @@
-"""Visualize largest tumor component overlays for a sample slice. Run: python3 select_tumor_region.py"""
+"""Visualize largest tumor component overlays for a sample slice. Run: python3 -m inference.select_tumor_region"""
 
 from pathlib import Path
 

@@ -15,11 +15,6 @@ import numpy as np
 from transform import (
     VideoRotate,
     VideoDiffeo,
-    SubsampleTime,
-    MonophasicTimeWarp,
-    TemporalShiftJitterAfterBaseline,
-    TemporalNoise,
-    TimeReverse,
     BolusArrivalTimeShift,
     BaselineEnhancementScale,
 )
@@ -28,7 +23,7 @@ from mc import MCLoss
 from model_factory import build_recon_model, is_lsfp_model
 from radial_lsfp import MCNUFFT
 from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, sliding_window_inference, set_seed, save_csmap_png
-from eval import eval_grasp, eval_sample, compute_ssdu_kspace_nmse
+from inference.eval import eval_grasp, eval_sample, compute_ssdu_kspace_nmse
 import csv
 import math
 import random
@@ -1521,31 +1516,6 @@ def main():
     if use_ei_loss:
         rotate = VideoRotate(n_trans=1, interpolation_mode="bilinear", degrees=config['model']['losses']['ei_loss'].get("rotate_range", 180))
         diffeo = VideoDiffeo(n_trans=1, device=device)
-
-        subsample = SubsampleTime(
-            n_trans=1,
-            subsample_ratio_range=(
-                config['model']['losses']['ei_loss'].get("subsample_ratio_min", 0.7),
-                config['model']['losses']['ei_loss'].get("subsample_ratio_max", 0.95),
-            ),
-        )
-        monophasic_warp = MonophasicTimeWarp(
-            n_trans=1,
-            warp_ratio_range=(
-                config['model']['losses']['ei_loss'].get("warp_ratio_min", 0.7),
-                config['model']['losses']['ei_loss'].get("warp_ratio_max", 1.3),
-            ),
-            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
-            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
-            buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
-        )
-        shift_jitter = TemporalShiftJitterAfterBaseline(
-            n_trans=1,
-            max_shift=config['model']['losses']['ei_loss'].get("shift_jitter_max_shift", 2),
-            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
-            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
-            buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
-        )
         arrival_shift = BolusArrivalTimeShift(
             n_trans=1,
             max_shift=config['model']['losses']['ei_loss'].get("arrival_shift_max_shift", 2),
@@ -1573,25 +1543,8 @@ def main():
             arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
             arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
         )
-        temp_noise = TemporalNoise(n_trans=1, noise_strength=config['model']['losses']['ei_loss'].get("noise_strength", 0.5))
-        time_reverse = TimeReverse(n_trans=1)
 
-        if config['model']['losses']['ei_loss']['temporal_transform'] == "subsample":
-            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(subsample, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            else:
-                ei_loss_fn = EILoss(subsample | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp":
-            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(monophasic_warp, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            else:
-                ei_loss_fn = EILoss(monophasic_warp | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "shift_jitter":
-            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(shift_jitter, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            else:
-                ei_loss_fn = EILoss(shift_jitter | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift":
+        if config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
                 ei_loss_fn = EILoss(arrival_shift, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
@@ -1602,11 +1555,10 @@ def main():
             else:
                 ei_loss_fn = EILoss(enh_scale | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift_enh_scale":
-            ei_loss_fn = EILoss((arrival_shift | enh_scale) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "noise":
-            ei_loss_fn = EILoss(temp_noise, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "warp_subsample":
-            ei_loss_fn = EILoss((subsample | monophasic_warp) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
+                ei_loss_fn = EILoss(arrival_shift | enh_scale, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
+            else:
+                ei_loss_fn = EILoss((arrival_shift | enh_scale) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         elif config['model']['losses']['ei_loss']['temporal_transform'] == "none":
             if config['model']['losses']['ei_loss']['spatial_transform'] == "rotate":
                 ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
@@ -1614,11 +1566,11 @@ def main():
                 ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
             else:
                 ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['spatial_transform'] == "all":
-            if config['model']['losses']['ei_loss']['temporal_transform'] == "all":
-                ei_loss_fn = EILoss((subsample | monophasic_warp | temp_noise) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
         else:
-            raise(ValueError, "Unsupported Temporal Transform.")
+            raise ValueError(
+                "Unsupported temporal transform. Supported: arrival_shift, enh_scale, "
+                "arrival_shift_enh_scale, none."
+            )
 
 
 

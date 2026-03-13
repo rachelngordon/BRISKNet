@@ -95,13 +95,9 @@ model:
       pre_contrast_baseline: m_seconds
       rotate_range: 0
       spatial_transform: diffeo
-      subsample_ratio_max: 0.95
-      subsample_ratio_min: 0.7
       temporal_transform: arrival_shift_enh_scale
       total_seconds: 150.0
       warmup: 0
-      warp_ratio_max: 0.95
-      warp_ratio_min: 0.6
       weight: 10000
     mc_loss:
       metric: MAE

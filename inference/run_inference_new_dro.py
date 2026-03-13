@@ -1,4 +1,4 @@
-"""Run DRO and non-DRO inference for one or more experiment checkpoints. Run: python3 run_inference_new_dro.py --help"""
+"""Run DRO and non-DRO inference for one or more experiment checkpoints. Run: python3 -m inference.run_inference_new_dro --help"""
 
 import argparse
 import csv
@@ -12,6 +12,7 @@ import statistics
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Tuple
 
 import matplotlib
@@ -30,7 +31,7 @@ from radial_lsfp import to_torch_complex
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SLICE_MAP_PATH, load_slice_map
-from eval import (
+from inference.eval import (
     eval_grasp,
     eval_sample,
     eval_zf,
@@ -59,6 +60,8 @@ warnings.filterwarnings(
     message=r"You are using `torch\.load` with `weights_only=False`.*",
     category=FutureWarning,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _h5py_float_dtype(type_id: h5t.TypeID) -> np.dtype:
@@ -2690,7 +2693,7 @@ def main():
             f"Inference timing (recon only, {infer_mode}): "
             f"{mean_infer:.3f}s ± {std_infer:.3f}s per sample"
         )
-        results_dir = os.path.join(os.path.dirname(__file__), "results")
+        results_dir = os.path.join(REPO_ROOT, "results")
         os.makedirs(results_dir, exist_ok=True)
         times_path = os.path.join(results_dir, "inference_times")
         write_header = not os.path.exists(times_path)
@@ -3148,7 +3151,7 @@ def main():
     if args.store_logs:
         log_path = args.log_file
         if not os.path.isabs(log_path):
-            log_path = os.path.join(os.path.dirname(__file__), log_path)
+            log_path = os.path.join(REPO_ROOT, log_path)
         accel_factor = float(acceleration_val.item())
         seconds_per_frame = (
             float(args.total_scan_seconds) / float(N_time_eval - 1)
