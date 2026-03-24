@@ -23,3 +23,5 @@ data/split/get_patient_overlap.py
 data/split/identify_missing_data.py
 data/split/split_dro_data.py
 data/split/largest_tumor_slices.csv
+dro/plot_*
+dro/*lambda_sweep*
