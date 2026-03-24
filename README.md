@@ -53,17 +53,14 @@ Example:
 ```
 
 OUT_PATH is the directory where the complex-valued zero-filled k-space will be saved
-
-NUM_SLICES is the number of slices to process 
+NUM_SLICES is the number of slices to process (we use 192)
 
 Code is adapted from the [fastMRI preprocessing pipeline](https://github.com/eddysolo/demo_dce_recon).
 
 ## Training
 
 The model architecture is adapted from [LSFP-Net](https://github.com/aaronfeng369/LSFP-Net/tree/LSFP-Net) (Zhao et al., 2023).
-
 Loss constraints are adapted from [DDEI](https://github.com/Andrewwango/ddei) (Wang et al., 2025).
-
 Transformations use the [DeepInverse](https://deepinv.github.io/deepinv/) library.
 
 Run training:
@@ -96,13 +93,10 @@ Aggregated metrics saved to the log file.
   year={2025}
 } -->
 
-Solomon et al., fastMRI Breast dataset, 2025
-
-Bae et al., Digital Reference Object Toolkit, 2024
-
-He et al., LSFPNet, Nature Communications, 2023
-
-Wang & Davies, Fully Unsupervised Dynamic MRI Reconstruction via Diffeo-Temporal Equivariance, ISBI 2025
+- Solomon et al., fastMRI Breast dataset, 2025
+- Bae et al., Digital Reference Object Toolkit, 2024
+- He et al., LSFPNet, Nature Communications, 2023
+- Wang & Davies, Fully Unsupervised Dynamic MRI Reconstruction via Diffeo-Temporal Equivariance, ISBI 2025
 
 
 <!-- ReconResNet code is adapted from: https://github.com/soumickmj/NCC1701/tree/main
