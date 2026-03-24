@@ -15,7 +15,7 @@ from einops import rearrange
 from sigpy.mri import app
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from radial_lsfp import MCNUFFT
+from radial import MCNUFFT
 from transform import estimate_bolus_arrival_index
 
 

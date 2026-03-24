@@ -23,7 +23,7 @@ from transform import (
 from ei import EILoss
 from mc import MCLoss
 from model_factory import build_recon_model, is_lsfp_model
-from radial_lsfp import MCNUFFT
+from radial import MCNUFFT
 from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, sliding_window_inference, set_seed, save_csmap_png
 from inference.eval import eval_grasp, eval_sample, compute_ssdu_kspace_nmse
 import csv
@@ -33,7 +33,7 @@ import time
 import threading
 import atexit
 import seaborn as sns
-from rebin_loss import RebinConsistencyLoss
+from rebin import RebinConsistencyLoss
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler

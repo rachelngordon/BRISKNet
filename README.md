@@ -66,7 +66,7 @@ Transformations use the [DeepInverse](https://deepinv.github.io/deepinv/) librar
 Run training:
 
 ```bash
-python train_zf.py \
+python train.py \
     --exp_name {EXP_NAME} \
     --config configs/example_config.yaml
 ```

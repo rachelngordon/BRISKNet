@@ -64,7 +64,7 @@ def _maybe_set_distributed_env():
 
 def main():
     _maybe_set_distributed_env()
-    from train_zf import main as train_main
+    from train import main as train_main
 
     train_main()
 
