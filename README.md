@@ -44,7 +44,7 @@ external/
 bash process_all_data.sh {BASE_PATH} {OUT_PATH} {NUM_SLICES}
 ```
 
-BASE_PATH is the directory containing raw fastMRI breast data. 
+- BASE_PATH is the directory containing raw fastMRI breast data. 
 
 Example:
 
@@ -52,8 +52,8 @@ Example:
 .../fastMRI_breast_data/fastMRI_breast_IDS_
 ```
 
-OUT_PATH is the directory where the complex-valued zero-filled k-space will be saved
-NUM_SLICES is the number of slices to process (we use 192)
+- OUT_PATH is the directory where the complex-valued zero-filled k-space will be saved
+- NUM_SLICES is the number of slices to process (we use 192)
 
 Code is adapted from the [fastMRI preprocessing pipeline](https://github.com/eddysolo/demo_dce_recon).
 
