@@ -53,11 +53,11 @@ Spatial transformations are adapted from: https://deepinv.github.io/deepinv/ -->
 
 This repository contains the official code for **BRISKNet**, an unsupervised, physics-informed framework for multi-coil radial breast DCE-MRI reconstruction.
 
-The method is described in the paper:
+<!-- The method is described in the paper:
 
 > BRISKNet: Breast Rapid Imaging via Self-Supervised Kinetics
 
----
+--- -->
 
 ## Environment Setup
 
@@ -74,8 +74,7 @@ micromamba activate recon_mri
 
 ## Dataset
 
-We use the fastMRI breast dataset from Solomon et al. (2024), available at:
-https://fastmri.med.nyu.edu/
+We use the [fastMRI breast dataset](https://fastmri.med.nyu.edu/) from Solomon et al. (2024).
 
 The dataset is partitioned into training, validation, and test sets.
 The split file is located at:
@@ -96,19 +95,16 @@ external/
 bash process_all_data.sh {BASE_PATH} {OUT_PATH} {NUM_SLICES}
 ```
 
-BASE_PATH — directory containing raw fastMRI breast data
-
-Example:
+BASE_PATH is the directory containing raw fastMRI breast data. For example:
 
 ```
 .../fastMRI_breast_data/fastMRI_breast_IDS_
 ```
 
-OUT_PATH — directory where zero-filled k-space will be saved
-NUM_SLICES — number of slices to process 
+OUT_PATH is the directory where the complex-valued zero-filled k-space will be saved
+NUM_SLICES is the number of slices to process 
 
-Code is adapted from the fastMRI preprocessing pipeline
-Saves complex-valued zero-filled k-space
+Code is adapted from the [fastMRI preprocessing pipeline](https://github.com/eddysolo/demo_dce_recon).
 
 ## Training
 
@@ -133,8 +129,8 @@ python inference/run_inference_new_dro.py \
 
 Outputs:
 
-Plots saved to experiment directory
-Aggregated metrics saved to the log file
+Plots saved to experiment directory.
+Aggregated metrics saved to the log file.
 
 ## References
 
