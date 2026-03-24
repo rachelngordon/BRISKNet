@@ -9,7 +9,6 @@ __pycache__
 *.txt
 submitit_logs/
 results/
-*.json
 agents.md
 data/touch_files/
 data/download_data.sh
@@ -25,3 +24,4 @@ data/split/split_dro_data.py
 data/split/largest_tumor_slices.csv
 dro/plot_*
 dro/*lambda_sweep*
+*logs*.json
