@@ -1,4 +1,4 @@
-"""Convert processed HDF5 volumes into per-slice NIfTI files. Run: python3 process_data/nifti/nifti_recon.py --help"""
+"""Convert processed HDF5 volumes into per-slice NIfTI files. Run: python3 process_data/nifti_recon.py --help"""
 
 import argparse
 import os

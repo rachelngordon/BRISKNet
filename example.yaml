@@ -1,49 +1,43 @@
 # Directories for input data
 data:
-  root_dir: "/net/scratch2/rachelgordon/zf_data_192_slices/zf_kspace"
+  root_dir: # INSERT: path to zero-filled k-space
   dataset_key: "kspace"
-  split_file: "/home/rachelgordon/mri_recon/radial-breast-ddei/data/data_split.json"
+  split_file: # INSERT: full path to data split file
   val_split_ratio: 0.2
   height: 320
   width: 320
-  timeframes: 18
+  timeframes: 8
   total_spokes: 288
   samples: 640
   coils: 16
-  eval_timeframes: 18
-  eval_spokes: 16
+  eval_timeframes: 8
+  eval_spokes: 36
   spf_aug: false
   weight_accelerations: false
   fpg: 36
-  train_spokes_per_frame: 16
+  train_spokes_per_frame: 36
   slices: 192
   slices_to_eval: 1
-  eval_frequency: 5
+  eval_frequency: 1
   flip_kspace: False
   traj_method: get_traj
 
 # Experiment settings
 experiment:
-  output_dir: "/net/projects2/annawoodard/rachelgordon/experiments"
+  output_dir: # INSERT: path to output dir
   cluster: "DSI"
-  pretrained_checkpoint: '/home/rachelgordon/mri_recon/radial-breast-ddei/output/ei_diffeo_36spf/ei_diffeo_36spf_best_model.pth'
+  # pretrained_checkpoint: 'example_ckpt_model.pth'
 
 # DataLoader settings
 dataloader:
   batch_size: 1
   shuffle: true
   num_workers: 2
-  max_subjects: 300
-  num_random_slices: 4
+  max_subjects: 2
+  num_random_slices: 1
   slice_idx: 41
   slice_range_start: None
   slice_range_end: None
-  slice_sampling_mode: nonenhancing
-  slice_sampling_uniform_fraction: 0.6
-  slice_sampling_filter_quantile: 0.3
-  slice_sampling_no_replacement: true
-  slice_sampling_cache_dir: /net/scratch2/rachelgordon/zf_data_192_slices/slice_sampling_cache
-  slice_sampling_cache_workers: 4
 
 # Model settings
 model:
@@ -93,66 +87,43 @@ model:
       spatial_transform: "diffeo"
       rotate_range: 0
       weight: 10000
-      warmup: 0
-      duration: 40
-      # --- arrival_shift params ---
-      arrival_shift_max_shift: 1
-      arrival_shift_percentile: 0.95
-      arrival_shift_baseline_k: 2.0
-      arrival_method: fraction
-      arrival_fraction: 0.15       # used when method = fraction
-      # --- enh_scale params ---
-      enh_scale_min: 0.85
-      enh_scale_max: 1.15
-      enh_scale_start: arrival
+      warmup: 20
+      duration: 5
       pre_contrast_baseline: "m_seconds"
       baseline_seconds: 20.0
       total_seconds: 150.0
       no_grad: false
-    # Operator-level (binning) equivariance (DDEI-ish).
-    rebin_loss:
-      enable: false
-      weight: 10000
-      factor: 2
-      metric: "MSE"
-      time_index_mode: "scaled"
   norm: "both"
 
 
 # Training settings
 training:
-  epochs: 90
+  epochs: 100
   save_interval: 1
   plot_interval: 20
   device: "cuda"  # or "cpu"
-  multigpu: True
+  multigpu: false
   lr_schedule:
-    warmup_mode: cosine
     min_lr_factor: 0.2
     warmup_epochs: 5
-  edge_time_index_sampling: true
+  edge_time_index_sampling: false
   curriculum_learning:
     enabled: False
     phases:
       - name: "Phase 1: Moderate Accelerations"
         start_epoch: 1
         train_spokes_range: [16, 24, 36]
-        eval_spokes_per_frame: 16       # Validate on the highest acceleration in this phase
-        eval_num_frames: 18 # (16 * 18 = 288 total spokes, assuming a fixed total spoke budget)
+        eval_spokes_per_frame: 16      
+        eval_num_frames: 18 
       - name: "Phase 2: Higher Accelerations"
         start_epoch: 2
-        train_spokes_range: [8, 16, 24, 36] # Introduces 8 spokes/frame
+        train_spokes_range: [8, 16, 24, 36] 
         eval_spokes_per_frame: 8
-        eval_num_frames: 36 # (8 * 36 = 288 total spokes)
-      - name: "Phase 3: Ultra-High Accelerations"
-        start_epoch: 3
-        train_spokes_range: [2, 4, 8, 16, 24, 36] # Introduces 2 and 4 spokes/frame
-        eval_spokes_per_frame: 2
-        eval_num_frames: 144 # (2 * 144 = 288 total spokes)
-
+        eval_num_frames: 36 
+        
 evaluation:
   num_samples: 15
-  simulated_dataset_path: "/net/scratch2/rachelgordon/dro_dataset_frontpad"
+  simulated_dataset_path: # INSERT: path to DRO
   chunk_size: 36
   chunk_overlap: 18
   rescale: False
@@ -160,6 +131,6 @@ evaluation:
 
 debugging:
   calc_step_0: True
-  calc_step_0_val: True
-  enable_gradient_monitoring: false
+  calc_step_0_val: false
+  enable_gradient_monitoring: true
   monitoring_interval: 5

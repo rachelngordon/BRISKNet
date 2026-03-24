@@ -29,9 +29,9 @@ if str(JOB_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(JOB_SCRIPTS_DIR))
 
 from cluster_paths import _swap_base
-from lsfpnet import to_torch_complex, from_torch_complex
-from radial import MCNUFFT
-from transform import estimate_bolus_arrival_index
+from model.lsfpnet import to_torch_complex, from_torch_complex
+from model.radial import MCNUFFT
+from model.transform import estimate_bolus_arrival_index
 
 
 

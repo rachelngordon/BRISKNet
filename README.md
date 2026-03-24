@@ -68,7 +68,7 @@ Run training:
 ```bash
 python train.py \
     --exp_name {EXP_NAME} \
-    --config configs/example_config.yaml
+    --config example.yaml
 ```
 
 ## Inference

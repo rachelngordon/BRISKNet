@@ -19,7 +19,7 @@ try:
 except ImportError as exc:
     raise ImportError("h5py is required to read .mat (v7.3) files.") from exc
 
-from radial import MCNUFFT
+from model.radial import MCNUFFT
 
 
 FRAME_TO_SPF = {

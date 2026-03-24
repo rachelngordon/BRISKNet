@@ -26,7 +26,7 @@ def _parse_token_chunk_size(value: Any) -> int:
 
 
 def _build_lsfp_model(config: dict[str, Any], device: torch.device, block_dir: str):
-    from lsfpnet import ArtifactRemovalLSFPNet, LSFPNet
+    from .lsfpnet import ArtifactRemovalLSFPNet, LSFPNet
 
     model_cfg = config["model"]
     lsfp_cfg = model_cfg.get("lsfpnet")

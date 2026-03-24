@@ -20,7 +20,7 @@ if str(JOB_SCRIPTS_DIR) not in sys.path:
 from cluster_paths import apply_cluster_paths
 from dataloader import SimulatedDataset
 from inference.eval import _get_patient_id_from_grasp_path, _load_slice_map, _load_tumor_mask
-from radial import MCNUFFT
+from model.radial import MCNUFFT
 from run_inference import _build_model, _load_weights, _resolve_eval_params
 from utils import prep_nufft, set_seed, sliding_window_inference, to_torch_complex
 

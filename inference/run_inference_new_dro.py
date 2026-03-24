@@ -27,7 +27,7 @@ import yaml
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from einops import rearrange
-from radial import to_torch_complex
+from model.radial import to_torch_complex
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JOB_SCRIPTS_DIR = REPO_ROOT / "job-scripts"
@@ -49,8 +49,8 @@ from inference.eval import (
     _load_slice_map,
     _resolve_plot_label,
 )
-from model_factory import build_recon_model
-from radial import MCNUFFT
+from model.model_factory import build_recon_model
+from model.radial import MCNUFFT
 from utils import (
     GRASPRecon_from_ktraj,
     prep_nufft,

@@ -1,4 +1,4 @@
-"""Reconstruct DCE volumes from radial k-space in NIfTI workflows. Run: python3 process_data/nifti/dce_recon.py --help"""
+"""Reconstruct DCE volumes from radial k-space in NIfTI workflows. Run: python3 process_data/dce_recon.py --help"""
 
 import argparse
 import os

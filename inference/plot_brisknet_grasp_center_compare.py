@@ -28,7 +28,7 @@ if str(JOB_SCRIPTS_DIR) not in sys.path:
 
 from cluster_paths import apply_cluster_paths
 from inference.eval import _resolve_baseline_frames, _load_tumor_mask
-from radial import MCNUFFT
+from model.radial import MCNUFFT
 from inference.run_inference_new_dro import (
     NewDROMatDataset,
     _build_model,

@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.nn import init
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
-from lsp import Project_inf, Wxs, Wtxs
+from .lsp import Project_inf, Wxs, Wtxs
 from einops import rearrange
 import matplotlib.pyplot as plt
 import numpy as np

@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 from einops import rearrange
-from radial import MCNUFFT
+from model.radial import MCNUFFT
 from dataloader import SimulatedSPFDataset
 from inference.eval import eval_grasp
 from utils import prep_nufft

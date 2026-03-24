@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from deepinv.loss.loss import Loss
 from deepinv.loss.metric.metric import Metric
 
-from radial import MCNUFFT
+from .radial import MCNUFFT
 
 
 class RebinConsistencyLoss(Loss):
