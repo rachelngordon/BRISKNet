@@ -1,4 +1,4 @@
-"""Save largest tumor components and write slice indices CSV. Run: python3 save_largest_tumor_regions.py"""
+"""Save largest tumor components and write slice indices CSV. Run: python3 -m inference.save_largest_tumor_regions"""
 
 from pathlib import Path
 
@@ -7,11 +7,13 @@ import nibabel as nib
 import numpy as np
 from scipy.ndimage import label
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 # Source and destination directories
 # SEG_ROOT = Path("/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations")
 SEG_ROOT = Path("/ess/scratch/scratch1/rachelgordon/zf_data_192_slices/tumor_segmentations")
 OUT_ROOT = SEG_ROOT.parent / "tumor_segmentations_lcr"
-SLICE_CSV = Path("data") / "largest_tumor_slices.csv"
+SLICE_CSV = REPO_ROOT / "data" / "largest_tumor_slices.csv"
 
 
 def largest_component(mask_path: Path) -> tuple[np.ndarray, np.ndarray, nib.nifti1.Nifti1Header]:

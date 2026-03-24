@@ -4,6 +4,8 @@ import argparse
 import json
 import math
 import os
+from pathlib import Path
+import sys
 from typing import Dict, Tuple
 
 import numpy as np
@@ -18,6 +20,11 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
 from skimage.measure import find_contours, label
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+JOB_SCRIPTS_DIR = REPO_ROOT / "job-scripts"
+if str(JOB_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(JOB_SCRIPTS_DIR))
 
 from cluster_paths import apply_cluster_paths
 from inference.eval import _resolve_baseline_frames, _load_tumor_mask

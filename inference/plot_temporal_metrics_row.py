@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -11,6 +12,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
+
+DEFAULT_LOG_PATH = Path(__file__).resolve().parent / "val_inference_logs.json"
 
 METRIC_SPECS = [
     ("early_corr", r"$\rho_{\mathrm{early}}$"),
@@ -193,8 +196,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--log_file",
-        default="val_inference_logs.json",
-        help="Path to inference log JSON (default: val_inference_logs.json).",
+        default=str(DEFAULT_LOG_PATH),
+        help="Path to inference log JSON (default: inference/val_inference_logs.json).",
     )
     parser.add_argument(
         "--exp_names",

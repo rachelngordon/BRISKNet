@@ -2,6 +2,8 @@
 
 import json
 import os
+from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,6 +11,11 @@ import torch
 import yaml
 from einops import rearrange
 from matplotlib.patches import Rectangle
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+JOB_SCRIPTS_DIR = REPO_ROOT / "job-scripts"
+if str(JOB_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(JOB_SCRIPTS_DIR))
 
 from cluster_paths import apply_cluster_paths
 from dataloader import SimulatedDataset

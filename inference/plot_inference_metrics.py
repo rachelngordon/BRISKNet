@@ -2,6 +2,7 @@
 
 import argparse
 import json
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import matplotlib
@@ -10,6 +11,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
+
+DEFAULT_LOG_PATH = Path(__file__).resolve().parent / "val_inference_logs.json"
 
 SPATIAL_DEFAULTS = ["ssim", "psnr", "mse", "lpips"]
 MC_DEFAULTS = ["dro_dc_mae", "dro_dc_mse", "raw_dc_mae", "raw_dc_mse", "raw_dc_psnr", "raw_ssdu_nmse"]
@@ -424,7 +427,11 @@ def _plot_panel_metrics(exp_names: List[str], metrics: List[str],
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plot inference metrics with error bars from val_inference_logs.")
-    parser.add_argument("--log_file", default="val_inference_logs.json", help="Path to val_inference_logs.json.")
+    parser.add_argument(
+        "--log_file",
+        default=str(DEFAULT_LOG_PATH),
+        help="Path to val_inference_logs.json (default: inference/val_inference_logs.json).",
+    )
     parser.add_argument("--exp_names", required=True, help="Comma-separated experiment names to include.")
     parser.add_argument(
         "--metric_type",

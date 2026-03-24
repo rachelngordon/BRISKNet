@@ -29,6 +29,11 @@ from tqdm import tqdm
 from einops import rearrange
 from radial_lsfp import to_torch_complex
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+JOB_SCRIPTS_DIR = REPO_ROOT / "job-scripts"
+if str(JOB_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(JOB_SCRIPTS_DIR))
+
 from cluster_paths import apply_cluster_paths
 from dataloader import SLICE_MAP_PATH, load_slice_map
 from inference.eval import (
@@ -54,14 +59,14 @@ from utils import (
     sliding_window_inference,
 )
 
+DEFAULT_LOG_PATH = Path(__file__).resolve().parent / "val_inference_logs.json"
+
 # Silence torchmetrics/torch FutureWarning about torch.load(weights_only=...) defaults.
 warnings.filterwarnings(
     "ignore",
     message=r"You are using `torch\.load` with `weights_only=False`.*",
     category=FutureWarning,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _h5py_float_dtype(type_id: h5t.TypeID) -> np.dtype:
@@ -1133,8 +1138,8 @@ def parse_args():
     )
     parser.add_argument(
         "--log_file",
-        default="val_inference_logs.json",
-        help="Path to val_inference_logs.json (default: repo root).",
+        default=str(DEFAULT_LOG_PATH),
+        help="Path to val_inference_logs.json (default: inference/val_inference_logs.json).",
     )
     parser.add_argument("--num_samples", type=int, help="Number of validation samples to evaluate (default: config value).")
     parser.add_argument(

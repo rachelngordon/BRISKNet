@@ -2,6 +2,7 @@
 
 import csv
 import os
+import sys
 import warnings
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +23,11 @@ from skimage.filters import threshold_otsu
 from skimage.measure import find_contours
 from skimage.metrics import structural_similarity as ssim_map_func
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+JOB_SCRIPTS_DIR = REPO_ROOT / "job-scripts"
+if str(JOB_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(JOB_SCRIPTS_DIR))
+
 from cluster_paths import _swap_base
 from lsfpnet_encoding import to_torch_complex, from_torch_complex
 from radial_lsfp import MCNUFFT
@@ -32,7 +38,6 @@ from transform import estimate_bolus_arrival_index
 TUMOR_SEG_ROOT = os.environ.get("TUMOR_SEG_ROOT", "/net/scratch2/rachelgordon/zf_data_192_slices/tumor_segmentations_lcr")
 TUMOR_SEG_WARN = os.environ.get("TUMOR_SEG_WARN", "1") not in ("0", "false", "False")
 _MISSING_TUMOR_SEGS = set()
-REPO_ROOT = Path(__file__).resolve().parents[1]
 SLICE_MAP_PATH = REPO_ROOT / "data" / "largest_tumor_slices.csv"
 
 # Plot styling 

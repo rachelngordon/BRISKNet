@@ -3,11 +3,14 @@
 import argparse
 import json
 import os
+from pathlib import Path
 from collections import defaultdict
 from typing import Iterable, List, Dict, Tuple
 
 import yaml
 
+
+DEFAULT_LOG_PATH = Path(__file__).resolve().parent / "val_inference_logs.json"
 
 SPATIAL_METRICS = ["ssim", "psnr", "mse", "lpips"]
 MC_METRICS = ["dro_dc_mae", "dro_dc_mse", "raw_ssdu_nmse"]
@@ -422,7 +425,11 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
 
 def main():
     parser = argparse.ArgumentParser(description="Generate LaTeX tables from val_inference_logs.")
-    parser.add_argument("--log_file", default="val_inference_logs.json", help="Path to val_inference_logs.json.")
+    parser.add_argument(
+        "--log_file",
+        default=str(DEFAULT_LOG_PATH),
+        help="Path to val_inference_logs.json (default: inference/val_inference_logs.json).",
+    )
     parser.add_argument("--exp_names", required=True, help="Comma-separated experiment names to include.")
     parser.add_argument(
         "--metric_type",

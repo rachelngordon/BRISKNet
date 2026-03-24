@@ -3,6 +3,8 @@
 import argparse
 import json
 import os
+from pathlib import Path
+import sys
 import matplotlib.pyplot as plt
 import torch
 import warnings
@@ -37,9 +39,15 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import signal
 from torch.utils.tensorboard import SummaryWriter
-from cluster_paths import apply_cluster_paths
 from contextlib import nullcontext, contextmanager
 from datetime import timedelta
+
+REPO_ROOT = Path(__file__).resolve().parent
+JOB_SCRIPTS_DIR = REPO_ROOT / "job-scripts"
+if str(JOB_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(JOB_SCRIPTS_DIR))
+
+from cluster_paths import apply_cluster_paths
 
 
 def setup():

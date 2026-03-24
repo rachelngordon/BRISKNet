@@ -11,3 +11,7 @@ submitit_logs/
 results/
 *.json
 agents.md
+process_data/touch_files/
+process_data/download_data.sh
+process_data/run_process_all_data.sh
+job-scripts/
