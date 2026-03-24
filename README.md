@@ -73,7 +73,7 @@ python train.py \
 
 ## Inference
 ```bash
-python inference/run_inference_new_dro.py \
+python inference/run_inference.py \
     --exp_name {EXP_NAME} \
     --log_file inference/inference_logs.json
 ```

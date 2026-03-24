@@ -17,3 +17,4 @@ process_data/run_process_all_data.sh
 job-scripts/
 figures/
 configs/
+inference/plot/
