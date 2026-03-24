@@ -36,7 +36,7 @@ For evaluation, we use the [Digital Reference Object (DRO) Toolkit](https://pubm
 Our fork of the repository is included in:
 
 ```
-external/
+dro/DRO-BreastDCEMRI
 ```
 
 ## Data Processing
