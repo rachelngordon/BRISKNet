@@ -1,54 +1,3 @@
-<!-- # BRISKNet: Breast Rapid Imaging via Self-Supervised Kinetics
-This repository contains relevant code for BRISKNet, an unsupervised, physics-informed framework for multi-coil, radial breast DCE-MRI reconstruction. 
-
-## Environment Set Up
-Install necessary dependencies:
-```bash
-bash env_setup.sh
-```
-
-Activate the environment:
-```bash
-micromamba actviate recon_mri
-```
-
-## Dataset 
-We use the fastMRI breast dataset from Solomon et al. (2025), which can be accessed here: https://fastmri.med.nyu.edu/
-The dataset was partitioned into training, validation, and test sets, and the IDs for the samples included in each dataset can be found at data/data_split.json
-For evaluation, we use the Digital Reference Object Toolkit from Bae et al. (2024), and our fork of the repo can be found in external.
-
-## Data Processing
-```bash
-bash process_all_data.sh {BASE_PATH} {OUT_PATH} {NUM_SLICES}
-```
-Code was adapted from the fastMRI preprocessing code to save the complex-valued zero-filled k-space. 
-BASE_PATH is the directory where the raw data is stored, such as .../fastMRI_breast_data/fastMRI_breast_IDS_
-OUT_PATH is the directory where the zero-filled k-space will be saved
-NUM_SLICES was set to 192 to match the fastMRI default
-
-
-## Training
-The model architecture was adapted from Zhao et al. (2023) and the original code can be found here: https://github.com/aaronfeng369/LSFP-Net/tree/LSFP-Net
-The loss constraints were adapted from Wang et al. (2025) and the original code can be found here: https://github.com/Andrewwango/ddei
-Transformations were built on the deep inverse library, which can be found here: https://deepinv.github.io/deepinv/
-```bash
-python train_zf.py --exp_name {EXP_NAME} --config configs/example_config.yaml
-```
-
-## Inference
-```bash
-python inference/run_inference_new_dro.py --exp_name {EXP_NAME} --log_file inference/inference_logs.json
-```
-Plots will be saved to the experiment directory and aggregated metrics will be saved to the log file. 
-
-
-## References
-Preprocessing code is adapted from code provided with the fastMRI breast dataset: https://github.com/eddysolo/demo_dce_recon
-LSFPNet architecture is adapted from https://github.com/aaronfeng369/LSFP-Net/tree/LSFP-Net
-DDEI framework is adapted from: https://github.com/Andrewwango/ddei
-Spatial transformations are adapted from: https://deepinv.github.io/deepinv/ -->
-
-
 # BRISKNet: Breast Rapid Imaging via Self-Supervised Kinetics
 
 This repository contains the official code for **BRISKNet**, an unsupervised, physics-informed framework for multi-coil radial breast DCE-MRI reconstruction.
@@ -77,6 +26,7 @@ micromamba activate recon_mri
 We use the [fastMRI breast dataset](https://fastmri.med.nyu.edu/) from Solomon et al. (2024).
 
 The dataset is partitioned into training, validation, and test sets.
+
 The split file is located at:
 
 ```
@@ -84,6 +34,7 @@ data/data_split.json
 ```
 
 For evaluation, we use the Digital Reference Object (DRO) Toolkit from Bae et al. (2024).
+
 Our fork of the repository is included in:
 
 ```
@@ -95,13 +46,16 @@ external/
 bash process_all_data.sh {BASE_PATH} {OUT_PATH} {NUM_SLICES}
 ```
 
-BASE_PATH is the directory containing raw fastMRI breast data. For example:
+BASE_PATH is the directory containing raw fastMRI breast data. 
+
+Example:
 
 ```
 .../fastMRI_breast_data/fastMRI_breast_IDS_
 ```
 
 OUT_PATH is the directory where the complex-valued zero-filled k-space will be saved
+
 NUM_SLICES is the number of slices to process 
 
 Code is adapted from the [fastMRI preprocessing pipeline](https://github.com/eddysolo/demo_dce_recon).
@@ -109,8 +63,10 @@ Code is adapted from the [fastMRI preprocessing pipeline](https://github.com/edd
 ## Training
 
 The model architecture is adapted from [LSFP-Net](https://github.com/aaronfeng369/LSFP-Net/tree/LSFP-Net) (Zhao et al., 2023).
+
 Loss constraints are adapted from [DDEI](https://github.com/Andrewwango/ddei) (Wang et al., 2025).
-Transformations use the [DeepInverse](https://deepinv.github.io/deepinv/) library
+
+Transformations use the [DeepInverse](https://deepinv.github.io/deepinv/) library.
 
 Run training:
 
@@ -130,6 +86,7 @@ python inference/run_inference_new_dro.py \
 Outputs:
 
 Plots saved to experiment directory.
+
 Aggregated metrics saved to the log file.
 
 ## References
@@ -143,8 +100,11 @@ Aggregated metrics saved to the log file.
 } -->
 
 Solomon et al., fastMRI Breast dataset, 2025
+
 Bae et al., Digital Reference Object Toolkit, 2024
+
 He et al., LSFPNet, Nature Communications, 2023
+
 Wang & Davies, Fully Unsupervised Dynamic MRI Reconstruction via Diffeo-Temporal Equivariance, ISBI 2025
 
 
