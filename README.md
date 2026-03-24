@@ -23,9 +23,7 @@ micromamba activate recon_mri
 
 ## Dataset
 
-We use the [fastMRI breast dataset](https://fastmri.med.nyu.edu/) from Solomon et al. (2024).
-
-The dataset is partitioned into training, validation, and test sets.
+We use the [fastMRI breast dataset](https://fastmri.med.nyu.edu/) from Solomon et al. (2024). The dataset is partitioned into training, validation, and test sets.
 
 The split file is located at:
 
@@ -33,7 +31,7 @@ The split file is located at:
 data/data_split.json
 ```
 
-For evaluation, we use the Digital Reference Object (DRO) Toolkit from Bae et al. (2024).
+For evaluation, we use the [Digital Reference Object (DRO) Toolkit](https://pubmed.ncbi.nlm.nih.gov/38775077/) from Bae et al. (2024).
 
 Our fork of the repository is included in:
 
@@ -86,7 +84,6 @@ python inference/run_inference_new_dro.py \
 Outputs:
 
 Plots saved to experiment directory.
-
 Aggregated metrics saved to the log file.
 
 ## References
