@@ -41,7 +41,7 @@ external/
 
 ## Data Processing
 ```bash
-bash process_all_data.sh {BASE_PATH} {OUT_PATH} {NUM_SLICES}
+bash data/process_all_data.sh {BASE_PATH} {OUT_PATH} {NUM_SLICES}
 ```
 
 - BASE_PATH is the directory containing raw fastMRI breast data. 

@@ -268,7 +268,7 @@ def _ktraj_and_dcomp_from_get_traj(Nsample, Nspokes, Ng, im_size):
     args = _Args()
     args.spokes_per_frame = Nspokes
 
-    from process_data.dce_recon import get_traj as get_traj_dce
+    from process.dce_recon import get_traj as get_traj_dce
 
     traj = get_traj_dce(
         args,
