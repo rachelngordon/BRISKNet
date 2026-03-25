@@ -28,7 +28,7 @@ We use the [fastMRI breast dataset](https://fastmri.med.nyu.edu/) from Solomon e
 The split file is located at:
 
 ```
-data/data_split.json
+data/split/data_split.json
 ```
 
 For evaluation, we use the [Digital Reference Object (DRO) Toolkit](https://pubmed.ncbi.nlm.nih.gov/38775077/) from Bae et al. (2024).

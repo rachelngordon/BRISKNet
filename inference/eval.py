@@ -657,7 +657,7 @@ def compute_ssdu_kspace_nmse_grasp(
     }
 
 
-def _get_patient_id_from_grasp_path(grasp_path: str, mapping_csv: str = "data/DROSubID_vs_fastMRIbreastID.csv") -> str:
+def _get_patient_id_from_grasp_path(grasp_path: str, mapping_csv: str = "data/split/DROSubID_vs_fastMRIbreastID.csv") -> str:
     """Maps a DRO sample path back to the fastMRI patient id."""
     if grasp_path is None:
         return None

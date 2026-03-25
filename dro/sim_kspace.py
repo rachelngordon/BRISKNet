@@ -1,99 +1,40 @@
 #!/usr/bin/env python3
-"""Simulate k-space from a DRO .mat and reconstruct with GRASP. Run: python3 dro_gen/simulate_kspace_grasp_from_mat.py --help
-
-Example:
-  python3 dro_gen/simulate_kspace_grasp_from_mat.py --mat-path /path/to/sample_dro_8frames.mat --spokes-per-frame 36
-"""
-
+"""Loop over DRO variable-frame samples, simulate k-space, and compute/load ESPIRiT csmaps. Run: python3 -m inference.simulate_kspace_grasp_var_frames --help"""
 from __future__ import annotations
 
 import argparse
+import glob
 import os
+import re
 from typing import Optional
 
 import numpy as np
 import torch
 import torchkbnufft as tkbn
 import sigpy as sp
-import matplotlib.pyplot as plt
-import torch.nn as nn
-from einops import rearrange
+from sigpy.mri import app
 
 try:
     import h5py
 except ImportError as exc:
     raise ImportError("h5py is required to read .mat (v7.3) files.") from exc
 
-from sigpy.mri import app
+from model.radial import MCNUFFT
 
 
-dtype = torch.complex64
-
-
-class MCNUFFT(nn.Module):
-    def __init__(self, nufft_ob, adjnufft_ob, ktraj, dcomp):
-        super(MCNUFFT, self).__init__()
-        self.nufft_ob = nufft_ob
-        self.adjnufft_ob = adjnufft_ob
-        self.ktraj = torch.squeeze(ktraj)
-        self.dcomp = torch.squeeze(dcomp)
-
-    def forward(self, inv, data, smaps):
-        data = torch.squeeze(data)  # delete redundant dimension
-        Nx = smaps.shape[2]
-        Ny = smaps.shape[3]
-
-        if inv:  # adjoint nufft
-
-            smaps = smaps.to(dtype)
-
-            if len(data.shape) > 2:  # multi-frame
-
-                x = torch.zeros([Nx, Ny, data.shape[2]], dtype=dtype)
-
-                for ii in range(0, data.shape[2]):
-                    kd = data[:, :, ii]
-                    k = self.ktraj[:, :, ii]
-                    d = self.dcomp[:, ii]
-
-                    kd = kd.unsqueeze(0)
-                    d = d.unsqueeze(0).unsqueeze(0)
-
-                    x_temp = self.adjnufft_ob(kd * d, k, smaps=smaps)
-                    x[:, :, ii] = torch.squeeze(x_temp) / np.sqrt(Nx * Ny)
-
-            else:  # single frame
-
-                kd = data.unsqueeze(0)
-                d = self.dcomp.unsqueeze(0).unsqueeze(0)
-                x = self.adjnufft_ob(kd * d, self.ktraj, smaps=smaps)
-                x = torch.squeeze(x) / np.sqrt(Nx * Ny)
-
-        else:  # forward nufft
-
-            if len(data.shape) > 2:  # multi-frame
-
-                x = torch.zeros([smaps.shape[1], self.ktraj.shape[1], data.shape[-1]], dtype=dtype)
-
-                for ii in range(0, data.shape[-1]):
-                    image = data[:, :, ii]
-                    k = self.ktraj[:, :, ii]
-
-                    image = image.unsqueeze(0).unsqueeze(0)
-                    x_temp = self.nufft_ob(image, k, smaps=smaps)
-                    x[:, :, ii] = torch.squeeze(x_temp) / np.sqrt(Nx * Ny)
-
-            else:  # single frame
-
-                image = data.unsqueeze(0).unsqueeze(0)
-                x = self.nufft_ob(image, self.ktraj, smaps=smaps)
-                x = torch.squeeze(x) / np.sqrt(Nx * Ny)
-
-        return x
+FRAME_TO_SPF = {
+    8: 36,
+    12: 24,
+    18: 16,
+    36: 8,
+    72: 4,
+    144: 2,
+}
+FRAME_ORDER = [8, 12, 18, 36, 72, 144]
+CSMAPS_FRAMES = 8
 
 
 def trajGR(Nkx, Nspokes):
-    # golden-angle radial sampling trajectory
     ga = np.pi * ((1 - np.sqrt(5)) / 2)
     kx = np.zeros(shape=(Nkx, Nspokes))
     ky = np.zeros(shape=(Nkx, Nspokes))
@@ -154,8 +95,8 @@ def _ktraj_and_dcomp_from_get_traj(Nsample, Nspokes, Ng, im_size):
 
 
 def prep_nufft(Nsample, Nspokes, Ng, traj_method="trajGR"):
-    oversample = 2
-    im_size = (int(Nsample / oversample), int(Nsample / oversample))
+    overSmaple = 2
+    im_size = (int(Nsample / overSmaple), int(Nsample / overSmaple))
     grid_size = (Nsample, Nsample)
 
     if traj_method == "trajGR":
@@ -199,11 +140,20 @@ def _read_h5_complex(dset: h5py.Dataset) -> np.ndarray:
         if member.get_class() != h5py.h5t.FLOAT:
             raise TypeError("Unsupported compound member type in complex dataset.")
         np_fmt = np.float32 if member.get_size() == 4 else np.float64
-        memtype.insert(name, type_id.get_member_offset(idx), h5py.h5t.NATIVE_FLOAT if np_fmt == np.float32 else h5py.h5t.NATIVE_DOUBLE)
+        memtype.insert(
+            name,
+            type_id.get_member_offset(idx),
+            h5py.h5t.NATIVE_FLOAT if np_fmt == np.float32 else h5py.h5t.NATIVE_DOUBLE,
+        )
         names.append(name_str)
         formats.append(np_fmt)
         offsets.append(type_id.get_member_offset(idx))
-    arr = np.empty(dset.shape, dtype=np.dtype({"names": names, "formats": formats, "offsets": offsets, "itemsize": type_id.get_size()}))
+    arr = np.empty(
+        dset.shape,
+        dtype=np.dtype(
+            {"names": names, "formats": formats, "offsets": offsets, "itemsize": type_id.get_size()}
+        ),
+    )
     dset.read_direct(arr)
     name_map = {n.lower(): n for n in names}
     real_key = name_map.get("real", names[0])
@@ -216,7 +166,6 @@ def _read_h5_array(dset: h5py.Dataset) -> np.ndarray:
         return _read_h5_complex(dset)
     arr = np.asarray(dset)
     if arr.ndim == 4 and arr.shape[-1] == 2 and not np.iscomplexobj(arr):
-        # Fallback for real/imag stored in last axis.
         arr = arr[..., 0] + 1j * arr[..., 1]
     return arr
 
@@ -271,25 +220,213 @@ def get_coil(ksp: np.ndarray, spokes_per_frame: int, device=sp.Device(-1)) -> np
     ishape = [N_coils] + [base_res] * 2
 
     traj = get_traj(N_spokes=N_spokes, N_time=1, base_res=base_res, gind=1)
-    dcf = (traj[..., 0]**2 + traj[..., 1]**2)**0.5
+    dcf = (traj[..., 0] ** 2 + traj[..., 1] ** 2) ** 0.5
 
     F = sp.linop.NUFFT(ishape, traj)
     cim = F.H(ksp * dcf)
     cim = sp.fft(cim, axes=(-2, -1))
 
     mps = app.EspiritCalib(cim, device=device).run()
-    mps = sp.to_device(mps, sp.cpu_device)
+    mps = sp.to_device(mps, sp.Device(-1))
     return np.asarray(mps)
 
 
-def main() -> None:
+def _normalize_suffix(suffix: str) -> str:
+    if not suffix:
+        return ""
+    if not suffix.startswith("_"):
+        suffix = "_" + suffix
+    return suffix
+
+
+def _collect_dro_files(dro_root: str) -> dict[str, dict[int, str]]:
+    pattern = os.path.join(dro_root, "sample_*_dro_*frames.mat")
+    matches = sorted(glob.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(
+            f"No DRO .mat files found under {dro_root} matching {pattern}"
+        )
+    sample_map: dict[str, dict[int, str]] = {}
+    for path in matches:
+        base = os.path.basename(path)
+        match = re.match(r"^(sample_\d+_sub\d+)_dro_(\d+)frames\.mat$", base)
+        if not match:
+            continue
+        sample_id, frames_str = match.groups()
+        frames = int(frames_str)
+        sample_map.setdefault(sample_id, {})[frames] = path
+    if not sample_map:
+        raise FileNotFoundError(
+            f"No DRO .mat files matched expected naming in {dro_root}."
+        )
+    return sample_map
+
+
+def _load_dro(mat_path: str, key: Optional[str]) -> tuple[np.ndarray, np.ndarray]:
+    with h5py.File(mat_path, "r") as f:
+        img, img_key = _find_h5_dataset(f, key)
+        smaps = _load_smaps(f)
+    if smaps.ndim != 3:
+        raise ValueError(f"Expected smap shape (C,H,W) or (H,W,C), got {smaps.shape}")
+    if smaps.shape[0] <= smaps.shape[1] and smaps.shape[0] <= smaps.shape[2]:
+        smaps_chw = smaps
+    else:
+        smaps_chw = np.transpose(smaps, (2, 0, 1))
+
+    h = int(smaps_chw.shape[1])
+    w = int(smaps_chw.shape[2])
+    img = _ensure_hwt(img, h, w)
+    return img, smaps_chw
+
+
+def _build_recon_traj(spf: int, frames: int, nsample: int, traj_method: str) -> np.ndarray:
+    if traj_method == "get_traj":
+        return get_traj(N_spokes=spf, N_time=frames)
+    if traj_method == "trajGR":
+        ktraj = trajGR(nsample, spf * frames)  # (2, total_spokes * samples)
+        ktraj = ktraj.reshape(2, spf * frames, nsample)
+        traj = np.transpose(ktraj, (1, 2, 0))  # (total_spokes, samples, 2)
+        traj = traj.reshape(frames, spf, nsample, 2)
+        return traj
+    raise ValueError(f"Unknown traj_method: {traj_method}")
+
+
+def _simulate_kspace(
+    img: np.ndarray,
+    smaps_chw: np.ndarray,
+    spf: int,
+    frames: int,
+    device: torch.device,
+    traj_method: str,
+    noise_std: float,
+    noise_seed: Optional[int],
+) -> np.ndarray:
+    h, w, t = img.shape
+    if h != w:
+        raise ValueError(f"Expected square frames, got H={h}, W={w}")
+    if t != frames:
+        raise ValueError(f"Image frames ({t}) != expected frames ({frames})")
+    nsample = h * 2
+
+    ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
+        nsample, spf, frames, traj_method=traj_method
+    )
+    physics = MCNUFFT(
+        nufft_ob.to(device),
+        adjnufft_ob.to(device),
+        ktraj.to(device),
+        dcomp.to(device),
+    )
+
+    sim_img = torch.tensor(img, dtype=torch.complex64, device=device)
+    csmaps = torch.tensor(np.expand_dims(smaps_chw, axis=0), dtype=torch.complex64, device=device)
+
+    with torch.no_grad():
+        kspace = physics(False, sim_img, csmaps)
+        if noise_std < 0:
+            raise ValueError("--kspace-noise-std must be >= 0.")
+        if noise_std > 0:
+            if noise_seed is not None:
+                torch.manual_seed(noise_seed)
+                if device.type == "cuda":
+                    torch.cuda.manual_seed_all(noise_seed)
+            noise = torch.randn(kspace.shape, device=kspace.device, dtype=kspace.real.dtype)
+            kspace = kspace + noise_std * noise
+
+    return kspace.detach().cpu().numpy()
+
+
+def _compute_csmaps(kspace_np: np.ndarray, spf: int, frames: int, device: sp.Device) -> np.ndarray:
+    if kspace_np.ndim != 3:
+        raise ValueError(f"Expected kspace shape (C, M, T), got {kspace_np.shape}")
+    n_coils, m, t = kspace_np.shape
+    if t != frames:
+        raise ValueError(f"kspace frames ({t}) != expected frames ({frames})")
+    if m % spf != 0:
+        raise ValueError(f"kspace samples ({m}) not divisible by spf ({spf})")
+    nsample = m // spf
+
+    kspace_all = kspace_np.reshape(n_coils, spf, nsample, t)
+    kspace_all = np.transpose(kspace_all, (0, 3, 1, 2))  # (C, T, spf, sam)
+    kspace_all = kspace_all.reshape(n_coils, t * spf, nsample)
+    csmaps = get_coil(kspace_all, t * spf, device=device)
+    return np.asarray(csmaps).astype(np.complex64)
+
+
+def _run_grasp(
+    kspace_np: np.ndarray,
+    csmaps_np: np.ndarray,
+    spf: int,
+    frames: int,
+    traj_method: str,
+    lamda: float,
+    max_iter: int,
+    rho: float,
+    device: sp.Device,
+) -> np.ndarray:
+    if kspace_np.ndim != 3:
+        raise ValueError(f"Expected kspace shape (C, M, T), got {kspace_np.shape}")
+    n_coils, m, t = kspace_np.shape
+    if t != frames:
+        raise ValueError(f"kspace frames ({t}) != expected frames ({frames})")
+    if m % spf != 0:
+        raise ValueError(f"kspace samples ({m}) not divisible by spf ({spf})")
+    nsample = m // spf
+
+    if csmaps_np.ndim != 3:
+        raise ValueError(f"Expected csmaps shape (C, H, W), got {csmaps_np.shape}")
+    if csmaps_np.shape[0] != n_coils and csmaps_np.shape[-1] == n_coils:
+        csmaps_np = np.transpose(csmaps_np, (2, 0, 1))
+    if csmaps_np.shape[0] != n_coils:
+        raise ValueError(
+            f"CSMAP coil count mismatch: expected {n_coils}, got {csmaps_np.shape[0]}"
+        )
+
+    kspace_tcsp = kspace_np.reshape(n_coils, spf, nsample, t)
+    kspace_tcsp = np.transpose(kspace_tcsp, (3, 0, 1, 2))  # (T, C, spf, sam)
+    kspace_tcsp = kspace_tcsp[:, None, :, None, :, :]
+
+    csmaps = csmaps_np[:, None, :, :]
+    traj = _build_recon_traj(spf, frames, nsample, traj_method)
+
+    recon = app.HighDimensionalRecon(
+        kspace_tcsp,
+        csmaps,
+        combine_echo=False,
+        lamda=lamda,
+        coord=traj,
+        regu="TV",
+        regu_axes=[0],
+        max_iter=max_iter,
+        solver="ADMM",
+        rho=rho,
+        device=device,
+        show_pbar=False,
+        verbose=False,
+    ).run()
+
+    recon_np = np.squeeze(recon.get())
+    if recon_np.ndim == 3 and recon_np.shape[0] == frames and recon_np.shape[-1] != frames:
+        recon_np = np.transpose(recon_np, (1, 2, 0))
+    return recon_np
+
+
+def _parse_sigpy_device(device: str) -> sp.Device:
+    if device == "cuda":
+        return sp.Device(0)
+    if device == "cpu":
+        return sp.Device(-1)
+    raise ValueError(f"Unknown sigpy device '{device}'. Use 'cpu' or 'cuda'.")
+
+
+def parse_args():
     parser = argparse.ArgumentParser(
-        description="Simulate k-space with torchkbnufft and run GRASP recon on a .mat image."
+        description="Simulate k-space and ESPIRiT csmaps for DRO variable-frame .mat files."
     )
     parser.add_argument(
-        "--mat-path",
-        default="/net/scratch2/rachelgordon/test_dro_144frames.mat",
-        help="Path to .mat file containing (T,H,W) or (H,W,T) image array.",
+        "--dro-root",
+        default="/net/scratch2/rachelgordon/dro_var_frames",
+        help="Root directory containing sample_*_dro_*frames.mat files.",
     )
     parser.add_argument(
         "--key",
@@ -297,50 +434,21 @@ def main() -> None:
         help="Dataset key inside the .mat file (optional).",
     )
     parser.add_argument(
-        "--spokes-per-frame",
-        type=int,
-        required=True,
-        help="Number of spokes per frame.",
-    )
-    parser.add_argument(
-        "--num-frames",
-        type=int,
-        default=None,
-        help="Use only the first N frames (default: all frames).",
-    )
-    parser.add_argument(
-        "--lamda",
-        type=float,
-        default=0.001,
-        help="GRASP TV weight.",
-    )
-    parser.add_argument(
-        "--max-iter",
-        type=int,
-        default=10,
-        help="GRASP max iterations.",
-    )
-    parser.add_argument(
-        "--rho",
-        type=float,
-        default=0.1,
-        help="GRASP ADMM rho.",
-    )
-    parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Torch device for k-space simulation (e.g., cuda, cuda:0, cpu).",
+    )
+    parser.add_argument(
+        "--sigpy-device",
+        choices=("cpu", "cuda"),
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device for ESPIRiT calibration.",
     )
     parser.add_argument(
         "--traj-method",
         default="get_traj",
         choices=("trajGR", "get_traj"),
         help="Trajectory method to use for k-space simulation.",
-    )
-    parser.add_argument(
-        "--out-dir",
-        default=".",
-        help="Output directory for PNG (and optional npy).",
     )
     parser.add_argument(
         "--kspace-noise-std",
@@ -355,149 +463,117 @@ def main() -> None:
         help="Optional RNG seed for k-space noise.",
     )
     parser.add_argument(
-        "--save-npy",
-        action="store_true",
-        help="Also save simulated k-space and recon as .npy files.",
+        "--suffix",
+        default="",
+        help="Optional suffix to append to output filenames (before .npy).",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    with h5py.File(args.mat_path, "r") as f:
-        img, img_key = _find_h5_dataset(f, args.key)
-        smaps = _load_smaps(f)
-    print(f"Using image dataset: {img_key}")
 
-    if smaps.ndim != 3:
-        raise ValueError(f"Expected smap shape (C,H,W) or (H,W,C), got {smaps.shape}")
-    if smaps.shape[0] <= smaps.shape[1] and smaps.shape[0] <= smaps.shape[2]:
-        smaps_chw = smaps
-    else:
-        smaps_chw = np.transpose(smaps, (2, 0, 1))
-
-    h = int(smaps_chw.shape[1])
-    w = int(smaps_chw.shape[2])
-
-    img = _ensure_hwt(img, h, w)
-    if args.num_frames is not None:
-        img = img[..., : args.num_frames]
-
-    h, w, t = img.shape
-    if h != w:
-        raise ValueError(f"Expected square frames, got H={h}, W={w}")
-
+def main() -> None:
+    args = parse_args()
     device = torch.device(args.device)
-    simImg_torch = torch.tensor(img).to(torch.cfloat).to(device)
-    csmaps = torch.tensor(np.expand_dims(smaps_chw, axis=0), device=device)
-    csmaps = csmaps.to(torch.complex64)
-    print(simImg_torch.dtype)
-    print(csmaps.dtype)
+    sigpy_device = _parse_sigpy_device(args.sigpy_device)
+    suffix = _normalize_suffix(args.suffix)
 
-    nsample = h * 2
-    ktraj, dcomp, nufft_ob, adjnufft_ob = prep_nufft(
-        nsample, args.spokes_per_frame, t, traj_method=args.traj_method
+    sample_map = _collect_dro_files(args.dro_root)
+    sample_ids = sorted(
+        sample_map,
+        key=lambda s: (
+            int(re.search(r"sample_(\d+)", s).group(1))
+            if re.search(r"sample_(\d+)", s)
+            else s
+        ),
     )
 
-    physics = MCNUFFT(
-        nufft_ob.to(device),
-        adjnufft_ob.to(device),
-        ktraj.to(device),
-        dcomp.to(device),
-    )
+    for sample_id in sample_ids:
+        available_frames = sample_map[sample_id]
+        ordered_frames = [f for f in FRAME_ORDER if f in available_frames]
+        if not ordered_frames:
+            ordered_frames = sorted(available_frames)
+        csmaps_dir = os.path.join(args.dro_root, "csmaps_espirit")
+        os.makedirs(csmaps_dir, exist_ok=True)
+        csmaps_path = os.path.join(csmaps_dir, f"csmaps_{sample_id}{suffix}.npy")
+        csmaps_np = None
+        kspace_cache: dict[int, np.ndarray] = {}
 
-    kspace = physics(False, simImg_torch, csmaps)
-    if args.kspace_noise_std < 0:
-        raise ValueError("--kspace-noise-std must be >= 0.")
-    if args.kspace_noise_std > 0:
-        if args.kspace_noise_seed is not None:
-            torch.manual_seed(args.kspace_noise_seed)
-            if device.type == "cuda":
-                torch.cuda.manual_seed_all(args.kspace_noise_seed)
-        noise = torch.randn(
-            kspace.shape, device=kspace.device, dtype=kspace.real.dtype
-        )
-        kspace = kspace + args.kspace_noise_std * noise
-        print(f"Added k-space noise (std={args.kspace_noise_std}).")
-    print(f"Simulated k-space shape: {tuple(kspace.shape)}")
+        if not os.path.exists(csmaps_path):
+            if CSMAPS_FRAMES not in available_frames:
+                raise FileNotFoundError(
+                    f"{sample_id} missing {CSMAPS_FRAMES}-frame DRO file required for ESPIRiT csmaps."
+                )
+            spf_csmaps = FRAME_TO_SPF[CSMAPS_FRAMES]
+            mat_path = available_frames[CSMAPS_FRAMES]
+            kspace_csmaps_path = os.path.join(
+                args.dro_root,
+                f"{sample_id}_kspace_{spf_csmaps}spf_{CSMAPS_FRAMES}frames{suffix}.npy",
+            )
+            if os.path.exists(kspace_csmaps_path):
+                kspace_csmaps_np = np.load(kspace_csmaps_path)
+            else:
+                img, smaps_chw = _load_dro(mat_path, args.key)
+                kspace_csmaps_np = _simulate_kspace(
+                    img=img,
+                    smaps_chw=smaps_chw,
+                    spf=spf_csmaps,
+                    frames=CSMAPS_FRAMES,
+                    device=device,
+                    traj_method=args.traj_method,
+                    noise_std=args.kspace_noise_std,
+                    noise_seed=args.kspace_noise_seed,
+                )
+                np.save(kspace_csmaps_path, kspace_csmaps_np)
+                print(f"  saved kspace (for csmaps): {kspace_csmaps_path}")
+            kspace_cache[CSMAPS_FRAMES] = kspace_csmaps_np
+            csmaps_np = _compute_csmaps(
+                kspace_np=kspace_csmaps_np,
+                spf=spf_csmaps,
+                frames=CSMAPS_FRAMES,
+                device=sigpy_device,
+            )
+            np.save(csmaps_path, csmaps_np)
+            print(f"  saved csmaps: {csmaps_path}")
+        else:
+            csmaps_np = np.load(csmaps_path)
+        for frames in ordered_frames:
+            if frames not in FRAME_TO_SPF:
+                print(f"[skip] {sample_id} frames={frames}: no SPF mapping available.")
+                continue
+            spf = FRAME_TO_SPF[frames]
+            mat_path = available_frames[frames]
 
-    kspace_all = kspace.detach().cpu().numpy()
-    kspace_all = kspace_all.reshape(
-        kspace_all.shape[0], args.spokes_per_frame, nsample, t
-    )
-    kspace_all = np.transpose(kspace_all, (0, 3, 1, 2))  # (C, T, spf, sam)
-    kspace_all = kspace_all.reshape(
-        kspace_all.shape[0], t * args.spokes_per_frame, nsample
-    )
-    print(f"ESPIRiT kspace shape (C, spokes, sam): {kspace_all.shape}")
-    print(f"ESPIRiT spokes used: {t * args.spokes_per_frame}")
-    sigpy_device = sp.Device(0 if torch.cuda.is_available() else -1)
-    csmaps_est = get_coil(kspace_all, t * args.spokes_per_frame, device=sigpy_device)
-    csmaps_est = csmaps_est[:, None, :, :]
+            kspace_path = os.path.join(
+                args.dro_root,
+                f"{sample_id}_kspace_{spf}spf_{frames}frames{suffix}.npy",
+            )
 
-    kspace_np = (
-        rearrange(kspace, "c (sp sam) t -> t c sp sam", sam=nsample)
-        .unsqueeze(1)
-        .unsqueeze(3)
-        .cpu()
-        .numpy()
-    )
-    print(f"kspace rearranged shape: {kspace_np.shape}")
+            need_kspace = not os.path.exists(kspace_path)
+            if not need_kspace:
+                print(f"[skip] {sample_id} frames={frames} (kspace exists)")
+                continue
 
-    csmaps_np = csmaps_est
-    print(f"csmaps shape: {csmaps_np.shape}")
+            print(f"[run] {sample_id} frames={frames} spf={spf} (kspace={need_kspace})")
 
-    traj = get_traj(N_spokes=args.spokes_per_frame, N_time=t)
-    print(f"traj shape: {traj.shape}")
+            kspace_np = kspace_cache.get(frames)
+            if kspace_np is None and need_kspace:
+                img, smaps_chw = _load_dro(mat_path, args.key)
+                kspace_np = _simulate_kspace(
+                    img=img,
+                    smaps_chw=smaps_chw,
+                    spf=spf,
+                    frames=frames,
+                    device=device,
+                    traj_method=args.traj_method,
+                    noise_std=args.kspace_noise_std,
+                    noise_seed=args.kspace_noise_seed,
+                )
+                np.save(kspace_path, kspace_np)
+                print(f"  saved kspace: {kspace_path}")
+                kspace_cache[frames] = kspace_np
+            elif kspace_np is None:
+                kspace_np = np.load(kspace_path)
 
-    recon = app.HighDimensionalRecon(
-        kspace_np,
-        csmaps_np,
-        combine_echo=False,
-        lamda=args.lamda,
-        coord=traj,
-        regu="TV",
-        regu_axes=[0],
-        max_iter=args.max_iter,
-        solver="ADMM",
-        rho=args.rho,
-        device=sigpy_device,
-        show_pbar=False,
-        verbose=False,
-    ).run()
-
-    recon_np = np.squeeze(recon.get())
-    print(f"GRASP recon shape: {recon_np.shape}")
-
-    if recon_np.ndim == 3 and recon_np.shape[0] == t:
-        recon_thw = recon_np
-    elif recon_np.ndim == 3 and recon_np.shape[-1] == t:
-        recon_thw = np.transpose(recon_np, (2, 0, 1))
-    else:
-        recon_thw = recon_np
-    first_frame = np.abs(recon_thw[0])
-
-    os.makedirs(args.out_dir, exist_ok=True)
-    out_png = os.path.join(
-        args.out_dir,
-        f"grasp_first_frame_spf{args.spokes_per_frame}_t{t}.png",
-    )
-    plt.figure(figsize=(4, 4))
-    plt.imshow(first_frame, cmap="gray_r")
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(out_png, dpi=200)
-    plt.close()
-    print(f"Saved PNG: {out_png}")
-
-    if args.save_npy:
-        out_kspace = os.path.join(
-            args.out_dir, f"sim_kspace_spf{args.spokes_per_frame}_t{t}.npy"
-        )
-        out_recon = os.path.join(
-            args.out_dir, f"grasp_recon_spf{args.spokes_per_frame}_t{t}.npy"
-        )
-        np.save(out_kspace, kspace.detach().cpu().numpy())
-        np.save(out_recon, recon_np)
-        print(f"Saved kspace: {out_kspace}")
-        print(f"Saved recon: {out_recon}")
+            # GRASP recon now handled in a separate script.
 
 
 if __name__ == "__main__":

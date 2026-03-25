@@ -6,7 +6,8 @@ addpath('./data');
 
 
 %% read val_dro IDs from JSON
-SPLIT = jsondecode(fileread('data_split.json'));
+split_path = fullfile(fileparts(mfilename('fullpath')), '..', '..', 'data', 'split', 'data_split.json');
+SPLIT = jsondecode(fileread(split_path));
 % val_ids = SPLIT.val_dro; 
 val_ids = SPLIT.test_dro; 
 

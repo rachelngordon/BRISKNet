@@ -1861,7 +1861,7 @@ class SimulatedDataset(Dataset):
     def get_fastMRI_id(self, sample_dir):
 
         sample_file = os.path.basename(sample_dir)
-        id_map = pd.read_csv('data/DROSubID_vs_fastMRIbreastID.csv')
+        id_map = pd.read_csv('data/split/DROSubID_vs_fastMRIbreastID.csv')
 
         dro_id = int(sample_file.split("_")[1])
         dro_row = id_map[id_map["DRO"] == dro_id]
@@ -2076,7 +2076,7 @@ class SimulatedSPFDataset(Dataset):
     def get_fastMRI_id(self, sample_dir):
 
         sample_file = os.path.basename(sample_dir)
-        id_map = pd.read_csv('data/DROSubID_vs_fastMRIbreastID.csv')
+        id_map = pd.read_csv('data/split/DROSubID_vs_fastMRIbreastID.csv')
 
         dro_id = int(sample_file.split("_")[1])
         dro_row = id_map[id_map["DRO"] == dro_id]

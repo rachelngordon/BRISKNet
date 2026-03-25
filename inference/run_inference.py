@@ -287,7 +287,7 @@ def _prep_nufft_from_dro_traj(
     return ktraj_torch, dcomp_torch, nufft_ob, adjnufft_ob, int(samples)
 
 
-def _load_dro_fastmri_map(mapping_csv: str = "data/DROSubID_vs_fastMRIbreastID.csv") -> dict[int, int]:
+def _load_dro_fastmri_map(mapping_csv: str = "data/split/DROSubID_vs_fastMRIbreastID.csv") -> dict[int, int]:
     mapping = {}
     with open(mapping_csv, newline="") as fp:
         reader = csv.DictReader(fp)
