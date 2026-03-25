@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run GRASP reconstructions for DRO variable-frame samples using precomputed k-space and ESPIRiT csmaps. Run: python3 -m inference.grasp_recon_var_frames --help"""
+"""Run GRASP reconstructions for DRO variable-frame samples using precomputed k-space and ESPIRiT csmaps.
+
+Run:
+  python3 dro/grasp.py --help
+"""
 from __future__ import annotations
 
 import argparse
@@ -21,6 +25,7 @@ FRAME_TO_SPF = {
     144: 2,
 }
 FRAME_ORDER = [8, 12, 18, 36, 72, 144]
+_SAMPLE_ID_RE = re.compile(r"sample_(\d+)")
 
 
 def trajGR(Nkx, Nspokes):
@@ -163,6 +168,13 @@ def _collect_dro_files(dro_root: str) -> dict[str, dict[int, str]]:
     return sample_map
 
 
+def _sample_sort_key(sample_id: str) -> tuple[int, int | str]:
+    match = _SAMPLE_ID_RE.search(sample_id)
+    if match:
+        return (0, int(match.group(1)))
+    return (1, sample_id)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Run GRASP reconstructions using precomputed k-space and ESPIRiT csmaps."
@@ -224,14 +236,7 @@ def main() -> None:
     os.makedirs(recon_dir, exist_ok=True)
 
     sample_map = _collect_dro_files(args.dro_root)
-    sample_ids = sorted(
-        sample_map,
-        key=lambda s: (
-            int(re.search(r"sample_(\d+)", s).group(1))
-            if re.search(r"sample_(\d+)", s)
-            else s
-        ),
-    )
+    sample_ids = sorted(sample_map, key=_sample_sort_key)
 
     for sample_id in sample_ids:
         csmaps_path = os.path.join(csmaps_dir, f"csmaps_{sample_id}{suffix}.npy")

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Simulate k-space from a DRO .mat and reconstruct with GRASP. Run: python3 dro_gen/simulate_kspace_grasp_from_mat.py --help
+"""Simulate k-space from a DRO .mat and reconstruct with GRASP.
+
+Run:
+  python3 dro/sim_kspace_sample.py --help
 
 Example:
-  python3 dro/sim_kspace.py --mat-path /path/to/sample_dro_8frames.mat --spokes-per-frame 36
+  python3 dro/sim_kspace_sample.py --mat-path /path/to/sample_dro_8frames.mat --spokes-per-frame 36
 """
 
 from __future__ import annotations

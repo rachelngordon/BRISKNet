@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Loop over DRO variable-frame samples, simulate k-space, and compute/load ESPIRiT csmaps. Run: python3 -m inference.simulate_kspace_grasp_var_frames --help"""
+"""Loop over DRO variable-frame samples, simulate k-space, and compute/load ESPIRiT csmaps.
+
+Run:
+  python3 dro/sim_kspace.py --help
+"""
 from __future__ import annotations
 
 import argparse
@@ -32,6 +36,7 @@ FRAME_TO_SPF = {
 }
 FRAME_ORDER = [8, 12, 18, 36, 72, 144]
 CSMAPS_FRAMES = 8
+_SAMPLE_ID_RE = re.compile(r"sample_(\d+)")
 
 
 def trajGR(Nkx, Nspokes):
@@ -419,6 +424,13 @@ def _parse_sigpy_device(device: str) -> sp.Device:
     raise ValueError(f"Unknown sigpy device '{device}'. Use 'cpu' or 'cuda'.")
 
 
+def _sample_sort_key(sample_id: str) -> tuple[int, int | str]:
+    match = _SAMPLE_ID_RE.search(sample_id)
+    if match:
+        return (0, int(match.group(1)))
+    return (1, sample_id)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Simulate k-space and ESPIRiT csmaps for DRO variable-frame .mat files."
@@ -477,22 +489,16 @@ def main() -> None:
     suffix = _normalize_suffix(args.suffix)
 
     sample_map = _collect_dro_files(args.dro_root)
-    sample_ids = sorted(
-        sample_map,
-        key=lambda s: (
-            int(re.search(r"sample_(\d+)", s).group(1))
-            if re.search(r"sample_(\d+)", s)
-            else s
-        ),
-    )
+    sample_ids = sorted(sample_map, key=_sample_sort_key)
+
+    csmaps_dir = os.path.join(args.dro_root, "csmaps_espirit")
+    os.makedirs(csmaps_dir, exist_ok=True)
 
     for sample_id in sample_ids:
         available_frames = sample_map[sample_id]
         ordered_frames = [f for f in FRAME_ORDER if f in available_frames]
         if not ordered_frames:
             ordered_frames = sorted(available_frames)
-        csmaps_dir = os.path.join(args.dro_root, "csmaps_espirit")
-        os.makedirs(csmaps_dir, exist_ok=True)
         csmaps_path = os.path.join(csmaps_dir, f"csmaps_{sample_id}{suffix}.npy")
         csmaps_np = None
         kspace_cache: dict[int, np.ndarray] = {}
