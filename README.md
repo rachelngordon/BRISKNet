@@ -71,6 +71,24 @@ python train.py \
     --config example.yaml
 ```
 
+### Submit training on Slurm
+
+Use `submit.py` for multi-GPU submitit launches. It defaults to `multinode.py`,
+resolves the config's `experiment.output_dir` for logs, and supports a dry-run
+validator.
+
+```bash
+python submit.py \
+    --config /path/to/config.yaml \
+    --exp-name my_run \
+    --env-name recon_mri \
+    --micromamba-path /path/to/micromamba.sh \
+    --preset selfsup \
+    --dry-run
+```
+
+Remove `--dry-run` to submit.
+
 ## Inference
 ```bash
 python inference/run_inference.py \
@@ -82,6 +100,59 @@ Outputs:
 
 Plots saved to experiment directory.
 Aggregated metrics saved to the log file.
+
+## Full-Volume Timing
+
+`time_raw_inference_volume.py` measures per-volume BRISKNet and GRASP runtime
+across one or more spokes-per-frame settings. `aggregate_volume_timing_chunks.py`
+pools the resulting JSON outputs into aggregate JSON and Markdown summaries.
+
+1. BRISKNet full-volume timings: one run per SPF over the full validation split.
+
+```bash
+for spf in 8 16 24 36; do
+  python time_raw_inference_volume.py \
+      --split-file data/split/data_split.json \
+      --kspace-root /path/to/zf_kspace \
+      --csmap-root /path/to/cs_maps \
+      --config-template "/path/to/config_sampling_{spf}spf.yaml" \
+      --model-template "/path/to/ei_diffeo_{spf}spf_slice_sampling_best_model.pth" \
+      --spokes-per-frame-list "${spf}" \
+      --disable-grasp \
+      --out-json "logs/volcmp40_b_spf${spf}_full.json"
+done
+```
+
+2. GRASP full-volume timings: one run per SPF and per validation volume.
+
+```bash
+for spf in 8 16 24 36; do
+  for idx in $(seq 0 14); do
+    next=$((idx + 1))
+    python time_raw_inference_volume.py \
+        --split-file data/split/data_split.json \
+        --kspace-root /path/to/zf_kspace \
+        --csmap-root /path/to/cs_maps \
+        --config-template "/path/to/config_sampling_{spf}spf.yaml" \
+        --model-template "/path/to/ei_diffeo_{spf}spf_slice_sampling_best_model.pth" \
+        --spokes-per-frame-list "${spf}" \
+        --disable-brisknet \
+        --start-index "${idx}" \
+        --end-index "${next}" \
+        --out-json "logs/volcmp40_g_spf${spf}_${idx}_${next}.json"
+  done
+done
+```
+
+3. Aggregate the JSON outputs.
+
+```bash
+python aggregate_volume_timing_chunks.py
+```
+
+Outputs:
+- `logs/volcmp40_aggregate.json`
+- `logs/volcmp40_aggregate.md`
 
 ## References
 
