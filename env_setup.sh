@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_NAME="test_env"
+ENV_NAME="brisknet"
 
 # 0) Create env from YAML
 micromamba create -n "${ENV_NAME}" -f env_min.yaml -y
