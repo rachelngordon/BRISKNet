@@ -1,4 +1,4 @@
-"""Run DRO and non-DRO inference for one or more experiment checkpoints. Run: python3 -m inference.run_inference_new_dro --help"""
+"""Run DRO and non-DRO inference for one or more experiment checkpoints. Run: python3 -m inference.run_inference --help"""
 
 import argparse
 import csv
@@ -15,6 +15,10 @@ import warnings
 from pathlib import Path
 from typing import Tuple
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -29,7 +33,6 @@ from tqdm import tqdm
 from einops import rearrange
 from model.radial import to_torch_complex
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 JOB_SCRIPTS_DIR = REPO_ROOT / "job-scripts"
 if str(JOB_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(JOB_SCRIPTS_DIR))
@@ -289,7 +292,10 @@ def _prep_nufft_from_dro_traj(
 
 def _load_dro_fastmri_map(mapping_csv: str = "data/split/DROSubID_vs_fastMRIbreastID.csv") -> dict[int, int]:
     mapping = {}
-    with open(mapping_csv, newline="") as fp:
+    mapping_path = Path(mapping_csv)
+    if not mapping_path.is_absolute():
+        mapping_path = REPO_ROOT / mapping_path
+    with open(mapping_path, newline="") as fp:
         reader = csv.DictReader(fp)
         for row in reader:
             try:
@@ -299,7 +305,7 @@ def _load_dro_fastmri_map(mapping_csv: str = "data/split/DROSubID_vs_fastMRIbrea
                 continue
             mapping[dro_id] = fastmri_id
     if not mapping:
-        raise ValueError(f"No DRO-to-fastMRI mappings found in {mapping_csv}.")
+        raise ValueError(f"No DRO-to-fastMRI mappings found in {mapping_path}.")
     return mapping
 
 

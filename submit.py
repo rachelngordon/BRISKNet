@@ -1,3 +1,4 @@
+# run command: python submit.py --config {CONFIG_PATH} --exp-name {EXP_NAME} --nodes {NODES} --micromamba-path .../micromamba/etc/profile.d/mamba.sh --env-name {ENV_NAME} --constraint "a100|h100|h200"
 import argparse
 import os
 import shlex
