@@ -25,3 +25,4 @@ data/split/largest_tumor_slices.csv
 dro/plot_*
 dro/*lambda_sweep*
 *logs*.json
+.codex
