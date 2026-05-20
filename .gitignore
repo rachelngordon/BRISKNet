@@ -26,3 +26,4 @@ dro/plot_*
 dro/*lambda_sweep*
 *logs*.json
 .codex
+grasp_frame_plots/
