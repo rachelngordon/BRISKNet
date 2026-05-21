@@ -1565,62 +1565,134 @@ def main():
 
     # define EI loss transformations
     if use_ei_loss:
-        rotate = VideoRotate(n_trans=1, interpolation_mode="bilinear", degrees=config['model']['losses']['ei_loss'].get("rotate_range", 180))
+        ei_transform_cfg = config["model"]["losses"]["ei_loss"]
+        rotate_range = ei_transform_cfg.get("rotate_range", 180)
+
+        rotate = VideoRotate(n_trans=1, interpolation_mode="bilinear", degrees=rotate_range)
         diffeo = VideoDiffeo(n_trans=1, device=device)
         arrival_shift = BolusArrivalTimeShift(
             n_trans=1,
-            max_shift=config['model']['losses']['ei_loss'].get("arrival_shift_max_shift", 2),
-            percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
-            baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
-            arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
-            arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
-            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "n_frames"),
-            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
-            total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
+            max_shift=ei_transform_cfg.get("arrival_shift_max_shift", 2),
+            percentile=ei_transform_cfg.get("arrival_shift_percentile", 0.95),
+            baseline_k=ei_transform_cfg.get("arrival_shift_baseline_k", 2.0),
+            arrival_method=ei_transform_cfg.get("arrival_method", "threshold"),
+            arrival_fraction=ei_transform_cfg.get("arrival_fraction", 0.1),
+            pre_contrast_baseline=ei_transform_cfg.get("pre_contrast_baseline", "n_frames"),
+            baseline_seconds=ei_transform_cfg.get("baseline_seconds", 20),
+            total_seconds=ei_transform_cfg.get("total_seconds", 150.0),
         )
         enh_scale = BaselineEnhancementScale(
             n_trans=1,
             scale_range=(
-                config['model']['losses']['ei_loss'].get("enh_scale_min", 0.8),
-                config['model']['losses']['ei_loss'].get("enh_scale_max", 1.2),
+                ei_transform_cfg.get("enh_scale_min", 0.8),
+                ei_transform_cfg.get("enh_scale_max", 1.2),
             ),
-            pre_contrast_baseline=config['model']['losses']['ei_loss'].get("pre_contrast_baseline", "first_frame"),
-            baseline_seconds=config['model']['losses']['ei_loss'].get("baseline_seconds", 20),
-            total_seconds=config['model']['losses']['ei_loss'].get("total_seconds", 150.0),
-            buffer_frames=config['model']['losses']['ei_loss'].get("buffer_frames", 0),
-            start_mode=config['model']['losses']['ei_loss'].get("enh_scale_start", "baseline"),
-            arrival_percentile=config['model']['losses']['ei_loss'].get("arrival_shift_percentile", 0.95),
-            arrival_baseline_k=config['model']['losses']['ei_loss'].get("arrival_shift_baseline_k", 2.0),
-            arrival_method=config['model']['losses']['ei_loss'].get("arrival_method", "threshold"),
-            arrival_fraction=config['model']['losses']['ei_loss'].get("arrival_fraction", 0.1),
+            pre_contrast_baseline=ei_transform_cfg.get("pre_contrast_baseline", "first_frame"),
+            baseline_seconds=ei_transform_cfg.get("baseline_seconds", 20),
+            total_seconds=ei_transform_cfg.get("total_seconds", 150.0),
+            buffer_frames=ei_transform_cfg.get("buffer_frames", 0),
+            start_mode=ei_transform_cfg.get("enh_scale_start", "baseline"),
+            arrival_percentile=ei_transform_cfg.get("arrival_shift_percentile", 0.95),
+            arrival_baseline_k=ei_transform_cfg.get("arrival_shift_baseline_k", 2.0),
+            arrival_method=ei_transform_cfg.get("arrival_method", "threshold"),
+            arrival_fraction=ei_transform_cfg.get("arrival_fraction", 0.1),
         )
 
-        if config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift":
-            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(arrival_shift, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            else:
-                ei_loss_fn = EILoss(arrival_shift | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "enh_scale":
-            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(enh_scale, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            else:
-                ei_loss_fn = EILoss(enh_scale | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "arrival_shift_enh_scale":
-            if config['model']['losses']['ei_loss']['spatial_transform'] == "none":
-                ei_loss_fn = EILoss(arrival_shift | enh_scale, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            else:
-                ei_loss_fn = EILoss((arrival_shift | enh_scale) | (diffeo | rotate), metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        elif config['model']['losses']['ei_loss']['temporal_transform'] == "none":
-            if config['model']['losses']['ei_loss']['spatial_transform'] == "rotate":
-                ei_loss_fn = EILoss(rotate, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            elif config['model']['losses']['ei_loss']['spatial_transform'] == "diffeo":
-                ei_loss_fn = EILoss(diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-            else:
-                ei_loss_fn = EILoss(rotate | diffeo, metric=ei_loss_metric, model_type=model_type, no_grad=ei_no_grad, checkpoint_model=ei_checkpoint_model, checkpoint_mode=ei_checkpoint_mode, checkpoint_use_reentrant=ei_checkpoint_use_reentrant)
-        else:
+        temporal_mode = str(ei_transform_cfg.get("temporal_transform", "none")).strip().lower()
+        temporal_options = {
+            "none": [],
+            "arrival_shift": [arrival_shift],
+            "enh_scale": [enh_scale],
+            "arrival_shift_enh_scale": [arrival_shift, enh_scale],
+            "enh_scale_arrival_shift": [arrival_shift, enh_scale],
+            "arrival_shift+enh_scale": [arrival_shift, enh_scale],
+            "enh_scale+arrival_shift": [arrival_shift, enh_scale],
+        }
+        if temporal_mode not in temporal_options:
             raise ValueError(
-                "Unsupported temporal transform. Supported: arrival_shift, enh_scale, "
-                "arrival_shift_enh_scale, none."
+                "Unsupported temporal transform. Supported: none, arrival_shift, enh_scale, "
+                "arrival_shift_enh_scale."
+            )
+
+        spatial_mode = str(ei_transform_cfg.get("spatial_transform", "diffeo")).strip().lower()
+        spatial_options = {
+            "none": set(),
+            "rotate": {"rotate"},
+            "diffeo": {"diffeo"},
+            "rotate_diffeo": {"rotate", "diffeo"},
+            "diffeo_rotate": {"rotate", "diffeo"},
+            "both": {"rotate", "diffeo"},
+            "all": {"rotate", "diffeo"},
+        }
+        if spatial_mode not in spatial_options:
+            raise ValueError(
+                "Unsupported spatial transform. Supported: none, rotate, diffeo, rotate_diffeo."
+            )
+        spatial_tokens = set(spatial_options[spatial_mode])
+
+        # Optional explicit toggles override the spatial_transform preset.
+        if "enable_rotate" in ei_transform_cfg:
+            if bool(ei_transform_cfg.get("enable_rotate", False)):
+                spatial_tokens.add("rotate")
+            else:
+                spatial_tokens.discard("rotate")
+        if "enable_diffeo" in ei_transform_cfg:
+            if bool(ei_transform_cfg.get("enable_diffeo", False)):
+                spatial_tokens.add("diffeo")
+            else:
+                spatial_tokens.discard("diffeo")
+
+        rotate_is_zero_range = False
+        if isinstance(rotate_range, (int, float)):
+            rotate_is_zero_range = float(rotate_range) <= 0.0
+        elif isinstance(rotate_range, (list, tuple)) and len(rotate_range) == 2:
+            try:
+                rotate_is_zero_range = float(rotate_range[0]) == 0.0 and float(rotate_range[1]) == 0.0
+            except (TypeError, ValueError):
+                rotate_is_zero_range = False
+
+        if bool(ei_transform_cfg.get("disable_rotate", False)) or rotate_is_zero_range:
+            spatial_tokens.discard("rotate")
+        if bool(ei_transform_cfg.get("disable_diffeo", False)):
+            spatial_tokens.discard("diffeo")
+
+        selected_transforms = list(temporal_options[temporal_mode])
+        selected_transform_names = [
+            "arrival_shift" if t is arrival_shift else "enh_scale" for t in selected_transforms
+        ]
+
+        if "diffeo" in spatial_tokens:
+            selected_transforms.append(diffeo)
+            selected_transform_names.append("diffeo")
+        if "rotate" in spatial_tokens:
+            selected_transforms.append(rotate)
+            selected_transform_names.append("rotate")
+
+        if not selected_transforms:
+            raise ValueError(
+                "EI loss has no active transform. Set temporal_transform and/or spatial_transform, "
+                "or disable EI loss."
+            )
+
+        ei_transform = selected_transforms[0]
+        for tform in selected_transforms[1:]:
+            ei_transform = ei_transform | tform
+
+        ei_loss_fn = EILoss(
+            ei_transform,
+            metric=ei_loss_metric,
+            model_type=model_type,
+            no_grad=ei_no_grad,
+            checkpoint_model=ei_checkpoint_model,
+            checkpoint_mode=ei_checkpoint_mode,
+            checkpoint_use_reentrant=ei_checkpoint_use_reentrant,
+        )
+
+        if global_rank == 0 or not config["training"]["multigpu"]:
+            print(
+                "[EI] Active transforms: "
+                f"{', '.join(selected_transform_names)} "
+                f"(temporal={temporal_mode}, spatial={spatial_mode}, rotate_range={rotate_range})."
             )
 
 
