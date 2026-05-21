@@ -386,6 +386,7 @@ def main():
         slurm_gres=f"gpu:{slurm_params['gpus_per_node']}",
         timeout_min=slurm_params["timeout_min"],
         slurm_additional_parameters=slurm_additional,
+        srun_args=["--cpu-bind=none"],
     )
     if args.qos:
         update_kwargs["slurm_qos"] = args.qos

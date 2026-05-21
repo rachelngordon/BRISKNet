@@ -24,6 +24,7 @@ from model.ei import EILoss
 from model.mc import MCLoss
 from model.model_factory import build_recon_model, is_lsfp_model
 from model.radial import MCNUFFT
+from model.ssdu import SSDULoss, build_spoke_wise_ssdu_split
 from utils import prep_nufft, log_gradient_stats, log_lsfpnet_component_grads, plot_enhancement_curve, plot_rebin_consistency_diagnostic, get_cosine_ei_weight, plot_reconstruction_sample, get_git_commit, save_checkpoint, load_checkpoint, load_pretrained_weights, to_torch_complex, sliding_window_inference, set_seed, save_csmap_png
 from inference.eval import eval_grasp, eval_sample, compute_ssdu_kspace_nmse
 import csv
@@ -256,6 +257,42 @@ def _build_nufft_getter(device, traj_method: str):
         return cache[key]
 
     return _get_nufft
+
+
+def _prepare_ssdu_training_inputs(
+    measured_kspace: torch.Tensor,
+    physics: MCNUFFT,
+    spokes_per_frame: int,
+    samples_per_spoke: int,
+    ssdu_enable: bool,
+    ssdu_k_folds: int,
+    ssdu_selection: str,
+    ssdu_allow_single_spoke: bool,
+    iteration_index: int,
+):
+    if not ssdu_enable:
+        return measured_kspace, physics, measured_kspace, physics, None
+
+    ssdu_split = build_spoke_wise_ssdu_split(
+        y=measured_kspace,
+        physics=physics,
+        spokes_per_frame=int(spokes_per_frame),
+        samples_per_spoke=int(samples_per_spoke),
+        k_folds=int(ssdu_k_folds),
+        selection=ssdu_selection,
+        iteration_index=int(iteration_index),
+        allow_single_spoke=bool(ssdu_allow_single_spoke),
+    )
+    if ssdu_split is None:
+        return measured_kspace, physics, measured_kspace, physics, None
+
+    return (
+        ssdu_split.y_theta,
+        ssdu_split.physics_theta,
+        ssdu_split.y_lambda,
+        ssdu_split.physics_lambda,
+        ssdu_split,
+    )
 
 
 def _normalize_optional_checkpoint_path(value, field_name: str):
@@ -621,6 +658,39 @@ def main():
 
     losses_cfg = config["model"]["losses"]
     mc_loss_weight = float(losses_cfg["mc_loss"]["weight"])
+    ssdu_cfg_raw = losses_cfg.get("ssdu_loss", {})
+    if ssdu_cfg_raw is None:
+        ssdu_cfg_raw = {}
+    if isinstance(ssdu_cfg_raw, bool):
+        ssdu_enable = bool(ssdu_cfg_raw)
+        ssdu_cfg = {}
+    elif isinstance(ssdu_cfg_raw, dict):
+        ssdu_cfg = ssdu_cfg_raw
+        ssdu_enable = bool(ssdu_cfg.get("enable", False))
+    else:
+        raise TypeError(
+            "model.losses.ssdu_loss must be a mapping, boolean, or null, got "
+            f"{type(ssdu_cfg_raw).__name__}."
+        )
+    ssdu_k_folds = int(ssdu_cfg.get("k_folds", 4))
+    ssdu_selection = str(ssdu_cfg.get("selection", "random")).strip().lower()
+    ssdu_weighting = str(ssdu_cfg.get("weighting", "sqrt_dcomp")).strip().lower()
+    ssdu_allow_single_spoke = bool(ssdu_cfg.get("allow_single_spoke", False))
+    if ssdu_enable and ssdu_k_folds < 2:
+        raise ValueError("model.losses.ssdu_loss.k_folds must be >= 2 when SSDU is enabled.")
+    if ssdu_enable and ssdu_selection not in {"random", "cyclic"}:
+        raise ValueError(
+            "model.losses.ssdu_loss.selection must be one of: random, cyclic."
+        )
+    if ssdu_enable and ssdu_weighting not in {"sqrt_dcomp", "none", "uniform", ""}:
+        raise ValueError(
+            "model.losses.ssdu_loss.weighting must be one of: sqrt_dcomp, none."
+        )
+    primary_loss_name = "SSDU" if ssdu_enable else "MC"
+    primary_loss_name_lower = primary_loss_name.lower()
+    primary_train_scalar_name = f"Loss/Train_{primary_loss_name}"
+    primary_val_scalar_name = f"Loss/Val_{primary_loss_name}"
+    primary_loss_curve_label = f"{primary_loss_name} Loss"
     adj_loss_cfg = losses_cfg.get("adj_loss", {})
     if not isinstance(adj_loss_cfg, dict):
         raise TypeError(
@@ -1306,12 +1376,38 @@ def main():
 
 
     # select metric for loss functions
-    if config['model']['losses']['mc_loss']['metric'] == "MSE":
-        mc_loss_fn = MCLoss(model_type=model_type)
-    elif config['model']['losses']['mc_loss']['metric'] == "MAE":
-        mc_loss_fn = MCLoss(model_type=model_type, metric=torch.nn.L1Loss())
+    mc_metric_name = str(config['model']['losses']['mc_loss']['metric']).strip().upper()
+    if mc_metric_name == "MSE":
+        mc_metric = torch.nn.MSELoss()
+    elif mc_metric_name == "MAE":
+        mc_metric = torch.nn.L1Loss()
     else:
-        raise(ValueError, "Unsupported MC Loss Metric.")
+        raise ValueError("Unsupported MC Loss Metric.")
+    mc_loss_fn = MCLoss(model_type=model_type, metric=mc_metric)
+
+    if ssdu_enable:
+        ssdu_metric_name = str(ssdu_cfg.get("metric", mc_metric_name)).strip().upper()
+        if ssdu_metric_name == "MSE":
+            ssdu_metric = torch.nn.MSELoss()
+        elif ssdu_metric_name == "MAE":
+            ssdu_metric = torch.nn.L1Loss()
+        else:
+            raise ValueError(
+                "Unsupported SSDU Loss Metric. Expected one of: MSE, MAE."
+            )
+        ssdu_loss_fn = SSDULoss(
+            model_type=model_type,
+            metric=ssdu_metric,
+            weighting=ssdu_weighting,
+        )
+        if global_rank == 0 or not config['training']['multigpu']:
+            print(
+                "[SSDU] Enabled spoke-wise SSDU training loss: "
+                f"k_folds={ssdu_k_folds}, selection={ssdu_selection}, "
+                f"weighting={ssdu_weighting}, allow_single_spoke={ssdu_allow_single_spoke}."
+            )
+    else:
+        ssdu_loss_fn = None
 
 
     ei_metric_name = str(ei_cfg.get("metric", "MSE")).strip().upper()
@@ -2083,6 +2179,7 @@ def main():
                 # prepare inputs
                 measured_kspace = to_torch_complex(measured_kspace).squeeze()
                 measured_kspace = rearrange(measured_kspace, 't co sp sam -> co (sp sam) t')
+                n_samples_i = _as_int_scalar(N_samples)
                 n_spokes_i = _as_int_scalar(N_spokes)
                 n_time_i = _as_int_scalar(N_time)
 
@@ -2125,21 +2222,42 @@ def main():
                 if config['model']['encode_time_index'] == False:
                     start_timepoint_index = None
 
+                (
+                    train_input_kspace,
+                    train_input_physics,
+                    train_loss_kspace,
+                    train_loss_physics,
+                    _,
+                ) = _prepare_ssdu_training_inputs(
+                    measured_kspace=measured_kspace,
+                    physics=physics,
+                    spokes_per_frame=n_spokes_i,
+                    samples_per_spoke=n_samples_i,
+                    ssdu_enable=ssdu_enable,
+                    ssdu_k_folds=ssdu_k_folds,
+                    ssdu_selection=ssdu_selection,
+                    ssdu_allow_single_spoke=ssdu_allow_single_spoke,
+                    iteration_index=step0_train_batches,
+                )
+
                 with amp_autocast():
                     x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                        measured_kspace, physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
+                        train_input_kspace, train_input_physics, csmap, acceleration_encoding, start_timepoint_index, epoch="train0", norm=config['model']['norm']
                     )
 
                     # calculate losses
                     if use_adj_loss:
                         initial_train_adj_loss += adj_loss.item()
 
-                    mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
+                    if ssdu_enable:
+                        mc_loss = ssdu_loss_fn(train_loss_kspace, x_recon, train_loss_physics, csmap)
+                    else:
+                        mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
                     initial_train_mc_loss += mc_loss.item()
 
                     if use_ei_loss:
                         ei_loss, t_img = ei_loss_fn(
-                            x_recon, physics, model_for_ei, csmap, acceleration_encoding, start_timepoint_index
+                            x_recon, train_input_physics, model_for_ei, csmap, acceleration_encoding, start_timepoint_index
                         )
 
                         initial_train_ei_loss += ei_loss.item()
@@ -2164,7 +2282,7 @@ def main():
 
 
             if global_rank == 0 or not config['training']['multigpu']:
-                writer.add_scalar('Loss/Train_MC', step0_train_mc_loss, 0)
+                writer.add_scalar(primary_train_scalar_name, step0_train_mc_loss, 0)
                 writer.add_scalar('Loss/Train_EI', step0_train_ei_loss, 0)
                 writer.add_scalar('Loss/Train_Weighted_EI', 0, 0)
                 writer.add_scalar('Loss/Train_Adj', step0_train_adj_loss, 0)
@@ -2261,7 +2379,27 @@ def main():
                         if use_adj_loss:
                             initial_val_adj_loss += adj_loss
                         
-                        mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics, csmap)
+                        if ssdu_enable:
+                            (
+                                _val_input_kspace,
+                                _val_input_physics,
+                                val_loss_kspace,
+                                val_loss_physics,
+                                _,
+                            ) = _prepare_ssdu_training_inputs(
+                                measured_kspace=dro_kspace.to(device),
+                                physics=eval_physics,
+                                spokes_per_frame=eval_spokes_i,
+                                samples_per_spoke=int(N_samples),
+                                ssdu_enable=ssdu_enable,
+                                ssdu_k_folds=ssdu_k_folds,
+                                ssdu_selection=ssdu_selection,
+                                ssdu_allow_single_spoke=ssdu_allow_single_spoke,
+                                iteration_index=step0_val_batches,
+                            )
+                            mc_loss = ssdu_loss_fn(val_loss_kspace, x_recon, val_loss_physics, csmap)
+                        else:
+                            mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics, csmap)
                         initial_val_mc_loss += mc_loss.item()
     
                         if use_ei_loss:
@@ -2450,7 +2588,7 @@ def main():
 
 
                 if global_rank == 0 or not config['training']['multigpu']:
-                    writer.add_scalar('Loss/Val_MC', step0_val_mc_loss, 0)
+                    writer.add_scalar(primary_val_scalar_name, step0_val_mc_loss, 0)
                     writer.add_scalar('Loss/Val_EI', step0_val_ei_loss, 0)
                     writer.add_scalar('Loss/Val_Adj', step0_val_adj_loss, 0)
 
@@ -2526,9 +2664,15 @@ def main():
                     if np.isfinite(initial_eval_raw_ssdu_nmse):
                         writer.add_scalar('Metric/RAW_SSDU_NMSE', initial_eval_raw_ssdu_nmse, 0)
 
-        print(f"Step 0 Train Losses: MC: {step0_train_mc_loss}, EI: {step0_train_ei_loss}, Adj: {step0_train_adj_loss}")
+        print(
+            f"Step 0 Train Losses: {primary_loss_name}: {step0_train_mc_loss}, "
+            f"EI: {step0_train_ei_loss}, Adj: {step0_train_adj_loss}"
+        )
         if step0_do_val:
-            print(f"Step 0 Val Losses: MC: {step0_val_mc_loss}, EI: {step0_val_ei_loss}, Adj: {step0_val_adj_loss}")
+            print(
+                f"Step 0 Val Losses: {primary_loss_name}: {step0_val_mc_loss}, "
+                f"EI: {step0_val_ei_loss}, Adj: {step0_val_adj_loss}"
+            )
             if (global_rank == 0 or not config['training']['multigpu']) and step0_val_infer_times:
                 step0_mean_infer = float(np.mean(step0_val_infer_times))
                 step0_std_infer = float(np.std(step0_val_infer_times, ddof=1)) if len(step0_val_infer_times) > 1 else 0.0
@@ -2878,18 +3022,38 @@ def main():
                 #     start_timepoint_index = torch.tensor([0], dtype=torch.float, device=device)
 
                 # print("Time encoding: ", start_timepoint_index.item())
+                (
+                    train_input_kspace,
+                    train_input_physics,
+                    train_loss_kspace,
+                    train_loss_physics,
+                    _,
+                ) = _prepare_ssdu_training_inputs(
+                    measured_kspace=measured_kspace,
+                    physics=physics,
+                    spokes_per_frame=n_spokes_i,
+                    samples_per_spoke=n_samples_i,
+                    ssdu_enable=ssdu_enable,
+                    ssdu_k_folds=ssdu_k_folds,
+                    ssdu_selection=ssdu_selection,
+                    ssdu_allow_single_spoke=ssdu_allow_single_spoke,
+                    iteration_index=max(iteration_count - 1, 0),
+                )
 
                 try:
                     with amp_autocast():
                         x_recon, adj_loss, lambda_L, lambda_S, lambda_spatial_L, lambda_spatial_S, gamma, lambda_step = model(
-                            measured_kspace, physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
+                            train_input_kspace, train_input_physics, csmap, acceleration_encoding, start_timepoint_index, epoch=f"train{epoch}", norm=config['model']['norm']
                         )
 
                         # compute losses
                         if use_adj_loss:
                             running_adj_loss += adj_loss.item()
 
-                        mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
+                        if ssdu_enable:
+                            mc_loss = ssdu_loss_fn(train_loss_kspace, x_recon, train_loss_physics, csmap)
+                        else:
+                            mc_loss = mc_loss_fn(measured_kspace, x_recon, physics, csmap)
                         running_mc_loss += mc_loss.item()
 
                         if use_rebin_loss and compute_rebin_this_epoch:
@@ -2913,7 +3077,7 @@ def main():
                         ei_loss = None
                         if use_ei_loss and compute_ei_this_epoch:
                             ei_loss, t_img = ei_loss_fn(
-                                x_recon, physics, model_for_ei, csmap, acceleration_encoding, start_timepoint_index
+                                x_recon, train_input_physics, model_for_ei, csmap, acceleration_encoding, start_timepoint_index
                             )
 
                             running_ei_loss += ei_loss.item()
@@ -2977,14 +3141,14 @@ def main():
                                             iteration_count,
                                         )
                             train_loader_tqdm.set_postfix(
-                                mc_loss=mc_loss.item(),
+                                **{f"{primary_loss_name_lower}_loss": mc_loss.item()},
                                 ei_loss=ei_loss.item(),
                                 rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
                             )
 
                         else:
                             train_loader_tqdm.set_postfix(
-                                mc_loss=mc_loss.item(),
+                                **{f"{primary_loss_name_lower}_loss": mc_loss.item()},
                                 rebin_loss=(rebin_loss.item() if rebin_loss is not None else None),
                             )
 
@@ -3133,7 +3297,7 @@ def main():
 
 
             if global_rank == 0 or not config['training']['multigpu']:
-                writer.add_scalar('Loss/Train_MC', epoch_train_mc_loss, epoch)
+                writer.add_scalar(primary_train_scalar_name, epoch_train_mc_loss, epoch)
                 writer.add_scalar('Loss/Train_EI', epoch_train_ei_loss, epoch)
                 writer.add_scalar('Loss/Train_Adj', epoch_train_adj_loss, epoch)
                 if use_rebin_loss:
@@ -3295,7 +3459,27 @@ def main():
                                 if use_adj_loss:
                                     val_running_adj_loss += val_adj_loss
 
-                                val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
+                                if ssdu_enable:
+                                    (
+                                        _val_input_kspace,
+                                        _val_input_physics,
+                                        val_loss_kspace,
+                                        val_loss_physics,
+                                        _,
+                                    ) = _prepare_ssdu_training_inputs(
+                                        measured_kspace=val_dro_kspace_batch.to(device),
+                                        physics=eval_physics,
+                                        spokes_per_frame=eval_spokes_i,
+                                        samples_per_spoke=int(N_samples),
+                                        ssdu_enable=ssdu_enable,
+                                        ssdu_k_folds=ssdu_k_folds,
+                                        ssdu_selection=ssdu_selection,
+                                        ssdu_allow_single_spoke=ssdu_allow_single_spoke,
+                                        iteration_index=val_batches,
+                                    )
+                                    val_mc_loss = ssdu_loss_fn(val_loss_kspace, val_x_recon, val_loss_physics, val_csmap)
+                                else:
+                                    val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
                                 val_running_mc_loss += val_mc_loss.item()
 
                                 if use_ei_loss and compute_ei_this_epoch:
@@ -3311,13 +3495,24 @@ def main():
 
                                     val_running_ei_loss += val_ei_loss.item()
                                     val_loader_tqdm.set_postfix(
-                                        val_mc_loss=val_mc_loss.item(), val_ei_loss=val_ei_loss.item(), ei_w=ei_loss_weight
+                                        **{
+                                            f"val_{primary_loss_name_lower}_loss": val_mc_loss.item(),
+                                            "val_ei_loss": val_ei_loss.item(),
+                                            "ei_w": ei_loss_weight,
+                                        }
                                     )
                                 else:
                                     if use_ei_loss:
-                                        val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item(), ei_w=ei_loss_weight)
+                                        val_loader_tqdm.set_postfix(
+                                            **{
+                                                f"val_{primary_loss_name_lower}_loss": val_mc_loss.item(),
+                                                "ei_w": ei_loss_weight,
+                                            }
+                                        )
                                     else:
-                                        val_loader_tqdm.set_postfix(val_mc_loss=val_mc_loss.item())
+                                        val_loader_tqdm.set_postfix(
+                                            **{f"val_{primary_loss_name_lower}_loss": val_mc_loss.item()}
+                                        )
 
 
                             ## Evaluation
@@ -3868,7 +4063,7 @@ def main():
                 val_adj_losses.append(epoch_val_adj_loss)
 
                 if global_rank == 0 or not config['training']['multigpu']:
-                    writer.add_scalar('Loss/Val_MC', epoch_val_mc_loss, epoch)
+                    writer.add_scalar(primary_val_scalar_name, epoch_val_mc_loss, epoch)
                     writer.add_scalar('Loss/Val_EI', epoch_val_ei_loss, epoch)
                     writer.add_scalar('Loss/Val_Adj', epoch_val_adj_loss, epoch)
 
@@ -3927,11 +4122,11 @@ def main():
                         axes[0, 0].set_xlabel("Epoch")
                         axes[0, 0].set_ylabel("Adjoint Loss")
 
-                        # Plot Training MC Loss
+                        # Plot Training primary reconstruction loss (MC or SSDU)
                         sns.lineplot(x=range(len(train_mc_losses)), y=train_mc_losses, ax=axes[0, 1])
-                        axes[0, 1].set_title("Training MC Loss")
+                        axes[0, 1].set_title(f"Training {primary_loss_name} Loss")
                         axes[0, 1].set_xlabel("Epoch")
-                        axes[0, 1].set_ylabel("MC Loss")
+                        axes[0, 1].set_ylabel(primary_loss_curve_label)
 
                         # Plot Training EI Loss
                         sns.lineplot(x=range(len(train_ei_losses)), y=train_ei_losses, ax=axes[0, 2])
@@ -3952,11 +4147,11 @@ def main():
                         axes[1, 0].set_xlabel("Epoch")
                         axes[1, 0].set_ylabel("Adjoint Loss")
 
-                        # Plot Validation MC Loss
+                        # Plot Validation primary reconstruction loss (MC or SSDU)
                         sns.lineplot(x=range(0, len(val_mc_losses)*eval_frequency, eval_frequency), y=val_mc_losses, ax=axes[1, 1], color='orange')
-                        axes[1, 1].set_title(f"Validation MC Loss ({N_spokes_eval} spokes/frame)")
+                        axes[1, 1].set_title(f"Validation {primary_loss_name} Loss ({N_spokes_eval} spokes/frame)")
                         axes[1, 1].set_xlabel("Epoch")
-                        axes[1, 1].set_ylabel("MC Loss")
+                        axes[1, 1].set_ylabel(primary_loss_curve_label)
 
                         # Plot Validation EI Loss
                         sns.lineplot(x=range(0, len(val_ei_losses)*eval_frequency, eval_frequency), y=val_ei_losses, ax=axes[1, 2], color='orange')
@@ -4020,7 +4215,7 @@ def main():
 
                         # Plot Weighted Losses
                         plt.figure()
-                        plt.plot(weighted_train_mc_losses, label="MC Loss")
+                        plt.plot(weighted_train_mc_losses, label=primary_loss_curve_label)
                         plt.plot(weighted_train_ei_losses, label="EI Loss")
                         plt.plot(weighted_train_adj_losses, label="Adjoint Loss")
                         if weighted_train_rebin_losses:
@@ -4293,7 +4488,8 @@ def main():
                 if global_rank == 0 or not config['training']['multigpu']:
                     # Print epoch summary
                     print(
-                        f"Epoch {epoch}: Training MC Loss: {epoch_train_mc_loss:.6f}, Validation MC Loss: {epoch_val_mc_loss:.6f}"
+                        f"Epoch {epoch}: Training {primary_loss_name} Loss: {epoch_train_mc_loss:.6f}, "
+                        f"Validation {primary_loss_name} Loss: {epoch_val_mc_loss:.6f}"
                     )
                     if use_ei_loss:
                         print(
