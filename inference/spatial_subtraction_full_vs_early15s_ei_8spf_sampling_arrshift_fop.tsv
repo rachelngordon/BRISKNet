@@ -1,0 +1,9 @@
+window	metric	brisknet_mean	grasp_mean	brisknet_stddev	grasp_stddev
+full_series	ssim	0.922	0.964	0.035	0.014
+early15s	ssim	0.862	0.923	0.059	0.034
+full_series	psnr	37.054	38.384	2.214	2.373
+early15s	psnr	34.651	36.049	2.669	2.980
+full_series	mse	0.044	0.034	0.023	0.021
+early15s	mse	0.037	0.029	0.020	0.019
+full_series	lpips	0.135	0.083	0.052	0.037
+early15s	lpips	0.137	0.117	0.040	0.038

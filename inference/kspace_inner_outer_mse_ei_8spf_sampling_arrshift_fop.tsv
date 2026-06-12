@@ -1,0 +1,5 @@
+method	kspace_region	kspace_rho	mse_mean	mse_stddev
+BRISKNet	inner	0.57	21.2283	13.4342
+BRISKNet	outer	0.57	0.0048292	0.00154849
+GRASP	inner	0.57	21.1945	13.415
+GRASP	outer	0.57	0.00622263	0.00228336

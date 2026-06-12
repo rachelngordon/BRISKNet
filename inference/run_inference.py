@@ -47,6 +47,7 @@ from inference.eval import (
     compute_ssdu_kspace_nmse_grasp,
     calc_dc,
     calc_dc_psnr,
+    calc_kspace_region_mse,
     _resolve_baseline_frames,
     _load_tumor_mask,
     _load_slice_map,
@@ -864,6 +865,18 @@ def _mean_std(values, key):
     return mean, std
 
 
+def _format_csv_metric(row, key: str) -> str:
+    value = row.get(key)
+    if value is None:
+        return ""
+    try:
+        if not np.isfinite(value):
+            return ""
+    except TypeError:
+        return ""
+    return f"{float(value):.6f}"
+
+
 def _compute_summaries(results, grasp_results, raw_results, zf_results):
     dl_summary = {
         "ssim": _mean_std(results, "ssim"),
@@ -872,8 +885,14 @@ def _compute_summaries(results, grasp_results, raw_results, zf_results):
         "mse": _mean_std(results, "mse"),
         "mse_fg": _mean_std(results, "dl_mse_fg"),
         "lpips": _mean_std(results, "lpips"),
+        "early15s_ssim": _mean_std(results, "early15s_ssim"),
+        "early15s_psnr": _mean_std(results, "early15s_psnr"),
+        "early15s_mse": _mean_std(results, "early15s_mse"),
+        "early15s_lpips": _mean_std(results, "early15s_lpips"),
         "dc_mse": _mean_std(results, "dc_mse"),
         "dc_mae": _mean_std(results, "dc_mae"),
+        "dc_inner_kspace_mse": _mean_std(results, "dl_dc_inner_kspace_mse"),
+        "dc_outer_kspace_mse": _mean_std(results, "dl_dc_outer_kspace_mse"),
         "dc_mse_bestfit": _mean_std(results, "dl_dc_mse_bestfit"),
         "dc_mae_bestfit": _mean_std(results, "dl_dc_mae_bestfit"),
         "dc_scale_abs": _mean_std(results, "dl_dc_scale_abs"),
@@ -881,6 +900,8 @@ def _compute_summaries(results, grasp_results, raw_results, zf_results):
         "recon_corr": _mean_std(results, "recon_corr"),
         "grasp_corr": _mean_std(results, "grasp_corr"),
         "fg_fraction": _mean_std(results, "fg_fraction"),
+        "streak_bfer": _mean_std(results, "dl_streak_bfer"),
+        "streak_fg_fraction": _mean_std(results, "streak_fg_fraction"),
     }
 
     grasp_summary = {
@@ -890,23 +911,38 @@ def _compute_summaries(results, grasp_results, raw_results, zf_results):
         "mse": _mean_std(grasp_results, "mse"),
         "mse_fg": _mean_std(results, "grasp_mse_fg"),
         "lpips": _mean_std(grasp_results, "lpips"),
+        "early15s_ssim": _mean_std(results, "grasp_early15s_ssim"),
+        "early15s_psnr": _mean_std(results, "grasp_early15s_psnr"),
+        "early15s_mse": _mean_std(results, "grasp_early15s_mse"),
+        "early15s_lpips": _mean_std(results, "grasp_early15s_lpips"),
         "dc_mse": _mean_std(grasp_results, "dc_mse"),
         "dc_mae": _mean_std(grasp_results, "dc_mae"),
+        "dc_inner_kspace_mse": _mean_std(grasp_results, "grasp_dc_inner_kspace_mse"),
+        "dc_outer_kspace_mse": _mean_std(grasp_results, "grasp_dc_outer_kspace_mse"),
         "dc_mse_bestfit": _mean_std(grasp_results, "grasp_dc_mse_bestfit"),
         "dc_mae_bestfit": _mean_std(grasp_results, "grasp_dc_mae_bestfit"),
         "dc_scale_abs": _mean_std(grasp_results, "grasp_dc_scale_abs"),
         "img_scale": _mean_std(results, "grasp_img_scale"),
+        "streak_bfer": _mean_std(results, "grasp_streak_bfer"),
     }
 
     raw_summary = {
         "raw_dc_mse": _mean_std(raw_results, "raw_dc_mse"),
         "raw_dc_mae": _mean_std(raw_results, "raw_dc_mae"),
         "raw_dc_psnr": _mean_std(raw_results, "raw_dc_psnr"),
+        "raw_dc_inner_kspace_mse": _mean_std(raw_results, "raw_dc_inner_kspace_mse"),
+        "raw_dc_outer_kspace_mse": _mean_std(raw_results, "raw_dc_outer_kspace_mse"),
         "raw_grasp_dc_mse": _mean_std(raw_results, "raw_grasp_dc_mse"),
         "raw_grasp_dc_mae": _mean_std(raw_results, "raw_grasp_dc_mae"),
         "raw_grasp_dc_psnr": _mean_std(raw_results, "raw_grasp_dc_psnr"),
+        "raw_grasp_dc_inner_kspace_mse": _mean_std(raw_results, "raw_grasp_dc_inner_kspace_mse"),
+        "raw_grasp_dc_outer_kspace_mse": _mean_std(raw_results, "raw_grasp_dc_outer_kspace_mse"),
         "raw_ssdu_nmse": _mean_std(raw_results, "raw_ssdu_nmse"),
         "raw_grasp_ssdu_nmse": _mean_std(raw_results, "raw_grasp_ssdu_nmse"),
+        "raw_ssdu_nmse_unscaled": _mean_std(raw_results, "raw_ssdu_nmse_unscaled"),
+        "raw_grasp_ssdu_nmse_unscaled": _mean_std(raw_results, "raw_grasp_ssdu_nmse_unscaled"),
+        "raw_ssdu_nmse_scale_matched": _mean_std(raw_results, "raw_ssdu_nmse_scale_matched"),
+        "raw_grasp_ssdu_nmse_scale_matched": _mean_std(raw_results, "raw_grasp_ssdu_nmse_scale_matched"),
     }
 
     zf_summary = None
@@ -920,6 +956,8 @@ def _compute_summaries(results, grasp_results, raw_results, zf_results):
             "lpips": _mean_std(zf_results, "lpips"),
             "dc_mse": _mean_std(zf_results, "dc_mse"),
             "dc_mae": _mean_std(zf_results, "dc_mae"),
+            "dc_inner_kspace_mse": _mean_std(zf_results, "zf_dc_inner_kspace_mse"),
+            "dc_outer_kspace_mse": _mean_std(zf_results, "zf_dc_outer_kspace_mse"),
             "dc_mse_bestfit": _mean_std(zf_results, "zf_dc_mse_bestfit"),
             "dc_mae_bestfit": _mean_std(zf_results, "zf_dc_mae_bestfit"),
             "dc_scale_abs": _mean_std(zf_results, "zf_dc_scale_abs"),
@@ -935,9 +973,13 @@ def _write_metrics_csv(
     grasp_results,
     raw_results,
     zf_results,
+    include_early_15s: bool = False,
+    compare_kspace_regions: bool = False,
+    kspace_rho: float = 0.57,
+    include_streak_metric: bool = False,
 ):
     with open(metrics_path, "w") as f:
-        headers = [
+        base_headers = [
             "sample",
             "dro_csmap_scale",
             "dl_ssim",
@@ -990,7 +1032,57 @@ def _write_metrics_csv(
             "raw_grasp_dc_psnr",
             "raw_ssdu_nmse",
             "raw_grasp_ssdu_nmse",
+            "raw_ssdu_nmse_unscaled",
+            "raw_grasp_ssdu_nmse_unscaled",
+            "raw_ssdu_nmse_scale_matched",
+            "raw_grasp_ssdu_nmse_scale_matched",
         ]
+        if include_streak_metric:
+            dl_streak_insert = base_headers.index("dl_dc_mse")
+            base_headers.insert(dl_streak_insert, "dl_streak_bfer")
+            grasp_streak_insert = base_headers.index("grasp_dc_mse")
+            base_headers.insert(grasp_streak_insert, "grasp_streak_bfer")
+            base_headers.insert(base_headers.index("raw_dc_mse"), "streak_fg_fraction")
+        if compare_kspace_regions:
+            base_headers.extend(
+                [
+                    "kspace_rho",
+                    "dl_dc_inner_kspace_mse",
+                    "dl_dc_outer_kspace_mse",
+                    "grasp_dc_inner_kspace_mse",
+                    "grasp_dc_outer_kspace_mse",
+                    "zf_dc_inner_kspace_mse",
+                    "zf_dc_outer_kspace_mse",
+                    "raw_dc_inner_kspace_mse",
+                    "raw_dc_outer_kspace_mse",
+                    "raw_grasp_dc_inner_kspace_mse",
+                    "raw_grasp_dc_outer_kspace_mse",
+                ]
+            )
+        dl_early15_headers = [
+            "dl_early15s_ssim",
+            "dl_early15s_psnr",
+            "dl_early15s_mse",
+            "dl_early15s_lpips",
+        ]
+        grasp_early15_headers = [
+            "grasp_early15s_ssim",
+            "grasp_early15s_psnr",
+            "grasp_early15s_mse",
+            "grasp_early15s_lpips",
+        ]
+        if include_early_15s:
+            dl_insert = base_headers.index("dl_dc_mse")
+            grasp_insert = base_headers.index("grasp_dc_mse")
+            headers = (
+                base_headers[:dl_insert]
+                + dl_early15_headers
+                + base_headers[dl_insert:grasp_insert]
+                + grasp_early15_headers
+                + base_headers[grasp_insert:]
+            )
+        else:
+            headers = base_headers
         f.write(",".join(headers) + "\n")
         zf_lookup = {row["sample"]: row for row in zf_results}
         for dro_row, grasp_row, raw_row in zip(results, grasp_results, raw_results):
@@ -1002,7 +1094,7 @@ def _write_metrics_csv(
             fg_fraction = dro_row.get("fg_fraction")
             zf_psnr_fg = zf_row.get("zf_psnr_fg")
             zf_mse_fg = zf_row.get("zf_mse_fg")
-            row = [
+            base_row = [
                 dro_row["sample"],
                 "" if dro_row.get("dro_csmap_scale") is None else f"{dro_row['dro_csmap_scale']:.6f}",
                 f"{dro_row['ssim']:.6f}",
@@ -1047,15 +1139,72 @@ def _write_metrics_csv(
                 "" if zf_row.get("zf_dc_scale_phase") is None else f"{zf_row['zf_dc_scale_phase']:.6f}",
                 "" if zf_row.get("zf_img_scale") is None else f"{zf_row['zf_img_scale']:.6f}",
                 "" if fg_fraction is None else f"{fg_fraction:.6f}",
-                f"{raw_row['raw_dc_mse']:.6f}",
-                f"{raw_row['raw_dc_mae']:.6f}",
+                _format_csv_metric(raw_row, "raw_dc_mse"),
+                _format_csv_metric(raw_row, "raw_dc_mae"),
                 "" if raw_row.get("raw_dc_psnr") is None else f"{raw_row['raw_dc_psnr']:.6f}",
                 "" if raw_row.get("raw_grasp_dc_mse") is None else f"{raw_row['raw_grasp_dc_mse']:.6f}",
                 "" if raw_row.get("raw_grasp_dc_mae") is None else f"{raw_row['raw_grasp_dc_mae']:.6f}",
                 "" if raw_row.get("raw_grasp_dc_psnr") is None else f"{raw_row['raw_grasp_dc_psnr']:.6f}",
                 "" if raw_row.get("raw_ssdu_nmse") is None else f"{raw_row['raw_ssdu_nmse']:.6f}",
                 "" if raw_row.get("raw_grasp_ssdu_nmse") is None else f"{raw_row['raw_grasp_ssdu_nmse']:.6f}",
+                _format_csv_metric(raw_row, "raw_ssdu_nmse_unscaled"),
+                _format_csv_metric(raw_row, "raw_grasp_ssdu_nmse_unscaled"),
+                _format_csv_metric(raw_row, "raw_ssdu_nmse_scale_matched"),
+                _format_csv_metric(raw_row, "raw_grasp_ssdu_nmse_scale_matched"),
             ]
+            if include_streak_metric:
+                dl_streak_insert = base_headers.index("dl_streak_bfer")
+                grasp_streak_insert = base_headers.index("grasp_streak_bfer")
+                streak_fraction_insert = base_headers.index("streak_fg_fraction")
+                base_row.insert(dl_streak_insert, _format_csv_metric(dro_row, "dl_streak_bfer"))
+                base_row.insert(
+                    grasp_streak_insert,
+                    _format_csv_metric(dro_row, "grasp_streak_bfer"),
+                )
+                base_row.insert(
+                    streak_fraction_insert,
+                    _format_csv_metric(dro_row, "streak_fg_fraction"),
+                )
+            if compare_kspace_regions:
+                base_row.extend(
+                    [
+                        f"{float(kspace_rho):.6f}",
+                        _format_csv_metric(dro_row, "dl_dc_inner_kspace_mse"),
+                        _format_csv_metric(dro_row, "dl_dc_outer_kspace_mse"),
+                        _format_csv_metric(grasp_row, "grasp_dc_inner_kspace_mse"),
+                        _format_csv_metric(grasp_row, "grasp_dc_outer_kspace_mse"),
+                        _format_csv_metric(zf_row, "zf_dc_inner_kspace_mse"),
+                        _format_csv_metric(zf_row, "zf_dc_outer_kspace_mse"),
+                        _format_csv_metric(raw_row, "raw_dc_inner_kspace_mse"),
+                        _format_csv_metric(raw_row, "raw_dc_outer_kspace_mse"),
+                        _format_csv_metric(raw_row, "raw_grasp_dc_inner_kspace_mse"),
+                        _format_csv_metric(raw_row, "raw_grasp_dc_outer_kspace_mse"),
+                    ]
+                )
+            if include_early_15s:
+                dl_insert = base_headers.index("dl_dc_mse")
+                grasp_insert = base_headers.index("grasp_dc_mse")
+                dl_early15_values = [
+                    _format_csv_metric(dro_row, "early15s_ssim"),
+                    _format_csv_metric(dro_row, "early15s_psnr"),
+                    _format_csv_metric(dro_row, "early15s_mse"),
+                    _format_csv_metric(dro_row, "early15s_lpips"),
+                ]
+                grasp_early15_values = [
+                    _format_csv_metric(dro_row, "grasp_early15s_ssim"),
+                    _format_csv_metric(dro_row, "grasp_early15s_psnr"),
+                    _format_csv_metric(dro_row, "grasp_early15s_mse"),
+                    _format_csv_metric(dro_row, "grasp_early15s_lpips"),
+                ]
+                row = (
+                    base_row[:dl_insert]
+                    + dl_early15_values
+                    + base_row[dl_insert:grasp_insert]
+                    + grasp_early15_values
+                    + base_row[grasp_insert:]
+                )
+            else:
+                row = base_row
             f.write(",".join(row) + "\n")
 
 
@@ -1160,7 +1309,62 @@ def parse_args():
     parser.add_argument("--eval_spokes", type=int, help="Override spokes per frame for inference.")
     parser.add_argument("--eval_frames", type=int, help="Override number of frames for inference.")
     parser.add_argument("--phase_index", type=int, help="Curriculum phase index to use for eval params (default: last).")
+    parser.add_argument(
+        "--compare_kspace_regions",
+        action="store_true",
+        help="Compute inner/outer radial k-space DC MSE for DRO and raw k-space.",
+    )
+    parser.add_argument(
+        "--compute_streak_metric",
+        "--compute-streak-metric",
+        action="store_true",
+        help=(
+            "Compute a magnitude-domain background-to-foreground energy ratio for "
+            "BRISKNet and GRASP on DRO data (lower indicates less background streak energy)."
+        ),
+    )
+    parser.add_argument(
+        "--compute_peak_enhancement_slope",
+        "--compute-peak-enhancement-slope",
+        action="store_true",
+        help=(
+            "Compute an origin-constrained pixelwise regression slope of reconstructed "
+            "versus DRO peak enhancement within malignant/benign ROIs (1 is ideal; <1 "
+            "indicates amplitude underestimation)."
+        ),
+    )
+    parser.add_argument(
+        "--streak_mask_margin_pixels",
+        "--streak-mask-margin-pixels",
+        type=int,
+        default=5,
+        help="Foreground dilation margin excluded from the streak metric background (default: 5 pixels).",
+    )
+    parser.add_argument(
+        "--kspace_rho",
+        type=float,
+        default=0.57,
+        help="Normalized radial cutoff for inner/outer k-space region metrics (default: 0.57).",
+    )
     parser.add_argument("--disable_ssdu", action="store_true", help="Skip SSDU NMSE computation to speed up inference.")
+    parser.add_argument(
+        "--ssdu_scale_match",
+        "--ssdu-scale-match",
+        action="store_true",
+        help=(
+            "Fit one optimal density-weighted complex scalar per SSDU fold before "
+            "computing held-out NMSE for both BRISKNet and GRASP."
+        ),
+    )
+    parser.add_argument(
+        "--debug_ssdu_grasp_scale",
+        "--debug-ssdu-grasp-scale",
+        action="store_true",
+        help=(
+            "Print per-fold GRASP held-out k-space prediction/reference norms, "
+            "their ratio, fitted complex scale, and unscaled/scale-matched NMSE."
+        ),
+    )
     parser.add_argument(
         "--skip_raw_grasp_metrics",
         action="store_true",
@@ -1278,6 +1482,24 @@ def parse_args():
         help="Baseline duration in seconds when baseline_mode=seconds.",
     )
     parser.add_argument(
+        "--use_subtraction_images",
+        "--use-subtraction-images",
+        action="store_true",
+        help=(
+            "Compute spatial image metrics on subtraction images. "
+            "Each image stack is baseline-subtracted using its own first "
+            "--subtraction_baseline_seconds seconds. Temporal metrics and "
+            "k-space/data-consistency metrics are unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--subtraction_baseline_seconds",
+        "--subtraction-baseline-seconds",
+        type=float,
+        default=20.0,
+        help="Seconds from scan start used to form subtraction-image baselines when enabled.",
+    )
+    parser.add_argument(
         "--baseline_fraction",
         type=float,
         default=0.1,
@@ -1335,6 +1557,39 @@ def parse_args():
         type=int,
         default=8,
         help="Maximum early enhancement window frames.",
+    )
+    parser.add_argument(
+        "--eval_early_15s",
+        "--eval-early-15s",
+        action="store_true",
+        help=(
+            "Also compute early-15s metrics: spatial metrics on frames within "
+            "15 seconds after the temporal-metric arrival estimate, plus "
+            "early15s curve correlation/MAE."
+        ),
+    )
+    parser.add_argument(
+        "--use_edge_enhancement_temporal_metrics",
+        action="store_true",
+        help=(
+            "Compute temporal fidelity metrics on edge-enhanced stacks "
+            "(GT/BRISKNet/GRASP) instead of magnitude stacks."
+        ),
+    )
+    parser.add_argument(
+        "--edge_sigma",
+        type=float,
+        default=1.0,
+        help=(
+            "Spatial Gaussian smoothing sigma (pixels) used before gradient "
+            "for edge-enhanced temporal metrics."
+        ),
+    )
+    parser.add_argument(
+        "--edge_gradient_operator",
+        default="sobel",
+        choices=("sobel", "scharr"),
+        help="Gradient operator for edge-enhanced temporal metrics.",
     )
     parser.add_argument("--seed", type=int, default=12, help="Random seed.")
     return parser.parse_args()
@@ -1736,6 +1991,13 @@ def save_diagnostics(
 
 def main():
     args = parse_args()
+    if args.compare_kspace_regions and not (0.0 < float(args.kspace_rho) < 1.0):
+        raise ValueError(f"--kspace_rho must be in (0, 1) when --compare_kspace_regions is enabled, got {args.kspace_rho}.")
+    if args.streak_mask_margin_pixels < 0:
+        raise ValueError(
+            "--streak_mask_margin_pixels must be non-negative, "
+            f"got {args.streak_mask_margin_pixels}."
+        )
     set_seed(args.seed)
 
     grasp_lamdas = (
@@ -1881,6 +2143,11 @@ def main():
             "max_frames": args.baseline_max_frames,
             "total_scan_seconds": args.total_scan_seconds,
         },
+        "edge_enhanced_temporal_metrics": {
+            "enabled": bool(args.use_edge_enhancement_temporal_metrics),
+            "sigma": float(args.edge_sigma),
+            "gradient_operator": args.edge_gradient_operator,
+        },
         "arrival_method": arrival_method,
         "arrival_fraction": arrival_fraction,
         "arrival_k": arrival_k,
@@ -1890,10 +2157,22 @@ def main():
             "min_frames": args.early_min_frames,
             "max_frames": args.early_max_frames,
         },
+        "streak_metric": {
+            "enabled": bool(args.compute_streak_metric),
+            "name": "background_to_foreground_energy_ratio",
+            "mask_source": "DRO_ground_truth_otsu",
+            "margin_pixels": int(args.streak_mask_margin_pixels),
+        },
+        "peak_enhancement_slope": {
+            "enabled": bool(args.compute_peak_enhancement_slope),
+            "regression": "origin_constrained_pixelwise_recon_vs_dro",
+            "domain": "baseline_subtracted_magnitude_peak_enhancement",
+        },
         "windowing": {
             "chunk_size": int(eval_chunk_size),
             "chunk_overlap": int(eval_chunk_overlap),
             "compute_ssdu": bool(compute_ssdu),
+            "ssdu_scale_match": bool(args.ssdu_scale_match),
             "ssdu_k_folds": int(ssdu_k_folds),
             "ssdu_grasp_k_folds": int(ssdu_grasp_k_folds),
             "ssdu_weighting": ssdu_weighting,
@@ -1923,6 +2202,25 @@ def main():
             "encode_time_index": bool(config["model"]["encode_time_index"]),
         },
     }
+    if args.use_subtraction_images:
+        inference_settings["subtraction_images"] = {
+            "enabled": True,
+            "baseline_seconds": float(args.subtraction_baseline_seconds),
+            "total_scan_seconds": float(args.total_scan_seconds),
+        }
+    if args.eval_early_15s:
+        inference_settings["early_15s_metrics"] = {
+            "enabled": True,
+            "seconds_after_arrival": 15.0,
+            "arrival_method": arrival_method,
+            "arrival_fraction": arrival_fraction,
+            "arrival_k": arrival_k,
+        }
+    if args.compare_kspace_regions:
+        inference_settings["kspace_region_metrics"] = {
+            "enabled": True,
+            "rho": float(args.kspace_rho),
+        }
 
     data_dir = config["data"]["root_dir"]
     model_type = config["model"]["name"]
@@ -1976,7 +2274,39 @@ def main():
         print(f"Raw eval frames (config): {int(N_time_eval_raw)}")
     print(f"Eval total spokes: {int(N_spokes_eval) * int(N_time_eval)}")
     print(f"Rescale (best-fit scalar): {rescale}")
+    if args.ssdu_scale_match:
+        print("SSDU complex scale matching: True (one weighted scalar per fold)")
+    if args.compute_streak_metric:
+        print(
+            "Background streak metric: True "
+            f"(BFER, margin={int(args.streak_mask_margin_pixels)} pixels; lower is better)"
+        )
+    if args.compute_peak_enhancement_slope:
+        print(
+            "Peak-enhancement amplitude slope: True "
+            "(origin-constrained reconstructed-vs-DRO regression; 1 is ideal)"
+        )
+    if args.compare_kspace_regions:
+        print(f"K-space region metrics: True (alpha/rho={float(args.kspace_rho):.3f})")
+    if args.use_subtraction_images:
+        print("Subtraction-image metrics: True")
+        print(
+            "Subtraction baseline: "
+            f"first {float(args.subtraction_baseline_seconds):.3f}s"
+        )
+    if args.eval_early_15s:
+        print("Early-15s metrics: True")
     print(f"Normalize DRO csmaps: {bool(args.normalize_dro_csmaps)}")
+    print(
+        "Edge-enhanced temporal metrics: "
+        f"{bool(args.use_edge_enhancement_temporal_metrics)}"
+    )
+    if args.use_edge_enhancement_temporal_metrics:
+        print(
+            "Edge settings: "
+            f"sigma={float(args.edge_sigma):.3f}, "
+            f"operator={args.edge_gradient_operator}"
+        )
     if model_type_is_temporal_mamba and int(N_time_eval) > int(eval_chunk_size):
         print(
             "[Inference] TemporalMamba detected: using direct full-sequence inference "
@@ -2397,7 +2727,10 @@ def main():
                     epoch="inference",
                     chunk_size=ssdu_chunk_size,
                     chunk_overlap=raw_chunk_overlap,
+                    scale_match=args.ssdu_scale_match,
                 )
+                if args.debug_ssdu_grasp_scale:
+                    tqdm.write(f"[SSDU GRASP scale] sample={sample_id}")
                 ssdu_grasp_result = compute_ssdu_kspace_nmse_grasp(
                     lambda y_used, ktraj_used, dcomp_used, csmap, samples_per_spoke: GRASPRecon_from_ktraj(
                         csmap,
@@ -2417,6 +2750,8 @@ def main():
                     orientation_transform="raw_grasp",
                     baseline_weighting=ssdu_weighting,
                     device=device,
+                    debug_scale=args.debug_ssdu_grasp_scale,
+                    scale_match=args.ssdu_scale_match,
                 )
 
             x_recon = torch.rot90(x_recon, k=3, dims=[2, 3])
@@ -2478,6 +2813,17 @@ def main():
                     total_scan_seconds=args.total_scan_seconds,
                     recon_label=plot_recon_label,
                     plot_malignant_curve=True,
+                    use_edge_enhancement=args.use_edge_enhancement_temporal_metrics,
+                    edge_sigma=args.edge_sigma,
+                    edge_gradient_operator=args.edge_gradient_operator,
+                    use_subtraction_images=args.use_subtraction_images,
+                    subtraction_baseline_seconds=args.subtraction_baseline_seconds,
+                    eval_early_15s=args.eval_early_15s,
+                    compare_kspace_regions=args.compare_kspace_regions,
+                    kspace_rho=args.kspace_rho,
+                    compute_streak_metric=args.compute_streak_metric,
+                    streak_mask_margin_pixels=args.streak_mask_margin_pixels,
+                    compute_peak_enhancement_slope=args.compute_peak_enhancement_slope,
                 )
 
                 (
@@ -2499,6 +2845,11 @@ def main():
                     rescale=rescale,
                     dro_eval=True,
                     return_aux=True,
+                    use_subtraction_images=args.use_subtraction_images,
+                    subtraction_baseline_seconds=args.subtraction_baseline_seconds,
+                    total_scan_seconds=args.total_scan_seconds,
+                    compare_kspace_regions=args.compare_kspace_regions,
+                    kspace_rho=args.kspace_rho,
                 )
 
                 ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics = dro_metrics
@@ -2550,6 +2901,11 @@ def main():
                     rescale=rescale,
                     zf_complex_override=zf_complex,
                     return_aux=True,
+                    use_subtraction_images=args.use_subtraction_images,
+                    subtraction_baseline_seconds=args.subtraction_baseline_seconds,
+                    total_scan_seconds=args.total_scan_seconds,
+                    compare_kspace_regions=args.compare_kspace_regions,
+                    kspace_rho=args.kspace_rho,
                 )
                 zf_results.append(
                     dict(
@@ -2573,6 +2929,8 @@ def main():
                         "to match raw k-space."
                     )
 
+            raw_region_metrics = {}
+            raw_grasp_region_metrics = {}
             if not raw_valid:
                 raw_dc_mse = None
                 raw_dc_mae = None
@@ -2586,11 +2944,24 @@ def main():
                 recon_kspace = raw_physics(False, raw_x_recon_complex, raw_csmaps)
                 raw_dc_mse, raw_dc_mae = calc_dc(recon_kspace, raw_kspace_squeezed, device)
                 raw_dc_psnr = calc_dc_psnr(raw_kspace_squeezed, raw_dc_mse, device)
+                if args.compare_kspace_regions:
+                    raw_regions = calc_kspace_region_mse(
+                        recon_kspace,
+                        raw_kspace_squeezed,
+                        raw_physics.ktraj,
+                        rho=args.kspace_rho,
+                    )
+                    raw_region_metrics.update(
+                        {
+                            "raw_dc_inner_kspace_mse": raw_regions["inner"],
+                            "raw_dc_outer_kspace_mse": raw_regions["outer"],
+                        }
+                    )
                 raw_grasp_dc_mse = None
                 raw_grasp_dc_mae = None
                 raw_grasp_dc_psnr = None
             else:
-                raw_dc_mse, raw_dc_mae, raw_dc_psnr, _ = eval_sample(
+                raw_dc_mse, raw_dc_mae, raw_dc_psnr, raw_aux = eval_sample(
                     raw_kspace,
                     raw_csmaps,
                     raw_ground_truth,
@@ -2622,18 +2993,65 @@ def main():
                     total_scan_seconds=args.total_scan_seconds,
                     recon_label=plot_recon_label,
                     plot_malignant_curve=True,
+                    use_edge_enhancement=args.use_edge_enhancement_temporal_metrics,
+                    edge_sigma=args.edge_sigma,
+                    edge_gradient_operator=args.edge_gradient_operator,
+                    use_subtraction_images=args.use_subtraction_images,
+                    subtraction_baseline_seconds=args.subtraction_baseline_seconds,
+                    eval_early_15s=args.eval_early_15s,
+                    compare_kspace_regions=args.compare_kspace_regions,
+                    kspace_rho=args.kspace_rho,
                 )
-                raw_grasp_dc_mse, raw_grasp_dc_mae, raw_grasp_dc_psnr = eval_grasp(
-                    raw_kspace,
-                    raw_csmaps,
-                    raw_ground_truth,
-                    raw_grasp_img,
-                    raw_physics,
-                    device,
-                    sample_dir,
-                    rescale=rescale,
-                    dro_eval=False,
-                )
+                if args.compare_kspace_regions:
+                    raw_region_metrics.update(
+                        {
+                            "raw_dc_inner_kspace_mse": raw_aux.get("dl_dc_inner_kspace_mse"),
+                            "raw_dc_outer_kspace_mse": raw_aux.get("dl_dc_outer_kspace_mse"),
+                        }
+                    )
+                    (
+                        raw_grasp_dc_mse,
+                        raw_grasp_dc_mae,
+                        raw_grasp_dc_psnr,
+                        raw_grasp_aux,
+                    ) = eval_grasp(
+                        raw_kspace,
+                        raw_csmaps,
+                        raw_ground_truth,
+                        raw_grasp_img,
+                        raw_physics,
+                        device,
+                        sample_dir,
+                        rescale=rescale,
+                        dro_eval=False,
+                        return_aux=True,
+                        use_subtraction_images=args.use_subtraction_images,
+                        subtraction_baseline_seconds=args.subtraction_baseline_seconds,
+                        total_scan_seconds=args.total_scan_seconds,
+                        compare_kspace_regions=args.compare_kspace_regions,
+                        kspace_rho=args.kspace_rho,
+                    )
+                    raw_grasp_region_metrics.update(
+                        {
+                            "raw_grasp_dc_inner_kspace_mse": raw_grasp_aux.get("grasp_dc_inner_kspace_mse"),
+                            "raw_grasp_dc_outer_kspace_mse": raw_grasp_aux.get("grasp_dc_outer_kspace_mse"),
+                        }
+                    )
+                else:
+                    raw_grasp_dc_mse, raw_grasp_dc_mae, raw_grasp_dc_psnr = eval_grasp(
+                        raw_kspace,
+                        raw_csmaps,
+                        raw_ground_truth,
+                        raw_grasp_img,
+                        raw_physics,
+                        device,
+                        sample_dir,
+                        rescale=rescale,
+                        dro_eval=False,
+                        use_subtraction_images=args.use_subtraction_images,
+                        subtraction_baseline_seconds=args.subtraction_baseline_seconds,
+                        total_scan_seconds=args.total_scan_seconds,
+                    )
             raw_results.append(
                 dict(
                     sample=label,
@@ -2645,6 +3063,12 @@ def main():
                     raw_grasp_dc_psnr=raw_grasp_dc_psnr,
                     raw_ssdu_nmse=ssdu_result.get("ssdu_nmse_mean"),
                     raw_grasp_ssdu_nmse=ssdu_grasp_result.get("ssdu_nmse_mean"),
+                    raw_ssdu_nmse_unscaled=ssdu_result.get("ssdu_nmse_unscaled_mean"),
+                    raw_grasp_ssdu_nmse_unscaled=ssdu_grasp_result.get("ssdu_nmse_unscaled_mean"),
+                    raw_ssdu_nmse_scale_matched=ssdu_result.get("ssdu_nmse_scale_matched_mean"),
+                    raw_grasp_ssdu_nmse_scale_matched=ssdu_grasp_result.get("ssdu_nmse_scale_matched_mean"),
+                    **raw_region_metrics,
+                    **raw_grasp_region_metrics,
                 )
             )
 
@@ -2727,132 +3151,17 @@ def main():
 
     # Save metrics.
     metrics_path = os.path.join(inference_dir, "metrics.csv")
-    with open(metrics_path, "w") as f:
-        headers = [
-            "sample",
-            "dro_csmap_scale",
-            "dl_ssim",
-            "dl_psnr",
-            "dl_psnr_fg",
-            "dl_mse",
-            "dl_mse_fg",
-            "dl_lpips",
-            "dl_dc_mse",
-            "dl_dc_mae",
-            "dl_dc_mse_bestfit",
-            "dl_dc_mae_bestfit",
-            "dl_dc_scale_abs",
-            "dl_dc_scale_phase",
-            "dl_img_scale",
-            "dl_recon_corr",
-            "grasp_corr",
-            "grasp_ssim",
-            "grasp_psnr",
-            "grasp_psnr_fg",
-            "grasp_mse",
-            "grasp_mse_fg",
-            "grasp_lpips",
-            "grasp_dc_mse",
-            "grasp_dc_mae",
-            "grasp_dc_mse_bestfit",
-            "grasp_dc_mae_bestfit",
-            "grasp_dc_scale_abs",
-            "grasp_dc_scale_phase",
-            "grasp_img_scale",
-            "zf_ssim",
-            "zf_psnr",
-            "zf_psnr_fg",
-            "zf_mse",
-            "zf_mse_fg",
-            "zf_lpips",
-            "zf_dc_mse",
-            "zf_dc_mae",
-            "zf_dc_mse_bestfit",
-            "zf_dc_mae_bestfit",
-            "zf_dc_scale_abs",
-            "zf_dc_scale_phase",
-            "zf_img_scale",
-            "fg_fraction",
-            "raw_dc_mse",
-            "raw_dc_mae",
-            "raw_dc_psnr",
-            "raw_grasp_dc_mse",
-            "raw_grasp_dc_mae",
-            "raw_grasp_dc_psnr",
-            "raw_ssdu_nmse",
-            "raw_grasp_ssdu_nmse",
-        ]
-        f.write(",".join(headers) + "\n")
-        zf_lookup = {row["sample"]: row for row in zf_results}
-        for dro_row, grasp_row, raw_row in zip(results, grasp_results, raw_results):
-            zf_row = zf_lookup.get(dro_row["sample"], {})
-            dl_psnr_fg = dro_row.get("dl_psnr_fg")
-            dl_mse_fg = dro_row.get("dl_mse_fg")
-            grasp_psnr_fg = dro_row.get("grasp_psnr_fg")
-            grasp_mse_fg = dro_row.get("grasp_mse_fg")
-            fg_fraction = dro_row.get("fg_fraction")
-            zf_psnr_fg = zf_row.get("zf_psnr_fg")
-            zf_mse_fg = zf_row.get("zf_mse_fg")
-            row = [
-                dro_row["sample"],
-                "" if dro_row.get("dro_csmap_scale") is None else f"{dro_row['dro_csmap_scale']:.6f}",
-                f"{dro_row['ssim']:.6f}",
-                f"{dro_row['psnr']:.6f}",
-                "" if dl_psnr_fg is None else f"{dl_psnr_fg:.6f}",
-                f"{dro_row['mse']:.6f}",
-                "" if dl_mse_fg is None else f"{dl_mse_fg:.6f}",
-                f"{dro_row['lpips']:.6f}",
-                f"{dro_row['dc_mse']:.6f}",
-                f"{dro_row['dc_mae']:.6f}",
-                "" if dro_row.get("dl_dc_mse_bestfit") is None else f"{dro_row['dl_dc_mse_bestfit']:.6f}",
-                "" if dro_row.get("dl_dc_mae_bestfit") is None else f"{dro_row['dl_dc_mae_bestfit']:.6f}",
-                "" if dro_row.get("dl_dc_scale_abs") is None else f"{dro_row['dl_dc_scale_abs']:.6f}",
-                "" if dro_row.get("dl_dc_scale_phase") is None else f"{dro_row['dl_dc_scale_phase']:.6f}",
-                "" if dro_row.get("dl_img_scale") is None else f"{dro_row['dl_img_scale']:.6f}",
-                "" if dro_row["recon_corr"] is None else f"{dro_row['recon_corr']:.6f}",
-                "" if dro_row["grasp_corr"] is None else f"{dro_row['grasp_corr']:.6f}",
-                f"{grasp_row['ssim']:.6f}",
-                f"{grasp_row['psnr']:.6f}",
-                "" if grasp_psnr_fg is None else f"{grasp_psnr_fg:.6f}",
-                f"{grasp_row['mse']:.6f}",
-                "" if grasp_mse_fg is None else f"{grasp_mse_fg:.6f}",
-                f"{grasp_row['lpips']:.6f}",
-                f"{grasp_row['dc_mse']:.6f}",
-                f"{grasp_row['dc_mae']:.6f}",
-                "" if grasp_row.get("grasp_dc_mse_bestfit") is None else f"{grasp_row['grasp_dc_mse_bestfit']:.6f}",
-                "" if grasp_row.get("grasp_dc_mae_bestfit") is None else f"{grasp_row['grasp_dc_mae_bestfit']:.6f}",
-                "" if grasp_row.get("grasp_dc_scale_abs") is None else f"{grasp_row['grasp_dc_scale_abs']:.6f}",
-                "" if grasp_row.get("grasp_dc_scale_phase") is None else f"{grasp_row['grasp_dc_scale_phase']:.6f}",
-                "" if dro_row.get("grasp_img_scale") is None else f"{dro_row['grasp_img_scale']:.6f}",
-                "" if not zf_row else f"{zf_row.get('ssim', float('nan')):.6f}",
-                "" if not zf_row else f"{zf_row.get('psnr', float('nan')):.6f}",
-                "" if zf_psnr_fg is None else f"{zf_psnr_fg:.6f}",
-                "" if not zf_row else f"{zf_row.get('mse', float('nan')):.6f}",
-                "" if zf_mse_fg is None else f"{zf_mse_fg:.6f}",
-                "" if not zf_row else f"{zf_row.get('lpips', float('nan')):.6f}",
-                "" if not zf_row else f"{zf_row.get('dc_mse', float('nan')):.6f}",
-                "" if not zf_row else f"{zf_row.get('dc_mae', float('nan')):.6f}",
-                "" if zf_row.get("zf_dc_mse_bestfit") is None else f"{zf_row['zf_dc_mse_bestfit']:.6f}",
-                "" if zf_row.get("zf_dc_mae_bestfit") is None else f"{zf_row['zf_dc_mae_bestfit']:.6f}",
-                "" if zf_row.get("zf_dc_scale_abs") is None else f"{zf_row['zf_dc_scale_abs']:.6f}",
-                "" if zf_row.get("zf_dc_scale_phase") is None else f"{zf_row['zf_dc_scale_phase']:.6f}",
-                "" if zf_row.get("zf_img_scale") is None else f"{zf_row['zf_img_scale']:.6f}",
-                "" if fg_fraction is None else f"{fg_fraction:.6f}",
-                # f"{raw_row['raw_dc_mse']:.6f}",
-                # f"{raw_row['raw_dc_mae']:.6f}",
-                "" if raw_row.get("raw_dc_mse") is None else f"{raw_row['raw_dc_mse']:.6f}",
-                "" if raw_row.get("raw_dc_mae") is None else f"{raw_row['raw_dc_mae']:.6f}",
-                "" if raw_row.get("raw_dc_psnr") is None else f"{raw_row['raw_dc_psnr']:.6f}",
-                # f"{raw_row['raw_grasp_dc_mse']:.6f}",
-                # f"{raw_row['raw_grasp_dc_mae']:.6f}",
-                "" if raw_row.get("raw_grasp_dc_mse") is None else f"{raw_row['raw_grasp_dc_mse']:.6f}",
-                "" if raw_row.get("raw_grasp_dc_mae") is None else f"{raw_row['raw_grasp_dc_mae']:.6f}",
-
-                "" if raw_row.get("raw_grasp_dc_psnr") is None else f"{raw_row['raw_grasp_dc_psnr']:.6f}",
-                "" if raw_row.get("raw_ssdu_nmse") is None else f"{raw_row['raw_ssdu_nmse']:.6f}",
-                "" if raw_row.get("raw_grasp_ssdu_nmse") is None else f"{raw_row['raw_grasp_ssdu_nmse']:.6f}",
-            ]
-            f.write(",".join(row) + "\n")
+    _write_metrics_csv(
+        metrics_path,
+        results,
+        grasp_results,
+        raw_results,
+        zf_results,
+        include_early_15s=args.eval_early_15s,
+        compare_kspace_regions=args.compare_kspace_regions,
+        kspace_rho=args.kspace_rho,
+        include_streak_metric=args.compute_streak_metric,
+    )
 
     metric_names = [
         "curve_corr",
@@ -2865,6 +3174,10 @@ def main():
         "peak_err",
         "ttpeak_err_sec",
     ]
+    if args.eval_early_15s:
+        metric_names.extend(["early15s_corr", "early15s_mae"])
+    if args.compute_peak_enhancement_slope:
+        metric_names.append("peak_enh_slope")
     for label, prefix in (("malignant", ""), ("benign", "benign_")):
         for subset in ("all", "top10", "top20"):
             keys = [
@@ -2902,8 +3215,14 @@ def main():
         "mse": _mean_std(results, "mse"),
         "mse_fg": _mean_std(results, "dl_mse_fg"),
         "lpips": _mean_std(results, "lpips"),
+        "early15s_ssim": _mean_std(results, "early15s_ssim"),
+        "early15s_psnr": _mean_std(results, "early15s_psnr"),
+        "early15s_mse": _mean_std(results, "early15s_mse"),
+        "early15s_lpips": _mean_std(results, "early15s_lpips"),
         "dc_mse": _mean_std(results, "dc_mse"),
         "dc_mae": _mean_std(results, "dc_mae"),
+        "dc_inner_kspace_mse": _mean_std(results, "dl_dc_inner_kspace_mse"),
+        "dc_outer_kspace_mse": _mean_std(results, "dl_dc_outer_kspace_mse"),
         "dc_mse_bestfit": _mean_std(results, "dl_dc_mse_bestfit"),
         "dc_mae_bestfit": _mean_std(results, "dl_dc_mae_bestfit"),
         "dc_scale_abs": _mean_std(results, "dl_dc_scale_abs"),
@@ -2911,6 +3230,8 @@ def main():
         "recon_corr": _mean_std(results, "recon_corr"),
         "grasp_corr": _mean_std(results, "grasp_corr"),
         "fg_fraction": _mean_std(results, "fg_fraction"),
+        "streak_bfer": _mean_std(results, "dl_streak_bfer"),
+        "streak_fg_fraction": _mean_std(results, "streak_fg_fraction"),
     }
 
     grasp_summary = {
@@ -2920,12 +3241,19 @@ def main():
         "mse": _mean_std(grasp_results, "mse"),
         "mse_fg": _mean_std(results, "grasp_mse_fg"),
         "lpips": _mean_std(grasp_results, "lpips"),
+        "early15s_ssim": _mean_std(results, "grasp_early15s_ssim"),
+        "early15s_psnr": _mean_std(results, "grasp_early15s_psnr"),
+        "early15s_mse": _mean_std(results, "grasp_early15s_mse"),
+        "early15s_lpips": _mean_std(results, "grasp_early15s_lpips"),
         "dc_mse": _mean_std(grasp_results, "dc_mse"),
         "dc_mae": _mean_std(grasp_results, "dc_mae"),
+        "dc_inner_kspace_mse": _mean_std(grasp_results, "grasp_dc_inner_kspace_mse"),
+        "dc_outer_kspace_mse": _mean_std(grasp_results, "grasp_dc_outer_kspace_mse"),
         "dc_mse_bestfit": _mean_std(grasp_results, "grasp_dc_mse_bestfit"),
         "dc_mae_bestfit": _mean_std(grasp_results, "grasp_dc_mae_bestfit"),
         "dc_scale_abs": _mean_std(grasp_results, "grasp_dc_scale_abs"),
         "img_scale": _mean_std(results, "grasp_img_scale"),
+        "streak_bfer": _mean_std(results, "grasp_streak_bfer"),
     }
 
     def _format_mean_std(mean, std):
@@ -2964,11 +3292,19 @@ def main():
         "raw_dc_mse": _mean_std(raw_results, "raw_dc_mse"),
         "raw_dc_mae": _mean_std(raw_results, "raw_dc_mae"),
         "raw_dc_psnr": _mean_std(raw_results, "raw_dc_psnr"),
+        "raw_dc_inner_kspace_mse": _mean_std(raw_results, "raw_dc_inner_kspace_mse"),
+        "raw_dc_outer_kspace_mse": _mean_std(raw_results, "raw_dc_outer_kspace_mse"),
         "raw_grasp_dc_mse": _mean_std(raw_results, "raw_grasp_dc_mse"),
         "raw_grasp_dc_mae": _mean_std(raw_results, "raw_grasp_dc_mae"),
         "raw_grasp_dc_psnr": _mean_std(raw_results, "raw_grasp_dc_psnr"),
+        "raw_grasp_dc_inner_kspace_mse": _mean_std(raw_results, "raw_grasp_dc_inner_kspace_mse"),
+        "raw_grasp_dc_outer_kspace_mse": _mean_std(raw_results, "raw_grasp_dc_outer_kspace_mse"),
         "raw_ssdu_nmse": _mean_std(raw_results, "raw_ssdu_nmse"),
         "raw_grasp_ssdu_nmse": _mean_std(raw_results, "raw_grasp_ssdu_nmse"),
+        "raw_ssdu_nmse_unscaled": _mean_std(raw_results, "raw_ssdu_nmse_unscaled"),
+        "raw_grasp_ssdu_nmse_unscaled": _mean_std(raw_results, "raw_grasp_ssdu_nmse_unscaled"),
+        "raw_ssdu_nmse_scale_matched": _mean_std(raw_results, "raw_ssdu_nmse_scale_matched"),
+        "raw_grasp_ssdu_nmse_scale_matched": _mean_std(raw_results, "raw_grasp_ssdu_nmse_scale_matched"),
     }
 
     zf_summary = None
@@ -2982,6 +3318,8 @@ def main():
             "lpips": _mean_std(zf_results, "lpips"),
             "dc_mse": _mean_std(zf_results, "dc_mse"),
             "dc_mae": _mean_std(zf_results, "dc_mae"),
+            "dc_inner_kspace_mse": _mean_std(zf_results, "zf_dc_inner_kspace_mse"),
+            "dc_outer_kspace_mse": _mean_std(zf_results, "zf_dc_outer_kspace_mse"),
             "dc_mse_bestfit": _mean_std(zf_results, "zf_dc_mse_bestfit"),
             "dc_mae_bestfit": _mean_std(zf_results, "zf_dc_mae_bestfit"),
             "dc_scale_abs": _mean_std(zf_results, "zf_dc_scale_abs"),
@@ -3024,11 +3362,42 @@ def main():
             ]
         )
     print(_render_table(image_headers, image_rows))
+    if args.eval_early_15s:
+        early15_headers = ["Method", "SSIM", "PSNR", "MSE", "LPIPS"]
+        early15_rows = [
+            [
+                "BRISKNet",
+                _format_mean_std(*dl_summary["early15s_ssim"]),
+                _format_mean_std(*dl_summary["early15s_psnr"]),
+                _format_mean_std(*dl_summary["early15s_mse"]),
+                _format_mean_std(*dl_summary["early15s_lpips"]),
+            ],
+            [
+                "GRASP",
+                _format_mean_std(*grasp_summary["early15s_ssim"]),
+                _format_mean_std(*grasp_summary["early15s_psnr"]),
+                _format_mean_std(*grasp_summary["early15s_mse"]),
+                _format_mean_std(*grasp_summary["early15s_lpips"]),
+            ],
+        ]
+        print("Early-15s Image Metrics")
+        print(_render_table(early15_headers, early15_rows))
     if recon_corr_str or grasp_corr_str:
         print(f"EC Corr (BRISKNet): {recon_corr_str}, EC Corr (GRASP): {grasp_corr_str}")
     fg_fraction_str = _format_mean_std(*dl_summary["fg_fraction"])
     if fg_fraction_str:
         print(f"Foreground mask fraction: {fg_fraction_str}")
+    if args.compute_streak_metric:
+        streak_headers = ["Method", "Background/foreground energy ratio"]
+        streak_rows = [
+            ["BRISKNet", _format_mean_std_precise(*dl_summary["streak_bfer"])],
+            ["GRASP", _format_mean_std_precise(*grasp_summary["streak_bfer"])],
+        ]
+        print(
+            "Background Streak Metric "
+            f"(GT-derived mask, {int(args.streak_mask_margin_pixels)}-pixel margin; lower is better)"
+        )
+        print(_render_table(streak_headers, streak_rows))
     img_scale_parts = []
     dl_img_scale_str = _format_mean_std(*dl_summary["img_scale"])
     grasp_img_scale_str = _format_mean_std(*grasp_summary["img_scale"])
@@ -3045,13 +3414,42 @@ def main():
     if csmap_scale_str:
         print(f"DRO csmap scale (median RSS): {csmap_scale_str}")
     print("K-space Metrics")
+    kspace_alpha_label = f"{float(args.kspace_rho):g}"
     k_headers = ["Method", "DC_MSE", "DC_MAE"]
+    if args.compare_kspace_regions:
+        k_headers.extend(
+            [
+                f"DC inner kspace (alpha={kspace_alpha_label})",
+                f"DC outer kspace (alpha={kspace_alpha_label})",
+            ]
+        )
     k_rows = [
         ["BRISKNet", _format_mean_std(*dl_summary["dc_mse"]), _format_mean_std(*dl_summary["dc_mae"])],
         ["GRASP", _format_mean_std(*grasp_summary["dc_mse"]), _format_mean_std(*grasp_summary["dc_mae"])],
     ]
+    if args.compare_kspace_regions:
+        k_rows[0].extend(
+            [
+                _format_mean_std(*dl_summary["dc_inner_kspace_mse"]),
+                _format_mean_std(*dl_summary["dc_outer_kspace_mse"]),
+            ]
+        )
+        k_rows[1].extend(
+            [
+                _format_mean_std(*grasp_summary["dc_inner_kspace_mse"]),
+                _format_mean_std(*grasp_summary["dc_outer_kspace_mse"]),
+            ]
+        )
     if zf_summary is not None:
-        k_rows.append(["ZF", _format_mean_std(*zf_summary["dc_mse"]), _format_mean_std(*zf_summary["dc_mae"])])
+        zf_row = ["ZF", _format_mean_std(*zf_summary["dc_mse"]), _format_mean_std(*zf_summary["dc_mae"])]
+        if args.compare_kspace_regions:
+            zf_row.extend(
+                [
+                    _format_mean_std(*zf_summary["dc_inner_kspace_mse"]),
+                    _format_mean_std(*zf_summary["dc_outer_kspace_mse"]),
+                ]
+            )
+        k_rows.append(zf_row)
     print("DRO")
     print(_render_table(k_headers, k_rows))
     if dl_summary["dc_mse_bestfit"][0] is not None or grasp_summary["dc_mse_bestfit"][0] is not None or (zf_summary is not None and zf_summary["dc_mse_bestfit"][0] is not None):
@@ -3074,7 +3472,15 @@ def main():
         if zf_gain:
             gain_line += f", ZF |c|: {zf_gain}"
         print(gain_line)
-    raw_headers = ["Method", "DC_MSE", "DC_MAE", "DC_PSNR", "SSDU_NMSE"]
+    ssdu_header = "SSDU_NMSE (scale-matched)" if args.ssdu_scale_match else "SSDU_NMSE"
+    raw_headers = ["Method", "DC_MSE", "DC_MAE", "DC_PSNR", ssdu_header]
+    if args.compare_kspace_regions:
+        raw_headers.extend(
+            [
+                f"DC inner kspace (alpha={kspace_alpha_label})",
+                f"DC outer kspace (alpha={kspace_alpha_label})",
+            ]
+        )
     raw_rows = [
         [
             "BRISKNet",
@@ -3091,8 +3497,27 @@ def main():
             _format_mean_std_precise(*raw_summary["raw_grasp_ssdu_nmse"]),
         ],
     ]
+    if args.compare_kspace_regions:
+        raw_rows[0].extend(
+            [
+                _format_mean_std_precise(*raw_summary["raw_dc_inner_kspace_mse"]),
+                _format_mean_std_precise(*raw_summary["raw_dc_outer_kspace_mse"]),
+            ]
+        )
+        raw_rows[1].extend(
+            [
+                _format_mean_std_precise(*raw_summary["raw_grasp_dc_inner_kspace_mse"]),
+                _format_mean_std_precise(*raw_summary["raw_grasp_dc_outer_kspace_mse"]),
+            ]
+        )
     print("RAW")
     print(_render_table(raw_headers, raw_rows))
+    if args.ssdu_scale_match:
+        print(
+            "Unscaled SSDU NMSE -> "
+            f"BRISKNet: {_format_mean_std_precise(*raw_summary['raw_ssdu_nmse_unscaled'])}, "
+            f"GRASP: {_format_mean_std_precise(*raw_summary['raw_grasp_ssdu_nmse_unscaled'])}"
+        )
     def _has_any_metric(keys):
         return any(
             v.get(key) is not None and np.isfinite(v.get(key))
@@ -3125,6 +3550,31 @@ def main():
     print("----- Temporal Fidelity Metrics (mean ± std) -----")
     _print_temporal_table("Malignant", prefix="")
     _print_temporal_table("Benign", prefix="benign_")
+    if args.compute_peak_enhancement_slope:
+        amplitude_rows = []
+        for tissue, prefix in (("Malignant", ""), ("Benign", "benign_")):
+            for subset in ("all", "top20", "top10"):
+                amplitude_rows.append(
+                    [
+                        tissue,
+                        subset,
+                        _format_mean_std_compact(
+                            *_mean_std(results, f"{prefix}dl_{subset}_peak_enh_slope"),
+                            precision=4,
+                        ),
+                        _format_mean_std_compact(
+                            *_mean_std(results, f"{prefix}grasp_{subset}_peak_enh_slope"),
+                            precision=4,
+                        ),
+                    ]
+                )
+        print("Peak-Enhancement Amplitude Regression (slope; 1 is ideal, <1 is underestimation)")
+        print(
+            _render_table(
+                ["ROI", "Subset", "BRISKNet", "GRASP"],
+                amplitude_rows,
+            )
+        )
 
     summaries_by_lam = {
         primary_grasp_lamda: {
@@ -3156,6 +3606,10 @@ def main():
                 grasp_results_lam,
                 raw_results,
                 zf_results,
+                include_early_15s=args.eval_early_15s,
+                compare_kspace_regions=args.compare_kspace_regions,
+                kspace_rho=args.kspace_rho,
+                include_streak_metric=args.compute_streak_metric,
             )
             _write_temporal_metrics_csv(inference_dir, results_lam, metric_names, suffix)
 
@@ -3179,6 +3633,10 @@ def main():
                 "std": None if std is None else float(std),
             }
 
+        current_image_metric_domain = (
+            "subtraction" if args.use_subtraction_images else "magnitude"
+        )
+
         log_row = {
             "type": "BRISKNet",
             "exp_name": exp_name,
@@ -3189,6 +3647,10 @@ def main():
             "seconds_per_frame": seconds_per_frame,
             "DRO_noise_level": val_noise_level,
             "grasp_lamdas": grasp_lamdas,
+            "ssdu_scale_match": bool(args.ssdu_scale_match),
+            "compute_streak_metric": bool(args.compute_streak_metric),
+            "streak_mask_margin_pixels": int(args.streak_mask_margin_pixels),
+            "compute_peak_enhancement_slope": bool(args.compute_peak_enhancement_slope),
             "avg_inference_time": None if mean_infer is None else float(mean_infer),
             "std_inference_time": None if std_infer is None else float(std_infer),
             "num_samples": int(num_samples),
@@ -3206,13 +3668,65 @@ def main():
             "seconds_per_frame": seconds_per_frame,
             "DRO_noise_level": val_noise_level,
             "grasp_lamda": primary_grasp_lamda,
+            "ssdu_scale_match": bool(args.ssdu_scale_match),
+            "compute_streak_metric": bool(args.compute_streak_metric),
+            "streak_mask_margin_pixels": int(args.streak_mask_margin_pixels),
+            "compute_peak_enhancement_slope": bool(args.compute_peak_enhancement_slope),
             "num_samples": int(len(grasp_results)),
             "spatial_metrics": {},
             "dc_metrics": {},
             "temporal_metrics": {},
         }
 
+        if args.use_subtraction_images:
+            metric_domain_payload = {
+                "image_metric_domain": current_image_metric_domain,
+                "subtraction_baseline_seconds": float(args.subtraction_baseline_seconds),
+            }
+            log_row.update(metric_domain_payload)
+            grasp_agg_row.update(metric_domain_payload)
+        if args.eval_early_15s:
+            early15_payload = {
+                "eval_early_15s": True,
+                "early_15s_seconds_after_arrival": 15.0,
+            }
+            log_row.update(early15_payload)
+            grasp_agg_row.update(early15_payload)
+        if args.compare_kspace_regions:
+            kspace_region_payload = {
+                "compare_kspace_regions": True,
+                "kspace_rho": float(args.kspace_rho),
+            }
+            log_row.update(kspace_region_payload)
+            grasp_agg_row.update(kspace_region_payload)
+        if args.compute_streak_metric:
+            streak_payload = {
+                "streak_metric": "background_to_foreground_energy_ratio",
+                "streak_mask_source": "DRO_ground_truth_otsu",
+                "streak_mask_margin_pixels": int(args.streak_mask_margin_pixels),
+            }
+            log_row.update(streak_payload)
+            grasp_agg_row.update(streak_payload)
+        if args.compute_peak_enhancement_slope:
+            amplitude_payload = {
+                "peak_enhancement_slope_regression": "origin_constrained_pixelwise_recon_vs_dro",
+                "peak_enhancement_slope_domain": "baseline_subtracted_magnitude_peak_enhancement",
+            }
+            log_row.update(amplitude_payload)
+            grasp_agg_row.update(amplitude_payload)
+
         spatial_keys = ["ssim", "psnr", "mse", "lpips"]
+        if args.compute_streak_metric:
+            spatial_keys.append("streak_bfer")
+        if args.eval_early_15s:
+            spatial_keys.extend(
+                [
+                    "early15s_ssim",
+                    "early15s_psnr",
+                    "early15s_mse",
+                    "early15s_lpips",
+                ]
+            )
         for metric in spatial_keys:
             dl_mean_std = _extract_mean_std(dl_summary.get(metric))
             grasp_mean_std = _extract_mean_std(grasp_summary.get(metric))
@@ -3223,14 +3737,22 @@ def main():
 
         dl_dc_mae = _extract_mean_std(dl_summary.get("dc_mae"))
         dl_dc_mse = _extract_mean_std(dl_summary.get("dc_mse"))
+        dl_dc_inner_kspace_mse = _extract_mean_std(dl_summary.get("dc_inner_kspace_mse"))
+        dl_dc_outer_kspace_mse = _extract_mean_std(dl_summary.get("dc_outer_kspace_mse"))
         grasp_dc_mae = _extract_mean_std(grasp_summary.get("dc_mae"))
         grasp_dc_mse = _extract_mean_std(grasp_summary.get("dc_mse"))
+        grasp_dc_inner_kspace_mse = _extract_mean_std(grasp_summary.get("dc_inner_kspace_mse"))
+        grasp_dc_outer_kspace_mse = _extract_mean_std(grasp_summary.get("dc_outer_kspace_mse"))
         raw_dc_mae = _extract_mean_std(raw_summary.get("raw_dc_mae"))
         raw_dc_mse = _extract_mean_std(raw_summary.get("raw_dc_mse"))
         raw_dc_psnr = _extract_mean_std(raw_summary.get("raw_dc_psnr"))
+        raw_dc_inner_kspace_mse = _extract_mean_std(raw_summary.get("raw_dc_inner_kspace_mse"))
+        raw_dc_outer_kspace_mse = _extract_mean_std(raw_summary.get("raw_dc_outer_kspace_mse"))
         raw_grasp_dc_mae = _extract_mean_std(raw_summary.get("raw_grasp_dc_mae"))
         raw_grasp_dc_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_mse"))
         raw_grasp_dc_psnr = _extract_mean_std(raw_summary.get("raw_grasp_dc_psnr"))
+        raw_grasp_dc_inner_kspace_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_inner_kspace_mse"))
+        raw_grasp_dc_outer_kspace_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_outer_kspace_mse"))
         raw_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_ssdu_nmse"))
         raw_grasp_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_grasp_ssdu_nmse"))
 
@@ -3248,6 +3770,19 @@ def main():
             "raw_ssdu_nmse_mean": raw_ssdu_nmse["mean"],
             "raw_ssdu_nmse_stddev": raw_ssdu_nmse["std"],
         }
+        if args.compare_kspace_regions:
+            log_row["dc_metrics"].update(
+                {
+                    "dro_dc_inner_kspace_mse_mean": dl_dc_inner_kspace_mse["mean"],
+                    "dro_dc_inner_kspace_mse_stddev": dl_dc_inner_kspace_mse["std"],
+                    "dro_dc_outer_kspace_mse_mean": dl_dc_outer_kspace_mse["mean"],
+                    "dro_dc_outer_kspace_mse_stddev": dl_dc_outer_kspace_mse["std"],
+                    "raw_dc_inner_kspace_mse_mean": raw_dc_inner_kspace_mse["mean"],
+                    "raw_dc_inner_kspace_mse_stddev": raw_dc_inner_kspace_mse["std"],
+                    "raw_dc_outer_kspace_mse_mean": raw_dc_outer_kspace_mse["mean"],
+                    "raw_dc_outer_kspace_mse_stddev": raw_dc_outer_kspace_mse["std"],
+                }
+            )
         grasp_agg_row["dc_metrics"] = {
             "dro_dc_mae_mean": grasp_dc_mae["mean"],
             "dro_dc_mae_stddev": grasp_dc_mae["std"],
@@ -3262,6 +3797,19 @@ def main():
             "raw_grasp_ssdu_nmse_mean": raw_grasp_ssdu_nmse["mean"],
             "raw_grasp_ssdu_nmse_stddev": raw_grasp_ssdu_nmse["std"],
         }
+        if args.compare_kspace_regions:
+            grasp_agg_row["dc_metrics"].update(
+                {
+                    "dro_dc_inner_kspace_mse_mean": grasp_dc_inner_kspace_mse["mean"],
+                    "dro_dc_inner_kspace_mse_stddev": grasp_dc_inner_kspace_mse["std"],
+                    "dro_dc_outer_kspace_mse_mean": grasp_dc_outer_kspace_mse["mean"],
+                    "dro_dc_outer_kspace_mse_stddev": grasp_dc_outer_kspace_mse["std"],
+                    "raw_dc_inner_kspace_mse_mean": raw_grasp_dc_inner_kspace_mse["mean"],
+                    "raw_dc_inner_kspace_mse_stddev": raw_grasp_dc_inner_kspace_mse["std"],
+                    "raw_dc_outer_kspace_mse_mean": raw_grasp_dc_outer_kspace_mse["mean"],
+                    "raw_dc_outer_kspace_mse_stddev": raw_grasp_dc_outer_kspace_mse["std"],
+                }
+            )
 
         temporal_blocks = [
             ("all_pixels_malignant", "", "all"),
@@ -3298,10 +3846,44 @@ def main():
         brisk_exists = False
         grasp_lamda_keys = {str(lam) for lam in grasp_lamdas}
         grasp_exists_by_lam = {key: False for key in grasp_lamda_keys}
+
+        def _same_metric_options(row):
+            same_kspace_region_setting = bool(row.get("compare_kspace_regions", False)) == bool(args.compare_kspace_regions)
+            if same_kspace_region_setting and args.compare_kspace_regions:
+                try:
+                    same_kspace_region_setting = abs(float(row.get("kspace_rho")) - float(args.kspace_rho)) < 1e-12
+                except (TypeError, ValueError):
+                    same_kspace_region_setting = False
+            same_streak_setting = bool(row.get("compute_streak_metric", False)) == bool(
+                args.compute_streak_metric
+            )
+            if same_streak_setting and args.compute_streak_metric:
+                try:
+                    same_streak_setting = int(row.get("streak_mask_margin_pixels")) == int(
+                        args.streak_mask_margin_pixels
+                    )
+                except (TypeError, ValueError):
+                    same_streak_setting = False
+            same_amplitude_setting = bool(
+                row.get("compute_peak_enhancement_slope", False)
+            ) == bool(args.compute_peak_enhancement_slope)
+            return (
+                str(row.get("image_metric_domain", "magnitude")) == current_image_metric_domain
+                and bool(row.get("eval_early_15s", False)) == bool(args.eval_early_15s)
+                and bool(row.get("ssdu_scale_match", False)) == bool(args.ssdu_scale_match)
+                and same_streak_setting
+                and same_amplitude_setting
+                and same_kspace_region_setting
+            )
+
         for row in existing_rows:
             row_type = row.get("type")
             if args.overwrite_logs:
-                if row_type == "BRISKNet" and row.get("exp_name") == exp_name:
+                if (
+                    row_type == "BRISKNet"
+                    and row.get("exp_name") == exp_name
+                    and _same_metric_options(row)
+                ):
                     continue
                 if row_type == "GRASP":
                     row_noise = row.get("DRO_noise_level") or row.get("dro_noise_level")
@@ -3314,12 +3896,17 @@ def main():
                         and str(row_noise) == str(val_noise_level)
                         and str(row_accel) == str(accel_factor)
                         and row_lam_key in grasp_lamda_keys
+                        and _same_metric_options(row)
                     ):
                         continue
                 filtered_rows.append(row)
                 continue
 
-            if row_type == "BRISKNet" and row.get("exp_name") == exp_name:
+            if (
+                row_type == "BRISKNet"
+                and row.get("exp_name") == exp_name
+                and _same_metric_options(row)
+            ):
                 brisk_exists = True
             if row_type == "GRASP":
                 row_lam_key = str(row.get("grasp_lamda")) if row.get("grasp_lamda") is not None else None
@@ -3329,6 +3916,7 @@ def main():
                     and str(row.get("DRO_noise_level")) == str(val_noise_level)
                     and str(row.get("acceleration")) == str(accel_factor)
                     and row_lam_key in grasp_exists_by_lam
+                    and _same_metric_options(row)
                 ):
                     grasp_exists_by_lam[row_lam_key] = True
             filtered_rows.append(row)
@@ -3359,11 +3947,50 @@ def main():
                     "seconds_per_frame": seconds_per_frame,
                     "DRO_noise_level": val_noise_level,
                     "grasp_lamda": grasp_lamda,
+                    "ssdu_scale_match": bool(args.ssdu_scale_match),
+                    "compute_streak_metric": bool(args.compute_streak_metric),
+                    "streak_mask_margin_pixels": int(args.streak_mask_margin_pixels),
+                    "compute_peak_enhancement_slope": bool(args.compute_peak_enhancement_slope),
                     "num_samples": int(len(grasp_results_lam)),
                     "spatial_metrics": {},
                     "dc_metrics": {},
                     "temporal_metrics": {},
                 }
+                if args.use_subtraction_images:
+                    grasp_row.update(
+                        {
+                            "image_metric_domain": current_image_metric_domain,
+                            "subtraction_baseline_seconds": float(args.subtraction_baseline_seconds),
+                        }
+                    )
+                if args.eval_early_15s:
+                    grasp_row.update(
+                        {
+                            "eval_early_15s": True,
+                            "early_15s_seconds_after_arrival": 15.0,
+                        }
+                    )
+                if args.compare_kspace_regions:
+                    grasp_row.update(
+                        {
+                            "compare_kspace_regions": True,
+                            "kspace_rho": float(args.kspace_rho),
+                        }
+                    )
+                if args.compute_streak_metric:
+                    grasp_row.update(
+                        {
+                            "streak_metric": "background_to_foreground_energy_ratio",
+                            "streak_mask_source": "DRO_ground_truth_otsu",
+                        }
+                    )
+                if args.compute_peak_enhancement_slope:
+                    grasp_row.update(
+                        {
+                            "peak_enhancement_slope_regression": "origin_constrained_pixelwise_recon_vs_dro",
+                            "peak_enhancement_slope_domain": "baseline_subtracted_magnitude_peak_enhancement",
+                        }
+                    )
                 for metric in spatial_keys:
                     grasp_mean_std = _extract_mean_std(grasp_summary.get(metric))
                     grasp_row["spatial_metrics"][f"{metric}_mean"] = grasp_mean_std["mean"]
@@ -3371,9 +3998,13 @@ def main():
 
                 grasp_dc_mae = _extract_mean_std(grasp_summary.get("dc_mae"))
                 grasp_dc_mse = _extract_mean_std(grasp_summary.get("dc_mse"))
+                grasp_dc_inner_kspace_mse = _extract_mean_std(grasp_summary.get("dc_inner_kspace_mse"))
+                grasp_dc_outer_kspace_mse = _extract_mean_std(grasp_summary.get("dc_outer_kspace_mse"))
                 raw_grasp_dc_mae = _extract_mean_std(raw_summary.get("raw_grasp_dc_mae"))
                 raw_grasp_dc_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_mse"))
                 raw_grasp_dc_psnr = _extract_mean_std(raw_summary.get("raw_grasp_dc_psnr"))
+                raw_grasp_dc_inner_kspace_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_inner_kspace_mse"))
+                raw_grasp_dc_outer_kspace_mse = _extract_mean_std(raw_summary.get("raw_grasp_dc_outer_kspace_mse"))
                 raw_grasp_ssdu_nmse = _extract_mean_std(raw_summary.get("raw_grasp_ssdu_nmse"))
                 grasp_row["dc_metrics"] = {
                     "dro_dc_mae_mean": grasp_dc_mae["mean"],
@@ -3389,6 +4020,19 @@ def main():
                     "raw_grasp_ssdu_nmse_mean": raw_grasp_ssdu_nmse["mean"],
                     "raw_grasp_ssdu_nmse_stddev": raw_grasp_ssdu_nmse["std"],
                 }
+                if args.compare_kspace_regions:
+                    grasp_row["dc_metrics"].update(
+                        {
+                            "dro_dc_inner_kspace_mse_mean": grasp_dc_inner_kspace_mse["mean"],
+                            "dro_dc_inner_kspace_mse_stddev": grasp_dc_inner_kspace_mse["std"],
+                            "dro_dc_outer_kspace_mse_mean": grasp_dc_outer_kspace_mse["mean"],
+                            "dro_dc_outer_kspace_mse_stddev": grasp_dc_outer_kspace_mse["std"],
+                            "raw_dc_inner_kspace_mse_mean": raw_grasp_dc_inner_kspace_mse["mean"],
+                            "raw_dc_inner_kspace_mse_stddev": raw_grasp_dc_inner_kspace_mse["std"],
+                            "raw_dc_outer_kspace_mse_mean": raw_grasp_dc_outer_kspace_mse["mean"],
+                            "raw_dc_outer_kspace_mse_stddev": raw_grasp_dc_outer_kspace_mse["std"],
+                        }
+                    )
 
                 temporal_blocks = [
                     ("all_pixels_malignant", "", "all"),

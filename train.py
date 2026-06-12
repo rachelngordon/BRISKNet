@@ -266,6 +266,7 @@ def _prepare_ssdu_training_inputs(
     samples_per_spoke: int,
     ssdu_enable: bool,
     ssdu_k_folds: int,
+    ssdu_holdout_fraction: float | None,
     ssdu_selection: str,
     ssdu_allow_single_spoke: bool,
     iteration_index: int,
@@ -282,6 +283,7 @@ def _prepare_ssdu_training_inputs(
         selection=ssdu_selection,
         iteration_index=int(iteration_index),
         allow_single_spoke=bool(ssdu_allow_single_spoke),
+        holdout_fraction=ssdu_holdout_fraction,
     )
     if ssdu_split is None:
         return measured_kspace, physics, measured_kspace, physics, None
@@ -673,15 +675,38 @@ def main():
             f"{type(ssdu_cfg_raw).__name__}."
         )
     ssdu_k_folds = int(ssdu_cfg.get("k_folds", 4))
-    ssdu_selection = str(ssdu_cfg.get("selection", "random")).strip().lower()
+    ssdu_holdout_fraction_raw = ssdu_cfg.get("holdout_fraction", None)
+    if ssdu_holdout_fraction_raw is None:
+        ssdu_holdout_fraction = None
+    elif isinstance(ssdu_holdout_fraction_raw, str):
+        ssdu_holdout_fraction_text = ssdu_holdout_fraction_raw.strip().lower()
+        if ssdu_holdout_fraction_text in ("", "none", "null"):
+            ssdu_holdout_fraction = None
+        else:
+            ssdu_holdout_fraction = float(ssdu_holdout_fraction_raw)
+    else:
+        ssdu_holdout_fraction = float(ssdu_holdout_fraction_raw)
+    ssdu_selection_default = str(ssdu_cfg.get("selection", "random")).strip().lower()
+    ssdu_selection_train = str(
+        ssdu_cfg.get("selection_train", ssdu_selection_default)
+    ).strip().lower()
+    # Keep validation deterministic by default while preserving random SSDU train splits.
+    ssdu_selection_val = str(ssdu_cfg.get("selection_val", "cyclic")).strip().lower()
     ssdu_weighting = str(ssdu_cfg.get("weighting", "sqrt_dcomp")).strip().lower()
     ssdu_allow_single_spoke = bool(ssdu_cfg.get("allow_single_spoke", False))
-    if ssdu_enable and ssdu_k_folds < 2:
+    if ssdu_enable and ssdu_holdout_fraction is not None and not 0.0 < ssdu_holdout_fraction < 1.0:
+        raise ValueError("model.losses.ssdu_loss.holdout_fraction must be in the open interval (0, 1).")
+    if ssdu_enable and ssdu_holdout_fraction is None and ssdu_k_folds < 2:
         raise ValueError("model.losses.ssdu_loss.k_folds must be >= 2 when SSDU is enabled.")
-    if ssdu_enable and ssdu_selection not in {"random", "cyclic"}:
-        raise ValueError(
-            "model.losses.ssdu_loss.selection must be one of: random, cyclic."
-        )
+    if ssdu_enable:
+        for split_name, split_selection in (
+            ("train", ssdu_selection_train),
+            ("val", ssdu_selection_val),
+        ):
+            if split_selection not in {"random", "cyclic"}:
+                raise ValueError(
+                    f"model.losses.ssdu_loss.selection_{split_name} must be one of: random, cyclic."
+                )
     if ssdu_enable and ssdu_weighting not in {"sqrt_dcomp", "none", "uniform", ""}:
         raise ValueError(
             "model.losses.ssdu_loss.weighting must be one of: sqrt_dcomp, none."
@@ -1386,6 +1411,12 @@ def main():
     mc_loss_fn = MCLoss(model_type=model_type, metric=mc_metric)
 
     if ssdu_enable:
+        if ssdu_holdout_fraction is None:
+            ssdu_split_description = f"k_folds={ssdu_k_folds}"
+        else:
+            ssdu_split_description = (
+                f"holdout_fraction={ssdu_holdout_fraction:.6g} (k_folds ignored)"
+            )
         ssdu_metric_name = str(ssdu_cfg.get("metric", mc_metric_name)).strip().upper()
         if ssdu_metric_name == "MSE":
             ssdu_metric = torch.nn.MSELoss()
@@ -1403,7 +1434,8 @@ def main():
         if global_rank == 0 or not config['training']['multigpu']:
             print(
                 "[SSDU] Enabled spoke-wise SSDU training loss: "
-                f"k_folds={ssdu_k_folds}, selection={ssdu_selection}, "
+                f"{ssdu_split_description}, train_selection={ssdu_selection_train}, "
+                f"val_selection={ssdu_selection_val}, "
                 f"weighting={ssdu_weighting}, allow_single_spoke={ssdu_allow_single_spoke}."
             )
     else:
@@ -1796,6 +1828,7 @@ def main():
     if resume_from_checkpoint:
         train_mc_losses = train_curves["train_mc_losses"]
         val_mc_losses = val_curves["val_mc_losses"]
+        val_raw_ssdu_losses = val_curves.get("val_raw_ssdu_losses", [])
         train_ei_losses = train_curves["train_ei_losses"]
         val_ei_losses = val_curves["val_ei_losses"]
         train_adj_losses = train_curves["train_adj_losses"]
@@ -1845,6 +1878,7 @@ def main():
     else:
         train_mc_losses = []
         val_mc_losses = []
+        val_raw_ssdu_losses = []
         train_ei_losses = []
         val_ei_losses = []
         train_adj_losses = []
@@ -1950,6 +1984,7 @@ def main():
             val_mc_losses=val_mc_losses,
             val_ei_losses=val_ei_losses,
             val_adj_losses=val_adj_losses,
+            val_raw_ssdu_losses=val_raw_ssdu_losses,
         )
         eval_curves = dict(
             eval_ssims=eval_ssims,
@@ -2153,6 +2188,7 @@ def main():
         initial_val_ei_loss = 0.0
         initial_train_adj_loss = 0.0
         initial_val_adj_loss = 0.0
+        initial_val_raw_ssdu_loss = 0.0
         initial_eval_ssims = []
         initial_eval_psnrs = []
         initial_eval_mses = []
@@ -2235,7 +2271,8 @@ def main():
                     samples_per_spoke=n_samples_i,
                     ssdu_enable=ssdu_enable,
                     ssdu_k_folds=ssdu_k_folds,
-                    ssdu_selection=ssdu_selection,
+                    ssdu_holdout_fraction=ssdu_holdout_fraction,
+                    ssdu_selection=ssdu_selection_train,
                     ssdu_allow_single_spoke=ssdu_allow_single_spoke,
                     iteration_index=step0_train_batches,
                 )
@@ -2299,6 +2336,7 @@ def main():
             # Evaluate on validation data
             if step0_do_val:
                 step0_val_batches = 0
+                step0_val_raw_ssdu_batches = 0
                 step0_val_infer_times = []
                 step0_use_sliding_window = _use_eval_sliding_window(N_time_eval)
                 for dro_kspace, csmap, ground_truth, dro_grasp_img, mask, grasp_path, raw_kspace, raw_grasp_img, raw_csmaps in tqdm(val_dro_loader, desc="Step 0 Validation Evaluation"):
@@ -2381,8 +2419,8 @@ def main():
                         
                         if ssdu_enable:
                             (
-                                _val_input_kspace,
-                                _val_input_physics,
+                                val_input_kspace,
+                                val_input_physics,
                                 val_loss_kspace,
                                 val_loss_physics,
                                 _,
@@ -2393,14 +2431,74 @@ def main():
                                 samples_per_spoke=int(N_samples),
                                 ssdu_enable=ssdu_enable,
                                 ssdu_k_folds=ssdu_k_folds,
-                                ssdu_selection=ssdu_selection,
+                                ssdu_holdout_fraction=ssdu_holdout_fraction,
+                                ssdu_selection=ssdu_selection_val,
                                 ssdu_allow_single_spoke=ssdu_allow_single_spoke,
                                 iteration_index=step0_val_batches,
                             )
-                            mc_loss = ssdu_loss_fn(val_loss_kspace, x_recon, val_loss_physics, csmap)
+                            if step0_use_sliding_window:
+                                x_recon_ssdu, _ = sliding_window_inference(
+                                    H, W, N_time_eval,
+                                    val_input_physics.ktraj, val_input_physics.dcomp,
+                                    val_input_physics.nufft_ob, val_input_physics.adjnufft_ob,
+                                    eval_chunk_size, eval_chunk_overlap,
+                                    val_input_kspace, csmap,
+                                    acceleration_encoding, start_timepoint_index,
+                                    model, epoch="val0", device=device, norm=config["model"]["norm"],
+                                    collect_adj_loss=False,
+                                )
+                            else:
+                                x_recon_ssdu, *_ = model(
+                                    val_input_kspace, val_input_physics, csmap,
+                                    acceleration_encoding, start_timepoint_index,
+                                    epoch="val0", norm=config["model"]["norm"],
+                                )
+                            mc_loss = ssdu_loss_fn(val_loss_kspace, x_recon_ssdu, val_loss_physics, csmap)
                         else:
                             mc_loss = mc_loss_fn(dro_kspace.to(device), x_recon, eval_physics, csmap)
                         initial_val_mc_loss += mc_loss.item()
+
+                        if ssdu_enable and raw_eval_available and raw_eval_ctx is not None:
+                            (
+                                raw_input_kspace,
+                                raw_input_physics,
+                                raw_loss_kspace,
+                                raw_loss_physics,
+                                _,
+                            ) = _prepare_ssdu_training_inputs(
+                                measured_kspace=raw_kspace,
+                                physics=raw_eval_ctx["physics"],
+                                spokes_per_frame=eval_spokes_i,
+                                samples_per_spoke=int(N_samples),
+                                ssdu_enable=ssdu_enable,
+                                ssdu_k_folds=ssdu_k_folds,
+                                ssdu_holdout_fraction=ssdu_holdout_fraction,
+                                ssdu_selection=ssdu_selection_val,
+                                ssdu_allow_single_spoke=ssdu_allow_single_spoke,
+                                iteration_index=step0_val_batches,
+                            )
+                            if raw_eval_ctx["use_sliding_window"]:
+                                raw_x_recon_ssdu, _ = sliding_window_inference(
+                                    H, W, raw_eval_ctx["frames"],
+                                    raw_input_physics.ktraj, raw_input_physics.dcomp,
+                                    raw_input_physics.nufft_ob, raw_input_physics.adjnufft_ob,
+                                    raw_eval_ctx["chunk_size"], raw_eval_ctx["chunk_overlap"],
+                                    raw_input_kspace, raw_csmaps,
+                                    acceleration_encoding, start_timepoint_index,
+                                    model, epoch="val0", device=device,
+                                    norm=config["model"]["norm"], collect_adj_loss=False,
+                                )
+                            else:
+                                raw_x_recon_ssdu, *_ = model(
+                                    raw_input_kspace, raw_input_physics, raw_csmaps,
+                                    acceleration_encoding, start_timepoint_index,
+                                    epoch="val0", norm=config["model"]["norm"],
+                                )
+                            raw_ssdu_val_loss = ssdu_loss_fn(
+                                raw_loss_kspace, raw_x_recon_ssdu, raw_loss_physics, raw_csmaps
+                            )
+                            initial_val_raw_ssdu_loss += raw_ssdu_val_loss.item()
+                            step0_val_raw_ssdu_batches += 1
     
                         if use_ei_loss:
                             if deterministic_val_ei:
@@ -2586,11 +2684,20 @@ def main():
                     step0_val_adj_loss = 0.0
                 val_adj_losses.append(step0_val_adj_loss)
 
+                if ssdu_enable:
+                    if step0_val_raw_ssdu_batches > 0:
+                        step0_val_raw_ssdu_loss = initial_val_raw_ssdu_loss / step0_val_raw_ssdu_batches
+                    else:
+                        step0_val_raw_ssdu_loss = float("nan")
+                    val_raw_ssdu_losses.append(step0_val_raw_ssdu_loss)
+
 
                 if global_rank == 0 or not config['training']['multigpu']:
                     writer.add_scalar(primary_val_scalar_name, step0_val_mc_loss, 0)
                     writer.add_scalar('Loss/Val_EI', step0_val_ei_loss, 0)
                     writer.add_scalar('Loss/Val_Adj', step0_val_adj_loss, 0)
+                    if ssdu_enable and np.isfinite(step0_val_raw_ssdu_loss):
+                        writer.add_scalar('Loss/Val_SSDU_Raw', step0_val_raw_ssdu_loss, 0)
 
 
                 # Calculate and store average validation evaluation metrics
@@ -3035,7 +3142,8 @@ def main():
                     samples_per_spoke=n_samples_i,
                     ssdu_enable=ssdu_enable,
                     ssdu_k_folds=ssdu_k_folds,
-                    ssdu_selection=ssdu_selection,
+                    ssdu_holdout_fraction=ssdu_holdout_fraction,
+                    ssdu_selection=ssdu_selection_train,
                     ssdu_allow_single_spoke=ssdu_allow_single_spoke,
                     iteration_index=max(iteration_count - 1, 0),
                 )
@@ -3320,6 +3428,7 @@ def main():
                 val_running_mc_loss = 0.0
                 val_running_ei_loss = 0.0
                 val_running_adj_loss = 0.0
+                val_running_raw_ssdu_loss = 0.0
                 distributed_eval_this_epoch = distributed_eval and config['training']['multigpu']
                 epoch_use_sliding_window = _use_eval_sliding_window(N_time_eval)
                 run_eval_metrics_this_rank = (
@@ -3370,6 +3479,7 @@ def main():
                 )
                 with torch.no_grad():
                     val_batches = 0
+                    val_raw_ssdu_batches = 0
                     for (
                         val_dro_kspace_batch,
                         val_csmap,
@@ -3461,8 +3571,8 @@ def main():
 
                                 if ssdu_enable:
                                     (
-                                        _val_input_kspace,
-                                        _val_input_physics,
+                                        val_input_kspace,
+                                        val_input_physics,
                                         val_loss_kspace,
                                         val_loss_physics,
                                         _,
@@ -3473,14 +3583,79 @@ def main():
                                         samples_per_spoke=int(N_samples),
                                         ssdu_enable=ssdu_enable,
                                         ssdu_k_folds=ssdu_k_folds,
-                                        ssdu_selection=ssdu_selection,
+                                        ssdu_holdout_fraction=ssdu_holdout_fraction,
+                                        ssdu_selection=ssdu_selection_val,
                                         ssdu_allow_single_spoke=ssdu_allow_single_spoke,
                                         iteration_index=val_batches,
                                     )
-                                    val_mc_loss = ssdu_loss_fn(val_loss_kspace, val_x_recon, val_loss_physics, val_csmap)
+                                    if epoch_use_sliding_window:
+                                        val_x_recon_ssdu, _ = sliding_window_inference(
+                                            H, W, N_time_eval,
+                                            val_input_physics.ktraj, val_input_physics.dcomp,
+                                            val_input_physics.nufft_ob, val_input_physics.adjnufft_ob,
+                                            eval_chunk_size, eval_chunk_overlap,
+                                            val_input_kspace, val_csmap,
+                                            acceleration_encoding, start_timepoint_index,
+                                            model, epoch=f"val{epoch}", device=device,
+                                            norm=config["model"]["norm"], collect_adj_loss=False,
+                                        )
+                                    else:
+                                        val_x_recon_ssdu, *_ = model(
+                                            val_input_kspace, val_input_physics, val_csmap,
+                                            acceleration_encoding, start_timepoint_index,
+                                            epoch=f"val{epoch}", norm=config["model"]["norm"],
+                                        )
+                                    val_mc_loss = ssdu_loss_fn(
+                                        val_loss_kspace, val_x_recon_ssdu, val_loss_physics, val_csmap
+                                    )
                                 else:
                                     val_mc_loss = mc_loss_fn(val_dro_kspace_batch.to(device), val_x_recon, eval_physics, val_csmap)
                                 val_running_mc_loss += val_mc_loss.item()
+
+                                if ssdu_enable and raw_eval_available and raw_eval_ctx is not None:
+                                    (
+                                        val_raw_input_kspace,
+                                        val_raw_input_physics,
+                                        val_raw_loss_kspace,
+                                        val_raw_loss_physics,
+                                        _,
+                                    ) = _prepare_ssdu_training_inputs(
+                                        measured_kspace=val_raw_kspace,
+                                        physics=raw_eval_ctx["physics"],
+                                        spokes_per_frame=eval_spokes_i,
+                                        samples_per_spoke=int(N_samples),
+                                        ssdu_enable=ssdu_enable,
+                                        ssdu_k_folds=ssdu_k_folds,
+                                        ssdu_holdout_fraction=ssdu_holdout_fraction,
+                                        ssdu_selection=ssdu_selection_val,
+                                        ssdu_allow_single_spoke=ssdu_allow_single_spoke,
+                                        iteration_index=val_batches,
+                                    )
+                                    if raw_eval_ctx["use_sliding_window"]:
+                                        val_raw_x_recon_ssdu, _ = sliding_window_inference(
+                                            H, W, raw_eval_ctx["frames"],
+                                            val_raw_input_physics.ktraj, val_raw_input_physics.dcomp,
+                                            val_raw_input_physics.nufft_ob, val_raw_input_physics.adjnufft_ob,
+                                            raw_eval_ctx["chunk_size"], raw_eval_ctx["chunk_overlap"],
+                                            val_raw_input_kspace, val_raw_csmaps,
+                                            acceleration_encoding, start_timepoint_index,
+                                            model, epoch=f"val{epoch}", device=device,
+                                            norm=config["model"]["norm"], collect_adj_loss=False,
+                                        )
+                                    else:
+                                        val_raw_x_recon_ssdu, *_ = model(
+                                            val_raw_input_kspace, val_raw_input_physics, val_raw_csmaps,
+                                            acceleration_encoding, start_timepoint_index,
+                                            epoch=f"val{epoch}", norm=config["model"]["norm"],
+                                        )
+                                    val_raw_ssdu_loss = ssdu_loss_fn(
+                                        val_raw_loss_kspace,
+                                        val_raw_x_recon_ssdu,
+                                        val_raw_loss_physics,
+                                        val_raw_csmaps,
+                                    )
+                                    val_running_raw_ssdu_loss += val_raw_ssdu_loss.item()
+                                    val_raw_ssdu_batches += 1
 
                                 if use_ei_loss and compute_ei_this_epoch:
                                     if deterministic_val_ei:
@@ -3790,7 +3965,14 @@ def main():
 
                 if distributed_eval_this_epoch:
                     loss_reduce = torch.tensor(
-                        [val_running_mc_loss, val_running_ei_loss, val_running_adj_loss, float(val_batches)],
+                        [
+                            val_running_mc_loss,
+                            val_running_ei_loss,
+                            val_running_adj_loss,
+                            val_running_raw_ssdu_loss,
+                            float(val_batches),
+                            float(val_raw_ssdu_batches),
+                        ],
                         dtype=torch.float64,
                         device=device,
                     )
@@ -3798,7 +3980,9 @@ def main():
                     val_running_mc_loss = float(loss_reduce[0].item())
                     val_running_ei_loss = float(loss_reduce[1].item())
                     val_running_adj_loss = float(loss_reduce[2].item())
-                    val_batches = int(loss_reduce[3].item())
+                    val_running_raw_ssdu_loss = float(loss_reduce[3].item())
+                    val_batches = int(loss_reduce[4].item())
+                    val_raw_ssdu_batches = int(loss_reduce[5].item())
                     gathered_eval_records = [None for _ in range(world_size)]
                     dist.all_gather_object(gathered_eval_records, local_eval_records)
                     gathered_infer_times = [None for _ in range(world_size)]
@@ -4062,10 +4246,19 @@ def main():
                 
                 val_adj_losses.append(epoch_val_adj_loss)
 
+                if ssdu_enable:
+                    if val_raw_ssdu_batches > 0:
+                        epoch_val_raw_ssdu_loss = val_running_raw_ssdu_loss / val_raw_ssdu_batches
+                    else:
+                        epoch_val_raw_ssdu_loss = float("nan")
+                    val_raw_ssdu_losses.append(epoch_val_raw_ssdu_loss)
+
                 if global_rank == 0 or not config['training']['multigpu']:
                     writer.add_scalar(primary_val_scalar_name, epoch_val_mc_loss, epoch)
                     writer.add_scalar('Loss/Val_EI', epoch_val_ei_loss, epoch)
                     writer.add_scalar('Loss/Val_Adj', epoch_val_adj_loss, epoch)
+                    if ssdu_enable and np.isfinite(epoch_val_raw_ssdu_loss):
+                        writer.add_scalar('Loss/Val_SSDU_Raw', epoch_val_raw_ssdu_loss, epoch)
 
                     if np.isfinite(epoch_eval_psnr) and epoch_eval_psnr > best_psnr:
                         best_psnr = float(epoch_eval_psnr)
@@ -4169,6 +4362,26 @@ def main():
                         plt.tight_layout()
                         plt.savefig(os.path.join(output_dir, "losses.png"))
                         plt.close()
+
+                        if ssdu_enable and val_raw_ssdu_losses:
+                            raw_ssdu_vals = np.asarray(val_raw_ssdu_losses, dtype=float)
+                            if np.isfinite(raw_ssdu_vals).any():
+                                plt.figure(figsize=(9, 5))
+                                sns.lineplot(
+                                    x=range(0, len(val_raw_ssdu_losses) * eval_frequency, eval_frequency),
+                                    y=val_raw_ssdu_losses,
+                                    color="teal",
+                                )
+                                plt.title(
+                                    f"Validation SSDU Loss on Raw k-space ({N_spokes_eval} spokes/frame)"
+                                )
+                                plt.xlabel("Epoch")
+                                plt.ylabel("SSDU Loss")
+                                plt.tight_layout()
+                                plt.savefig(
+                                    os.path.join(output_dir, "ssdu_val_raw_kspace_losses.png")
+                                )
+                                plt.close()
 
 
                         # plot learnable parameters in one figure

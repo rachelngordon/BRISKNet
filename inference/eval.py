@@ -17,7 +17,7 @@ import torch
 import torchmetrics
 from einops import rearrange
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from scipy.ndimage import binary_fill_holes, label as nd_label
+from scipy.ndimage import binary_dilation, binary_fill_holes, gaussian_filter, label as nd_label, sobel
 from scipy.stats import pearsonr
 from skimage.filters import threshold_otsu
 from skimage.measure import find_contours
@@ -114,6 +114,41 @@ def robust_window_multi(images, p_low=1, p_high=99.5):
     return lo, hi
 
 
+def _edge_enhance_temporal_stack(
+    img_stack: np.ndarray,
+    sigma: float = 1.0,
+    gradient_operator: str = "sobel",
+) -> np.ndarray:
+    """Build an edge-magnitude stack (H, W, T) for temporal-fidelity metrics."""
+    stack = np.asarray(img_stack, dtype=np.float32)
+    if stack.ndim != 3:
+        raise ValueError(f"Expected (H,W,T) stack, got shape {stack.shape}.")
+
+    sigma = max(float(sigma), 0.0)
+    if sigma > 0:
+        # Smooth each frame spatially; keep time dimension untouched.
+        stack = gaussian_filter(stack, sigma=(sigma, sigma, 0.0), mode="reflect")
+
+    op = str(gradient_operator or "sobel").strip().lower()
+    if op == "sobel":
+        grad_x = sobel(stack, axis=1, mode="reflect")
+        grad_y = sobel(stack, axis=0, mode="reflect")
+    elif op == "scharr":
+        # Lazy import to avoid hard dependency unless this operator is requested.
+        from skimage.filters import scharr_h, scharr_v
+
+        grad_x = np.empty_like(stack, dtype=np.float32)
+        grad_y = np.empty_like(stack, dtype=np.float32)
+        for t in range(stack.shape[2]):
+            grad_x[..., t] = scharr_h(stack[..., t]).astype(np.float32, copy=False)
+            grad_y[..., t] = scharr_v(stack[..., t]).astype(np.float32, copy=False)
+    else:
+        raise ValueError(f"Unsupported edge gradient operator: {gradient_operator!r}")
+
+    edge = np.hypot(grad_x, grad_y)
+    return np.nan_to_num(edge, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+
+
 def _infer_foreground_mask_from_stack(img_stack: np.ndarray) -> tuple[np.ndarray | None, float | None]:
     """Infer a coarse foreground/tissue mask from a (H, W, T) magnitude stack."""
     if img_stack is None:
@@ -159,6 +194,84 @@ def _infer_foreground_mask_from_stack(img_stack: np.ndarray) -> tuple[np.ndarray
     return mask.astype(bool), frac
 
 
+def calc_background_to_foreground_energy_ratio(
+    img_stack: np.ndarray,
+    foreground_mask: np.ndarray,
+    margin_pixels: int = 5,
+) -> float | None:
+    """Mean-square background energy divided by mean-square foreground energy."""
+    stack = np.asarray(img_stack)
+    mask = np.asarray(foreground_mask).squeeze().astype(bool)
+    if stack.ndim != 3 or mask.shape != stack.shape[:2] or not mask.any():
+        return None
+
+    margin_pixels = max(0, int(margin_pixels))
+    background_exclusion = mask
+    if margin_pixels > 0:
+        background_exclusion = binary_dilation(mask, iterations=margin_pixels)
+    background_mask = ~background_exclusion
+    if not background_mask.any():
+        return None
+
+    energy = np.abs(stack).astype(np.float64, copy=False) ** 2
+    foreground_energy = float(np.nanmean(energy[mask]))
+    background_energy = float(np.nanmean(energy[background_mask]))
+    if (
+        not np.isfinite(foreground_energy)
+        or foreground_energy <= 0
+        or not np.isfinite(background_energy)
+    ):
+        return None
+    return background_energy / foreground_energy
+
+
+def _subtraction_baseline_frames(
+    num_frames: int,
+    total_scan_seconds: float = 150.0,
+    baseline_seconds: float = 20.0,
+) -> int:
+    """Number of initial frames whose mean defines a subtraction image baseline."""
+    num_frames = int(num_frames)
+    if num_frames <= 0:
+        return 0
+    if num_frames == 1:
+        return 1
+    total_scan_seconds = max(float(total_scan_seconds), 1e-6)
+    baseline_seconds = max(float(baseline_seconds), 0.0)
+    dt = total_scan_seconds / max(num_frames - 1, 1)
+    frames = int(np.ceil(baseline_seconds / max(dt, 1e-6))) if baseline_seconds > 0 else 1
+    return max(1, min(frames, num_frames))
+
+
+def _baseline_subtract_torch_stack(
+    img: torch.Tensor,
+    n_baseline: int,
+    time_dim: int = 2,
+) -> torch.Tensor:
+    """Subtract the per-series mean baseline image from a tensor image stack."""
+    n_baseline = max(1, min(int(n_baseline), int(img.shape[time_dim])))
+    baseline = img.narrow(time_dim, 0, n_baseline).mean(dim=time_dim, keepdim=True)
+    return img - baseline
+
+
+def _baseline_subtract_np_stack(img_stack: np.ndarray, n_baseline: int) -> np.ndarray:
+    """Subtract the per-series mean baseline image from a (H, W, T) stack."""
+    stack = np.asarray(img_stack)
+    if stack.ndim != 3:
+        raise ValueError(f"Expected (H,W,T) stack, got shape {stack.shape}.")
+    n_baseline = max(1, min(int(n_baseline), int(stack.shape[2])))
+    baseline = np.nanmean(stack[:, :, :n_baseline], axis=2, keepdims=True)
+    return stack - baseline
+
+
+def _metric_data_range(img: torch.Tensor) -> tuple[float, float]:
+    min_val = torch.min(img).item()
+    max_val = torch.max(img).item()
+    if max_val <= min_val:
+        max_val = min_val + 1e-6
+    return min_val, max_val
+
+
 def normalize_for_lpips(image, data_range):
     """Normalizes an image tensor to the [-1, 1] range for LPIPS."""
     min_val, max_val = data_range
@@ -166,7 +279,7 @@ def normalize_for_lpips(image, data_range):
     image_0_1 = (image - min_val) / (max_val - min_val)
     # Scale to [-1, 1]
     image_minus1_1 = 2 * image_0_1 - 1
-    return image_minus1_1
+    return torch.clamp(image_minus1_1, min=-1.0, max=1.0)
 
 
 
@@ -186,6 +299,15 @@ def calc_image_metrics(input, reference, data_range, device):
     ssim = ssim(input, reference)
     psnr = psnr(input, reference)
     mse = mse(input, reference)
+
+    if input.dim() == 4:
+        input_lpips = normalize_for_lpips(input.clone(), data_range)
+        reference_lpips = normalize_for_lpips(reference.clone(), data_range)
+        if input_lpips.shape[1] == 1:
+            input_lpips = input_lpips.repeat(1, 3, 1, 1)
+            reference_lpips = reference_lpips.repeat(1, 3, 1, 1)
+        input_lpips = input_lpips.to(reference_lpips.dtype)
+        final_lpips = lpips_metric(input_lpips, reference_lpips).item()
 
     # --- Handle 5D Volumetric Data by averaging over slices ---
     if input.dim() == 5:
@@ -217,7 +339,43 @@ def calc_image_metrics(input, reference, data_range, device):
         final_lpips = sum(lpips_scores) / len(lpips_scores)
 
     return ssim.item(), psnr.item(), mse.item(), final_lpips
-    
+
+
+def _calc_spatial_metrics_for_frame_indices(
+    recon_stack: np.ndarray,
+    gt_stack: np.ndarray,
+    frame_indices: np.ndarray,
+    device,
+) -> tuple[float, float, float, float] | None:
+    indices = np.asarray(frame_indices, dtype=int)
+    if indices.size == 0:
+        return None
+    if recon_stack is None or gt_stack is None:
+        return None
+    if recon_stack.ndim != 3 or gt_stack.ndim != 3:
+        return None
+
+    num_frames = int(gt_stack.shape[2])
+    indices = indices[(indices >= 0) & (indices < num_frames)]
+    if indices.size == 0:
+        return None
+
+    gt_subset = np.asarray(gt_stack[:, :, indices], dtype=np.float32)
+    recon_subset = np.asarray(recon_stack[:, :, indices], dtype=np.float32)
+    gt_subset_tensor = torch.as_tensor(gt_subset, device=device).permute(2, 0, 1).unsqueeze(1)
+    recon_subset_tensor = torch.as_tensor(recon_subset, device=device).permute(2, 0, 1).unsqueeze(1)
+    data_range = _metric_data_range(gt_subset_tensor)
+
+    per_frame_metrics = []
+    for frame_idx in range(gt_subset_tensor.shape[0]):
+        gt_tensor = gt_subset_tensor[frame_idx : frame_idx + 1]
+        recon_tensor = recon_subset_tensor[frame_idx : frame_idx + 1]
+        per_frame_metrics.append(
+            calc_image_metrics(recon_tensor.contiguous(), gt_tensor.contiguous(), data_range, device)
+        )
+    if not per_frame_metrics:
+        return None
+    return tuple(float(np.nanmean([metrics[idx] for metrics in per_frame_metrics])) for idx in range(4))
 
 
 ## Evaluate Data Consistency in k-space
@@ -237,6 +395,95 @@ def calc_dc(input, reference, device):
     mae = mae(input, reference)
 
     return mse.item(), mae.item()
+
+
+def _rho_from_ktraj(ktraj: torch.Tensor, measurement_shape: tuple[int, ...]) -> torch.Tensor:
+    """Return normalized radial distance with shape matching the k-space sample/time axes."""
+    ktraj = torch.as_tensor(ktraj)
+    if ktraj.ndim == 3:
+        if ktraj.shape[0] == 2:
+            rho = torch.linalg.vector_norm(ktraj, dim=0)
+        elif ktraj.shape[-1] == 2:
+            rho = torch.linalg.vector_norm(ktraj, dim=-1)
+        else:
+            raise ValueError(f"Unsupported ktraj shape for radial regions: {tuple(ktraj.shape)}")
+
+        rho_squeezed = rho.squeeze()
+        if rho_squeezed.ndim == 1 and int(rho_squeezed.shape[0]) == int(measurement_shape[-1]):
+            rho = rho_squeezed
+        else:
+            target = tuple(measurement_shape[-2:])
+            if tuple(rho.shape) == target:
+                pass
+            elif tuple(rho.T.shape) == target:
+                rho = rho.T
+            else:
+                raise ValueError(
+                    f"ktraj radial shape {tuple(rho.shape)} does not match k-space sample/time axes {target}."
+                )
+    elif ktraj.ndim == 2:
+        if ktraj.shape[0] == 2:
+            rho = torch.linalg.vector_norm(ktraj, dim=0)
+        elif ktraj.shape[-1] == 2:
+            rho = torch.linalg.vector_norm(ktraj, dim=-1)
+        else:
+            raise ValueError(f"Unsupported ktraj shape for radial regions: {tuple(ktraj.shape)}")
+
+        if int(rho.shape[0]) != int(measurement_shape[-1]):
+            raise ValueError(
+                f"ktraj radial length {int(rho.shape[0])} does not match k-space sample axis "
+                f"{int(measurement_shape[-1])}."
+            )
+    else:
+        raise ValueError(f"Unsupported ktraj shape for radial regions: {tuple(ktraj.shape)}")
+
+    max_rho = torch.max(rho)
+    max_rho_value = float(max_rho.detach().cpu().item())
+    if not np.isfinite(max_rho_value) or max_rho_value <= 0:
+        raise ValueError("Cannot normalize k-space radial distances: max radius is not positive.")
+    return rho / max_rho
+
+
+def calc_kspace_region_mse(
+    input: torch.Tensor,
+    reference: torch.Tensor,
+    ktraj: torch.Tensor,
+    rho: float = 0.57,
+) -> dict[str, float]:
+    """Compute real/imag MSE inside and outside a normalized radial k-space cutoff."""
+    rho = float(rho)
+    if rho <= 0.0 or rho >= 1.0:
+        raise ValueError(f"k-space rho cutoff must be in (0, 1), got {rho}.")
+
+    input = input.squeeze()
+    reference = reference.squeeze()
+    if input.shape != reference.shape:
+        raise ValueError(
+            f"k-space region MSE expects matching shapes, got {tuple(input.shape)} and {tuple(reference.shape)}."
+        )
+    if not torch.is_complex(input) or not torch.is_complex(reference):
+        raise ValueError("k-space region MSE expects complex input and reference tensors.")
+
+    rho_grid = _rho_from_ktraj(ktraj, tuple(reference.shape)).to(device=input.device)
+    diff = torch.view_as_real((input - reference).contiguous())
+
+    if rho_grid.ndim == 2:
+        mask_shape = [1] * (diff.ndim - 3) + [rho_grid.shape[0], rho_grid.shape[1], 1]
+    else:
+        mask_shape = [1] * (diff.ndim - 2) + [rho_grid.shape[0], 1]
+
+    inner_mask = (rho_grid <= rho).reshape(mask_shape).expand_as(diff)
+    outer_mask = (rho_grid > rho).reshape(mask_shape).expand_as(diff)
+
+    def _masked_mse(mask: torch.Tensor) -> float:
+        if not bool(mask.any().item()):
+            return float("nan")
+        return float(diff[mask].pow(2).mean().item())
+
+    return {
+        "inner": _masked_mse(inner_mask),
+        "outer": _masked_mse(outer_mask),
+    }
 
 
 def calc_dc_psnr(reference, dc_mse: float, device):
@@ -407,6 +654,32 @@ def _apply_grasp_orientation(
     return img_out.permute(1, 2, 0)
 
 
+def _compute_ssdu_nmse_terms(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    weight: torch.Tensor | float,
+    scale_match: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute weighted NMSE after an optional optimal global complex rescaling."""
+    scale = torch.ones((), dtype=prediction.dtype, device=prediction.device)
+    if scale_match:
+        weighted_prediction = weight * prediction
+        weighted_target = weight * target
+        scale_den = torch.sum(torch.abs(weighted_prediction) ** 2)
+        if scale_den.item() > 0:
+            scale_num = torch.sum(torch.conj(weighted_prediction) * weighted_target)
+            scale = scale_num / scale_den
+
+    diff = scale * prediction - target
+    weighted_diff = weight * diff
+    weighted_target = weight * target
+    num = torch.sum(torch.abs(weighted_diff) ** 2)
+    den = torch.sum(torch.abs(weighted_target) ** 2)
+    num_t = torch.sum(torch.abs(weighted_diff) ** 2, dim=(0, 1))
+    den_t = torch.sum(torch.abs(weighted_target) ** 2, dim=(0, 1))
+    return num / (den + 1e-8), num_t / (den_t + 1e-8), scale
+
+
 @torch.no_grad()
 def compute_ssdu_kspace_nmse(
     model,
@@ -427,6 +700,7 @@ def compute_ssdu_kspace_nmse(
     chunk_size: Optional[int] = None,
     chunk_overlap: int = 0,
     allow_single_spoke: bool = False,
+    scale_match: bool = False,
 ) -> Dict[str, object]:
     if device is None:
         device = kspace.device
@@ -455,6 +729,10 @@ def compute_ssdu_kspace_nmse(
 
     fold_nmse = []
     fold_nmse_per_frame = []
+    fold_nmse_unscaled = []
+    fold_nmse_scale_matched = []
+    fold_scale_abs = []
+    fold_scale_phase = []
 
     for held_idx, used_idx in fold_indices:
         y_used = kspace_flat[:, used_idx, :]
@@ -510,23 +788,25 @@ def compute_ssdu_kspace_nmse(
         else:
             weight = 1.0
 
-        diff = y_hat_held - y_held
-        if isinstance(weight, torch.Tensor):
-            num = torch.sum(torch.abs(weight * diff) ** 2)
-            den = torch.sum(torch.abs(weight * y_held) ** 2)
-            num_t = torch.sum(torch.abs(weight * diff) ** 2, dim=(0, 1))
-            den_t = torch.sum(torch.abs(weight * y_held) ** 2, dim=(0, 1))
-        else:
-            num = torch.sum(torch.abs(diff) ** 2)
-            den = torch.sum(torch.abs(y_held) ** 2)
-            num_t = torch.sum(torch.abs(diff) ** 2, dim=(0, 1))
-            den_t = torch.sum(torch.abs(y_held) ** 2, dim=(0, 1))
+        nmse_unscaled, nmse_unscaled_per_frame, _ = _compute_ssdu_nmse_terms(
+            y_hat_held, y_held, weight, scale_match=False
+        )
+        nmse_matched, nmse_matched_per_frame, scale = _compute_ssdu_nmse_terms(
+            y_hat_held, y_held, weight, scale_match=True
+        )
+        nmse_fold = nmse_matched if scale_match else nmse_unscaled
+        nmse_per_frame = (
+            nmse_matched_per_frame
+            if scale_match
+            else nmse_unscaled_per_frame
+        )
 
-        nmse_fold = (num / (den + 1e-8)).item()
-        nmse_per_frame = (num_t / (den_t + 1e-8)).detach().cpu()
-
-        fold_nmse.append(nmse_fold)
-        fold_nmse_per_frame.append(nmse_per_frame)
+        fold_nmse.append(nmse_fold.item())
+        fold_nmse_per_frame.append(nmse_per_frame.detach().cpu())
+        fold_nmse_unscaled.append(nmse_unscaled.item())
+        fold_nmse_scale_matched.append(nmse_matched.item())
+        fold_scale_abs.append(torch.abs(scale).item())
+        fold_scale_phase.append(torch.angle(scale).item())
 
     if not fold_nmse:
         return {"ssdu_nmse_mean": float("nan"), "ssdu_nmse_folds": [], "ssdu_nmse_per_frame": None}
@@ -540,6 +820,12 @@ def compute_ssdu_kspace_nmse(
         "ssdu_nmse_mean": ssdu_nmse_mean,
         "ssdu_nmse_folds": fold_nmse,
         "ssdu_nmse_per_frame": ssdu_nmse_per_frame,
+        "ssdu_nmse_unscaled_mean": float(np.mean(fold_nmse_unscaled)),
+        "ssdu_nmse_unscaled_folds": fold_nmse_unscaled,
+        "ssdu_nmse_scale_matched_mean": float(np.mean(fold_nmse_scale_matched)),
+        "ssdu_nmse_scale_matched_folds": fold_nmse_scale_matched,
+        "ssdu_scale_abs_folds": fold_scale_abs,
+        "ssdu_scale_phase_folds": fold_scale_phase,
     }
 
 
@@ -558,6 +844,8 @@ def compute_ssdu_kspace_nmse_grasp(
     baseline_weighting: str = "sqrt_dcomp",
     device: Optional[torch.device] = None,
     allow_single_spoke: bool = False,
+    debug_scale: bool = False,
+    scale_match: bool = False,
 ) -> Dict[str, object]:
     if device is None:
         device = kspace.device
@@ -586,8 +874,12 @@ def compute_ssdu_kspace_nmse_grasp(
 
     fold_nmse = []
     fold_nmse_per_frame = []
+    fold_nmse_unscaled = []
+    fold_nmse_scale_matched = []
+    fold_scale_abs = []
+    fold_scale_phase = []
 
-    for held_idx, used_idx in fold_indices:
+    for fold_idx, (held_idx, used_idx) in enumerate(fold_indices, start=1):
         y_used = kspace_flat[:, used_idx, :]
         y_held = kspace_flat[:, held_idx, :]
 
@@ -624,23 +916,39 @@ def compute_ssdu_kspace_nmse_grasp(
         else:
             weight = 1.0
 
-        diff = y_hat_held - y_held
-        if isinstance(weight, torch.Tensor):
-            num = torch.sum(torch.abs(weight * diff) ** 2)
-            den = torch.sum(torch.abs(weight * y_held) ** 2)
-            num_t = torch.sum(torch.abs(weight * diff) ** 2, dim=(0, 1))
-            den_t = torch.sum(torch.abs(weight * y_held) ** 2, dim=(0, 1))
-        else:
-            num = torch.sum(torch.abs(diff) ** 2)
-            den = torch.sum(torch.abs(y_held) ** 2)
-            num_t = torch.sum(torch.abs(diff) ** 2, dim=(0, 1))
-            den_t = torch.sum(torch.abs(y_held) ** 2, dim=(0, 1))
+        nmse_unscaled, nmse_unscaled_per_frame, _ = _compute_ssdu_nmse_terms(
+            y_hat_held, y_held, weight, scale_match=False
+        )
+        nmse_matched, nmse_matched_per_frame, scale = _compute_ssdu_nmse_terms(
+            y_hat_held, y_held, weight, scale_match=True
+        )
+        nmse_fold = nmse_matched if scale_match else nmse_unscaled
+        nmse_per_frame = (
+            nmse_matched_per_frame if scale_match else nmse_unscaled_per_frame
+        )
 
-        nmse_fold = (num / (den + 1e-8)).item()
-        nmse_per_frame = (num_t / (den_t + 1e-8)).detach().cpu()
+        if debug_scale:
+            y_hat_norm = torch.linalg.vector_norm(y_hat_held).item()
+            y_held_norm = torch.linalg.vector_norm(y_held).item()
+            norm_ratio = y_hat_norm / y_held_norm if y_held_norm > 0 else float("nan")
+            print(
+                "[SSDU GRASP scale] "
+                f"fold={fold_idx}/{len(fold_indices)} "
+                f"||y_hat_held||={y_hat_norm:.6e} "
+                f"||y_held||={y_held_norm:.6e} "
+                f"norm_ratio={norm_ratio:.6e} "
+                f"alpha_abs={torch.abs(scale).item():.6e} "
+                f"alpha_phase_rad={torch.angle(scale).item():.6e} "
+                f"nmse_unscaled={nmse_unscaled.item():.9f} "
+                f"nmse_scale_matched={nmse_matched.item():.9f}"
+            )
 
-        fold_nmse.append(nmse_fold)
-        fold_nmse_per_frame.append(nmse_per_frame)
+        fold_nmse.append(nmse_fold.item())
+        fold_nmse_per_frame.append(nmse_per_frame.detach().cpu())
+        fold_nmse_unscaled.append(nmse_unscaled.item())
+        fold_nmse_scale_matched.append(nmse_matched.item())
+        fold_scale_abs.append(torch.abs(scale).item())
+        fold_scale_phase.append(torch.angle(scale).item())
 
     if not fold_nmse:
         return {"ssdu_nmse_mean": float("nan"), "ssdu_nmse_folds": [], "ssdu_nmse_per_frame": None}
@@ -654,6 +962,12 @@ def compute_ssdu_kspace_nmse_grasp(
         "ssdu_nmse_mean": ssdu_nmse_mean,
         "ssdu_nmse_folds": fold_nmse,
         "ssdu_nmse_per_frame": ssdu_nmse_per_frame,
+        "ssdu_nmse_unscaled_mean": float(np.mean(fold_nmse_unscaled)),
+        "ssdu_nmse_unscaled_folds": fold_nmse_unscaled,
+        "ssdu_nmse_scale_matched_mean": float(np.mean(fold_nmse_scale_matched)),
+        "ssdu_nmse_scale_matched_folds": fold_nmse_scale_matched,
+        "ssdu_scale_abs_folds": fold_scale_abs,
+        "ssdu_scale_phase_folds": fold_scale_phase,
     }
 
 
@@ -1209,6 +1523,72 @@ def plot_temporal_curves(
     return region_corrs
 
 
+def plot_edge_enhancement_diagnostic(
+    recon_img: np.ndarray,
+    gt_img: np.ndarray,
+    grasp_img: np.ndarray,
+    recon_edge: np.ndarray,
+    gt_edge: np.ndarray,
+    grasp_edge: np.ndarray,
+    time_frame_index: int,
+    filename: str,
+    acceleration: float,
+    spokes_per_frame: int,
+    tumor_mask: np.ndarray | None = None,
+    recon_label: str | None = None,
+):
+    """Plot original-vs-edge-enhanced images for DRO, BRISKNet, and GRASP."""
+    contours = None
+    if tumor_mask is not None and np.any(tumor_mask):
+        contours = find_contours(tumor_mask, 0.5)
+
+    def _overlay_contours(ax):
+        if not contours:
+            return
+        for contour in contours:
+            ax.plot(contour[:, 1], contour[:, 0], linewidth=1.3, color="red")
+
+    if recon_label is None:
+        recon_label = r"$|\mathrm{BRISKNet}_{\mathrm{pred}}|$"
+
+    orig_vmin, orig_vmax = robust_window_multi(
+        [gt_img, recon_img, grasp_img], p_low=1, p_high=99.5
+    )
+    edge_vmin, edge_vmax = robust_window_multi(
+        [gt_edge, recon_edge, grasp_edge], p_low=1, p_high=99.5
+    )
+
+    fig, axes = plt.subplots(3, 2, figsize=(11, 14))
+    fig.suptitle(
+        f"Edge-Enhancement Diagnostic at Time Frame {time_frame_index} "
+        f"(AF={acceleration}, SPF={spokes_per_frame})",
+        fontsize=PLOT_FONT_SIZES["suptitle"] - 2,
+        y=0.985,
+    )
+
+    labels = [r"$|\mathrm{DRO}|$", recon_label, r"$|\mathrm{GRASP}|$"]
+    originals = [gt_img, recon_img, grasp_img]
+    edges = [gt_edge, recon_edge, grasp_edge]
+
+    for i, (label, orig_img, edge_img) in enumerate(zip(labels, originals, edges)):
+        ax_orig = axes[i, 0]
+        ax_edge = axes[i, 1]
+
+        ax_orig.imshow(orig_img, cmap="gray", vmin=orig_vmin, vmax=orig_vmax)
+        _overlay_contours(ax_orig)
+        ax_orig.set_title(f"{label} (Original)", fontsize=PLOT_FONT_SIZES["title"] - 4)
+        ax_orig.axis("off")
+
+        ax_edge.imshow(edge_img, cmap="magma", vmin=edge_vmin, vmax=edge_vmax)
+        _overlay_contours(ax_edge)
+        ax_edge.set_title(f"{label} (Edge)", fontsize=PLOT_FONT_SIZES["title"] - 4)
+        ax_edge.axis("off")
+
+    _safe_tight_layout(fig, rect=[0, 0.01, 1, 0.965], **PLOT_LAYOUT)
+    plt.savefig(filename, bbox_inches="tight", pad_inches=0.02)
+    plt.close(fig)
+
+
 def _resolve_baseline_frames(
     num_frames: int,
     time_points: Optional[np.ndarray] = None,
@@ -1244,6 +1624,115 @@ def _resolve_baseline_frames(
         return max(1, frames)
 
     raise ValueError(f"Unknown baseline_mode: {baseline_mode!r}")
+
+
+def _estimate_temporal_metric_arrival_from_curves(
+    curves: np.ndarray,
+    n_baseline: int,
+    arrival_k: float = 3.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+) -> tuple[Optional[int], Optional[int], np.ndarray]:
+    """Estimate arrival exactly as compute_temporal_metrics does for an ROI curve set."""
+    if curves is None or curves.size == 0:
+        return None, None, np.array([])
+
+    curves = np.asarray(curves)
+    if curves.ndim != 2 or curves.shape[1] == 0:
+        return None, None, np.array([])
+
+    num_frames = int(curves.shape[1])
+    n_baseline = max(1, min(int(n_baseline), num_frames))
+    mean_curve = curves.mean(axis=0)
+    smoothed = mean_curve.copy()
+    if num_frames >= 3:
+        smoothed[1:-1] = (mean_curve[:-2] + mean_curve[1:-1] + mean_curve[2:]) / 3.0
+
+    mu0 = smoothed[:n_baseline].mean()
+    sigma0 = smoothed[:n_baseline].std()
+    method = (arrival_method or "threshold").lower()
+    if method in ("fraction", "fraction_of_peak", "fop"):
+        peak0 = mean_curve.max()
+        frac = max(0.0, min(1.0, float(arrival_fraction)))
+        thr0 = mu0 + frac * (peak0 - mu0)
+    else:
+        thr0 = mu0 + arrival_k * sigma0
+    above0 = smoothed > thr0
+    t_arr_idx = int(np.argmax(above0)) if np.any(above0) else 0
+    t_peak_idx = int(np.argmax(mean_curve))
+    return t_arr_idx, t_peak_idx, mean_curve
+
+
+def _frame_indices_after_arrival(
+    time_points: np.ndarray,
+    arrival_idx: int,
+    window_seconds: float,
+) -> np.ndarray:
+    time_points = np.asarray(time_points, dtype=float)
+    if time_points.size == 0:
+        return np.array([], dtype=int)
+
+    arrival_idx = max(0, min(int(arrival_idx), time_points.size - 1))
+    window_seconds = max(float(window_seconds), 0.0)
+    arrival_time = float(time_points[arrival_idx])
+    if window_seconds == 0:
+        return np.array([arrival_idx], dtype=int)
+
+    indices = np.where(
+        (time_points >= arrival_time) & (time_points <= (arrival_time + window_seconds))
+    )[0]
+    if indices.size == 0:
+        indices = np.array([arrival_idx], dtype=int)
+    return indices.astype(int, copy=False)
+
+
+def _resolve_metric_arrival_window_indices(
+    gt_mag_np: np.ndarray,
+    tumor_mask: np.ndarray,
+    time_points: np.ndarray,
+    baseline_mode: str = "fraction",
+    baseline_seconds: float = 20.0,
+    baseline_fraction: float = 0.1,
+    baseline_min_frames: int = 4,
+    baseline_max_frames: Optional[int] = 10,
+    arrival_k: float = 3.0,
+    arrival_method: str = "threshold",
+    arrival_fraction: float = 0.1,
+    window_seconds: float = 15.0,
+) -> np.ndarray:
+    if tumor_mask is None or not np.any(tumor_mask):
+        return np.array([], dtype=int)
+    if gt_mag_np is None or gt_mag_np.ndim != 3:
+        return np.array([], dtype=int)
+
+    mask = np.asarray(tumor_mask).squeeze().astype(bool)
+    if mask.shape != gt_mag_np.shape[:2]:
+        return np.array([], dtype=int)
+
+    num_frames = int(gt_mag_np.shape[2])
+    n_baseline = _resolve_baseline_frames(
+        num_frames=num_frames,
+        time_points=time_points,
+        baseline_mode=baseline_mode,
+        baseline_seconds=baseline_seconds,
+        baseline_fraction=baseline_fraction,
+        baseline_min_frames=baseline_min_frames,
+        baseline_max_frames=baseline_max_frames,
+    )
+    gt_flat = gt_mag_np[mask].reshape(-1, num_frames)
+    if gt_flat.size == 0:
+        return np.array([], dtype=int)
+
+    arrival_idx, _, _ = _estimate_temporal_metric_arrival_from_curves(
+        gt_flat,
+        n_baseline=n_baseline,
+        arrival_k=arrival_k,
+        arrival_method=arrival_method,
+        arrival_fraction=arrival_fraction,
+    )
+    if arrival_idx is None:
+        return np.array([], dtype=int)
+    return _frame_indices_after_arrival(time_points, arrival_idx, window_seconds)
 
 
 def _arrival_index_from_mag_stack(
@@ -1527,6 +2016,8 @@ def compute_temporal_metrics(
     early_seconds: float = 35.0,
     early_min_frames: int = 4,
     early_max_frames: Optional[int] = 8,
+    eval_early_15s: bool = False,
+    early_15s_seconds: float = 15.0,
 ) -> Dict[str, float]:
     if tumor_mask is None or not tumor_mask.any():
         return {}
@@ -1580,6 +2071,8 @@ def compute_temporal_metrics(
         "peak_err",
         "ttpeak_err_sec",
     ]
+    if eval_early_15s:
+        metric_names.extend(["early15s_corr", "early15s_mae"])
     if not np.any(valid_mask):
         return {f"{subset}_{metric}": np.nan for subset in ("all", "top10", "top20") for metric in metric_names}
 
@@ -1598,23 +2091,15 @@ def compute_temporal_metrics(
         "top20": subset_indices(0.20),
     }
 
-    mean_curve = gt_flat.mean(axis=0)
-    smoothed = mean_curve.copy()
-    if num_frames >= 3:
-        smoothed[1:-1] = (mean_curve[:-2] + mean_curve[1:-1] + mean_curve[2:]) / 3.0
-
-    mu0 = smoothed[:n_baseline].mean()
-    sigma0 = smoothed[:n_baseline].std()
-    method = (arrival_method or "threshold").lower()
-    if method in ("fraction", "fraction_of_peak", "fop"):
-        peak0 = mean_curve.max()
-        frac = max(0.0, min(1.0, float(arrival_fraction)))
-        thr0 = mu0 + frac * (peak0 - mu0)
-    else:
-        thr0 = mu0 + arrival_k * sigma0
-    above0 = smoothed > thr0
-    t_arr_idx = int(np.argmax(above0)) if np.any(above0) else 0
-    t_peak_idx = int(np.argmax(mean_curve))
+    t_arr_idx, t_peak_idx, mean_curve = _estimate_temporal_metric_arrival_from_curves(
+        gt_flat,
+        n_baseline=n_baseline,
+        arrival_k=arrival_k,
+        arrival_method=arrival_method,
+        arrival_fraction=arrival_fraction,
+    )
+    if t_arr_idx is None or t_peak_idx is None:
+        return {f"{subset}_{metric}": np.nan for subset in ("all", "top10", "top20") for metric in metric_names}
 
     early_start = t_arr_idx
     early_end = min(t_arr_idx + n_early, t_peak_idx)
@@ -1623,6 +2108,11 @@ def compute_temporal_metrics(
     if (early_end - early_start + 1) < 3 and num_frames >= 3:
         early_end = min(early_start + 2, num_frames - 1)
     early_slice = slice(early_start, early_end + 1)
+    early15_indices = (
+        _frame_indices_after_arrival(time_points, t_arr_idx, early_15s_seconds)
+        if eval_early_15s
+        else np.array([], dtype=int)
+    )
 
     def mean_pearson(a: np.ndarray, b: np.ndarray) -> float:
         a_mean = a.mean(axis=1, keepdims=True)
@@ -1632,7 +2122,8 @@ def compute_temporal_metrics(
         num = np.sum(a_diff * b_diff, axis=1)
         den = np.sqrt(np.sum(a_diff ** 2, axis=1) * np.sum(b_diff ** 2, axis=1))
         corr = np.divide(num, den, out=np.full_like(num, np.nan, dtype=np.float64), where=den > 0)
-        return float(np.nanmean(corr)) if corr.size else np.nan
+        finite = np.isfinite(corr)
+        return float(np.mean(corr[finite])) if np.any(finite) else np.nan
 
     def arrival_indices(curves: np.ndarray, baseline_mu: np.ndarray, baseline_sigma: np.ndarray) -> np.ndarray:
         method_local = (arrival_method or "threshold").lower()
@@ -1683,6 +2174,17 @@ def compute_temporal_metrics(
         metrics[f"{subset_name}_curve_mae"] = float(np.mean(np.abs(recon_norm - gt_norm)))
         metrics[f"{subset_name}_early_corr"] = mean_pearson(recon_norm[:, early_slice], gt_norm[:, early_slice])
         metrics[f"{subset_name}_early_mae"] = float(np.mean(np.abs(recon_norm[:, early_slice] - gt_norm[:, early_slice])))
+        if eval_early_15s:
+            if early15_indices.size:
+                metrics[f"{subset_name}_early15s_corr"] = mean_pearson(
+                    recon_norm[:, early15_indices], gt_norm[:, early15_indices]
+                )
+                metrics[f"{subset_name}_early15s_mae"] = float(
+                    np.mean(np.abs(recon_norm[:, early15_indices] - gt_norm[:, early15_indices]))
+                )
+            else:
+                metrics[f"{subset_name}_early15s_corr"] = np.nan
+                metrics[f"{subset_name}_early15s_mae"] = np.nan
 
         gt_baseline_mu = gt_curves[:, :n_baseline].mean(axis=1)
         gt_baseline_sigma = gt_curves[:, :n_baseline].std(axis=1)
@@ -1732,6 +2234,88 @@ def compute_temporal_metrics(
         recon_peak_time = time_points[recon_peak_idx]
         metrics[f"{subset_name}_ttpeak_err_sec"] = float(np.mean(np.abs(recon_peak_time - gt_peak_time)))
 
+    return metrics
+
+
+def calc_peak_enhancement_regression_slopes(
+    gt_mag_np: np.ndarray,
+    recon_mag_np: np.ndarray,
+    tumor_mask: np.ndarray,
+    time_points: np.ndarray,
+    baseline_mode: str = "fraction",
+    baseline_seconds: float = 20.0,
+    baseline_fraction: float = 0.1,
+    baseline_min_frames: int = 4,
+    baseline_max_frames: Optional[int] = 10,
+) -> Dict[str, float]:
+    """Origin-constrained slopes of reconstructed versus reference peak enhancement."""
+    metric_keys = [f"{subset}_peak_enh_slope" for subset in ("all", "top10", "top20")]
+    if tumor_mask is None or not np.any(tumor_mask):
+        return {key: np.nan for key in metric_keys}
+
+    gt_stack = np.asarray(gt_mag_np)
+    recon_stack = np.asarray(recon_mag_np)
+    mask = np.asarray(tumor_mask).squeeze().astype(bool)
+    if (
+        gt_stack.ndim != 3
+        or recon_stack.shape != gt_stack.shape
+        or mask.shape != gt_stack.shape[:2]
+    ):
+        return {key: np.nan for key in metric_keys}
+
+    num_frames = int(gt_stack.shape[2])
+    n_baseline = _resolve_baseline_frames(
+        num_frames=num_frames,
+        time_points=time_points,
+        baseline_mode=baseline_mode,
+        baseline_seconds=baseline_seconds,
+        baseline_fraction=baseline_fraction,
+        baseline_min_frames=baseline_min_frames,
+        baseline_max_frames=baseline_max_frames,
+    )
+    gt_curves = gt_stack[mask].reshape(-1, num_frames)
+    recon_curves = recon_stack[mask].reshape(-1, num_frames)
+    if gt_curves.size == 0:
+        return {key: np.nan for key in metric_keys}
+
+    gt_enhancement = gt_curves - np.nanmean(
+        gt_curves[:, :n_baseline], axis=1, keepdims=True
+    )
+    recon_enhancement = recon_curves - np.nanmean(
+        recon_curves[:, :n_baseline], axis=1, keepdims=True
+    )
+    gt_peak_enhancement = np.nanmax(gt_enhancement, axis=1)
+    recon_peak_enhancement = np.nanmax(recon_enhancement, axis=1)
+
+    valid = (
+        np.isfinite(gt_peak_enhancement)
+        & np.isfinite(recon_peak_enhancement)
+        & (gt_peak_enhancement > 0)
+    )
+    if not np.any(valid):
+        return {key: np.nan for key in metric_keys}
+
+    valid_indices = np.where(valid)[0]
+    sorted_indices = valid_indices[
+        np.argsort(gt_peak_enhancement[valid_indices])[::-1]
+    ]
+
+    def subset_indices(frac: float) -> np.ndarray:
+        count = max(1, int(np.ceil(frac * sorted_indices.size)))
+        return sorted_indices[:count]
+
+    subsets = {
+        "all": sorted_indices,
+        "top10": subset_indices(0.10),
+        "top20": subset_indices(0.20),
+    }
+    metrics = {}
+    for subset_name, idx in subsets.items():
+        reference = gt_peak_enhancement[idx].astype(np.float64, copy=False)
+        prediction = recon_peak_enhancement[idx].astype(np.float64, copy=False)
+        denominator = float(np.dot(reference, reference))
+        slope = float(np.dot(reference, prediction) / denominator) if denominator > 0 else np.nan
+        metrics[f"{subset_name}_peak_enh_slope"] = slope
     return metrics
 
 
@@ -1826,6 +2410,11 @@ def eval_grasp(
     dro_eval=True,
     report_bestfit_dc: bool = False,
     return_aux: bool = False,
+    use_subtraction_images: bool = False,
+    subtraction_baseline_seconds: float = 20.0,
+    total_scan_seconds: float = 150.0,
+    compare_kspace_regions: bool = False,
+    kspace_rho: float = 0.57,
 ):
 
     # ==========================================================
@@ -1843,6 +2432,14 @@ def eval_grasp(
     dc_mse_grasp, dc_mae_grasp = calc_dc(grasp_kspace, kspace, device)
     dc_psnr_grasp = calc_dc_psnr(kspace, dc_mse_grasp, device)
     aux = {}
+    if compare_kspace_regions:
+        region_mse = calc_kspace_region_mse(grasp_kspace, kspace, physics.ktraj, rho=kspace_rho)
+        aux.update(
+            {
+                "grasp_dc_inner_kspace_mse": region_mse["inner"],
+                "grasp_dc_outer_kspace_mse": region_mse["outer"],
+            }
+        )
     dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(grasp_kspace, kspace, device)
     if dc_mse_bestfit is not None and dc_scale is not None:
         aux.update(
@@ -1880,9 +2477,19 @@ def eval_grasp(
 
         # calculate data range from ground truth
         # data_range = gt_mag.max() - gt_mag.min()
-        min_val = torch.min(gt_mag).item()
-        max_val = torch.max(gt_mag).item()
-        data_range = (min_val, max_val)
+        if use_subtraction_images:
+            n_sub_baseline = _subtraction_baseline_frames(
+                gt_mag.shape[2],
+                total_scan_seconds=total_scan_seconds,
+                baseline_seconds=subtraction_baseline_seconds,
+            )
+            gt_mag = _baseline_subtract_torch_stack(gt_mag, n_sub_baseline, time_dim=2)
+            grasp_mag = _baseline_subtract_torch_stack(grasp_mag, n_sub_baseline, time_dim=2)
+            data_range = _metric_data_range(gt_mag)
+        else:
+            min_val = torch.min(gt_mag).item()
+            max_val = torch.max(gt_mag).item()
+            data_range = (min_val, max_val)
 
         ssim_grasp, psnr_grasp, mse_grasp, lpips_grasp = calc_image_metrics(grasp_mag.contiguous(), gt_mag.contiguous(), data_range, device)
 
@@ -1908,6 +2515,11 @@ def eval_zf(
     zf_complex_override: torch.Tensor | None = None,
     report_bestfit_dc: bool = False,
     return_aux: bool = False,
+    use_subtraction_images: bool = False,
+    subtraction_baseline_seconds: float = 20.0,
+    total_scan_seconds: float = 150.0,
+    compare_kspace_regions: bool = False,
+    kspace_rho: float = 0.57,
 ):
     """Adjoint (density-compensated) baseline + metrics against DRO ground truth."""
     kspace = kspace.squeeze()
@@ -1918,6 +2530,14 @@ def eval_zf(
 
     zf_kspace = physics(False, zf_complex.to(csmap.dtype), csmap)
     dc_mse_zf, dc_mae_zf = calc_dc(zf_kspace, kspace, device)
+    if compare_kspace_regions:
+        region_mse = calc_kspace_region_mse(zf_kspace, kspace, physics.ktraj, rho=kspace_rho)
+        aux.update(
+            {
+                "zf_dc_inner_kspace_mse": region_mse["inner"],
+                "zf_dc_outer_kspace_mse": region_mse["outer"],
+            }
+        )
     dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(zf_kspace, kspace, device)
     if dc_mse_bestfit is not None and dc_scale is not None:
         aux.update(
@@ -1953,9 +2573,19 @@ def eval_zf(
     zf_mag = zf_mag.permute(0, 3, 1, 2).unsqueeze(1)  # (B,1,T,H,W)
     gt_mag = gt_mag.unsqueeze(1)  # (B,1,T,H,W)
 
-    min_val = torch.min(gt_mag).item()
-    max_val = torch.max(gt_mag).item()
-    data_range = (min_val, max_val)
+    if use_subtraction_images:
+        n_sub_baseline = _subtraction_baseline_frames(
+            gt_mag.shape[2],
+            total_scan_seconds=total_scan_seconds,
+            baseline_seconds=subtraction_baseline_seconds,
+        )
+        gt_mag = _baseline_subtract_torch_stack(gt_mag, n_sub_baseline, time_dim=2)
+        zf_mag = _baseline_subtract_torch_stack(zf_mag, n_sub_baseline, time_dim=2)
+        data_range = _metric_data_range(gt_mag)
+    else:
+        min_val = torch.min(gt_mag).item()
+        max_val = torch.max(gt_mag).item()
+        data_range = (min_val, max_val)
     ssim_zf, psnr_zf, mse_zf, lpips_zf = calc_image_metrics(zf_mag.contiguous(), gt_mag.contiguous(), data_range, device)
 
     # Foreground-masked metrics (same union mask as DRO tissues if available).
@@ -2050,6 +2680,17 @@ def eval_sample(
     arrival_total_seconds: float = 150.0,
     recon_label: str | None = None,
     plot_malignant_curve: bool = False,
+    use_edge_enhancement: bool = False,
+    edge_sigma: float = 1.0,
+    edge_gradient_operator: str = "sobel",
+    use_subtraction_images: bool = False,
+    subtraction_baseline_seconds: float = 20.0,
+    eval_early_15s: bool = False,
+    compare_kspace_regions: bool = False,
+    kspace_rho: float = 0.57,
+    compute_streak_metric: bool = False,
+    streak_mask_margin_pixels: int = 5,
+    compute_peak_enhancement_slope: bool = False,
 ):
 
     acceleration = round(acceleration.item(), 1)
@@ -2068,11 +2709,21 @@ def eval_sample(
     recon_kspace = physics(False, x_recon_complex, csmap)
 
 
+    extra_metrics = {}
+
     # Compute MSE
     dc_mse, dc_mae = calc_dc(recon_kspace, kspace, device)
     dc_psnr = calc_dc_psnr(kspace, dc_mse, device)
 
-    extra_metrics = {}
+    if compare_kspace_regions:
+        region_mse = calc_kspace_region_mse(recon_kspace, kspace, physics.ktraj, rho=kspace_rho)
+        extra_metrics.update(
+            {
+                "dl_dc_inner_kspace_mse": region_mse["inner"],
+                "dl_dc_outer_kspace_mse": region_mse["outer"],
+            }
+        )
+
     dc_mse_bestfit, dc_mae_bestfit, dc_scale = calc_dc_bestfit(recon_kspace, kspace, device)
     if dc_mse_bestfit is not None and dc_scale is not None:
         extra_metrics.update(
@@ -2156,9 +2807,19 @@ def eval_sample(
 
     # calculate data range from ground truth
     # data_range = gt_mag.max() - gt_mag.min()
-    min_val = torch.min(gt_mag).item()
-    max_val = torch.max(gt_mag).item()
-    data_range = (min_val, max_val)
+    if use_subtraction_images:
+        n_sub_baseline = _subtraction_baseline_frames(
+            gt_mag.shape[2],
+            total_scan_seconds=total_scan_seconds,
+            baseline_seconds=subtraction_baseline_seconds,
+        )
+        gt_mag = _baseline_subtract_torch_stack(gt_mag, n_sub_baseline, time_dim=2)
+        recon_mag_scaled = _baseline_subtract_torch_stack(recon_mag_scaled, n_sub_baseline, time_dim=2)
+        data_range = _metric_data_range(gt_mag)
+    else:
+        min_val = torch.min(gt_mag).item()
+        max_val = torch.max(gt_mag).item()
+        data_range = (min_val, max_val)
     # data_range = max_val - min_val
 
 
@@ -2190,6 +2851,18 @@ def eval_sample(
 
         recon_mag_np = np.abs(x_recon_complex_np)
         gt_mag_np = np.abs(gt_complex_np)
+        spatial_recon_mag_np = recon_mag_np
+        spatial_gt_mag_np = gt_mag_np
+        spatial_grasp_mag_np = grasp_mag_np
+        if use_subtraction_images:
+            n_sub_baseline = _subtraction_baseline_frames(
+                gt_mag_np.shape[2],
+                total_scan_seconds=total_scan_seconds,
+                baseline_seconds=subtraction_baseline_seconds,
+            )
+            spatial_gt_mag_np = _baseline_subtract_np_stack(gt_mag_np, n_sub_baseline)
+            spatial_recon_mag_np = _baseline_subtract_np_stack(recon_mag_np, n_sub_baseline)
+            spatial_grasp_mag_np = _baseline_subtract_np_stack(grasp_mag_np, n_sub_baseline)
         
         masks_np = {key: val.cpu().numpy().squeeze().astype(bool) for key, val in mask.items()}
         foreground_mask = None
@@ -2248,18 +2921,121 @@ def eval_sample(
         recon_corr = None
         grasp_corr = None
         temporal_metrics = {}
+        streak_metrics = {}
+        if compute_streak_metric:
+            streak_foreground_mask, streak_foreground_fraction = (
+                _infer_foreground_mask_from_stack(gt_mag_np)
+            )
+            if streak_foreground_mask is None:
+                streak_foreground_mask = foreground_mask
+                streak_foreground_fraction = foreground_fraction
+            if streak_foreground_mask is not None:
+                streak_metrics.update(
+                    {
+                        "dl_streak_bfer": calc_background_to_foreground_energy_ratio(
+                            recon_mag_np,
+                            streak_foreground_mask,
+                            margin_pixels=streak_mask_margin_pixels,
+                        ),
+                        "grasp_streak_bfer": calc_background_to_foreground_energy_ratio(
+                            grasp_mag_np,
+                            streak_foreground_mask,
+                            margin_pixels=streak_mask_margin_pixels,
+                        ),
+                        "streak_fg_fraction": streak_foreground_fraction,
+                    }
+                )
         gt_frames = int(gt_mag_np.shape[2])
         if num_frames != gt_frames:
             print(
                 f"Skipping temporal metrics/plots: recon frames ({num_frames}) "
                 f"!= GT frames ({gt_frames})."
             )
+            if extra_metrics:
+                temporal_metrics.update(extra_metrics)
+            if streak_metrics:
+                temporal_metrics.update(streak_metrics)
             return ssim, psnr, mse, lpips, dc_mse, dc_mae, recon_corr, grasp_corr, temporal_metrics
+
+        gt_metrics_np = gt_mag_np
+        recon_metrics_np = recon_mag_np
+        grasp_metrics_np = grasp_mag_np
+        edge_metrics_ready = False
+        if use_edge_enhancement:
+            try:
+                gt_metrics_np = _edge_enhance_temporal_stack(
+                    gt_mag_np, sigma=edge_sigma, gradient_operator=edge_gradient_operator
+                )
+                recon_metrics_np = _edge_enhance_temporal_stack(
+                    recon_mag_np, sigma=edge_sigma, gradient_operator=edge_gradient_operator
+                )
+                grasp_metrics_np = _edge_enhance_temporal_stack(
+                    grasp_mag_np, sigma=edge_sigma, gradient_operator=edge_gradient_operator
+                )
+                edge_metrics_ready = True
+            except Exception as exc:
+                print(
+                    "Warning: edge enhancement failed for temporal metrics; "
+                    f"falling back to magnitude curves. Error: {exc}"
+                )
+                gt_metrics_np = gt_mag_np
+                recon_metrics_np = recon_mag_np
+                grasp_metrics_np = grasp_mag_np
+
+        early15_spatial_metrics = {}
+        if eval_early_15s:
+            arrival_mask = None
+            arrival_mask_keys = ["malignant", "benign"]
+            if roi_source not in arrival_mask_keys:
+                arrival_mask_keys.append(roi_source)
+            for key in arrival_mask_keys:
+                if key and key in masks_np and masks_np[key] is not None and masks_np[key].any():
+                    arrival_mask = masks_np[key]
+                    break
+
+            early15_frame_indices = _resolve_metric_arrival_window_indices(
+                gt_metrics_np,
+                arrival_mask,
+                aif_time_points,
+                baseline_mode=baseline_mode,
+                baseline_seconds=baseline_seconds,
+                baseline_fraction=baseline_fraction,
+                baseline_min_frames=baseline_min_frames,
+                baseline_max_frames=baseline_max_frames,
+                arrival_k=arrival_k,
+                arrival_method=arrival_method,
+                arrival_fraction=arrival_fraction,
+                window_seconds=15.0,
+            )
+            dl_early15 = _calc_spatial_metrics_for_frame_indices(
+                spatial_recon_mag_np, spatial_gt_mag_np, early15_frame_indices, device
+            )
+            grasp_early15 = _calc_spatial_metrics_for_frame_indices(
+                spatial_grasp_mag_np, spatial_gt_mag_np, early15_frame_indices, device
+            )
+            if dl_early15 is not None:
+                early15_spatial_metrics.update(
+                    {
+                        "early15s_ssim": dl_early15[0],
+                        "early15s_psnr": dl_early15[1],
+                        "early15s_mse": dl_early15[2],
+                        "early15s_lpips": dl_early15[3],
+                    }
+                )
+            if grasp_early15 is not None:
+                early15_spatial_metrics.update(
+                    {
+                        "grasp_early15s_ssim": grasp_early15[0],
+                        "grasp_early15s_psnr": grasp_early15[1],
+                        "grasp_early15s_mse": grasp_early15[2],
+                        "grasp_early15s_lpips": grasp_early15[3],
+                    }
+                )
 
         if 'malignant' in masks_np and masks_np['malignant'].any():
             dl_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                recon_mag_np,
+                gt_metrics_np,
+                recon_metrics_np,
                 masks_np['malignant'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2273,10 +3049,12 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
             grasp_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                grasp_mag_np,
+                gt_metrics_np,
+                grasp_metrics_np,
                 masks_np['malignant'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2290,13 +3068,42 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
+            if compute_peak_enhancement_slope:
+                dl_metrics.update(
+                    calc_peak_enhancement_regression_slopes(
+                        gt_mag_np,
+                        recon_mag_np,
+                        masks_np["malignant"],
+                        aif_time_points,
+                        baseline_mode=baseline_mode,
+                        baseline_seconds=baseline_seconds,
+                        baseline_fraction=baseline_fraction,
+                        baseline_min_frames=baseline_min_frames,
+                        baseline_max_frames=baseline_max_frames,
+                    )
+                )
+                grasp_metrics.update(
+                    calc_peak_enhancement_regression_slopes(
+                        gt_mag_np,
+                        grasp_mag_np,
+                        masks_np["malignant"],
+                        aif_time_points,
+                        baseline_mode=baseline_mode,
+                        baseline_seconds=baseline_seconds,
+                        baseline_fraction=baseline_fraction,
+                        baseline_min_frames=baseline_min_frames,
+                        baseline_max_frames=baseline_max_frames,
+                    )
+                )
             temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
             temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
         if 'benign' in masks_np and masks_np.get('benign', None) is not None and masks_np['benign'].any():
             dl_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                recon_mag_np,
+                gt_metrics_np,
+                recon_metrics_np,
                 masks_np['benign'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2310,10 +3117,12 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
             grasp_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                grasp_mag_np,
+                gt_metrics_np,
+                grasp_metrics_np,
                 masks_np['benign'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2327,14 +3136,48 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
+            if compute_peak_enhancement_slope:
+                dl_metrics.update(
+                    calc_peak_enhancement_regression_slopes(
+                        gt_mag_np,
+                        recon_mag_np,
+                        masks_np["benign"],
+                        aif_time_points,
+                        baseline_mode=baseline_mode,
+                        baseline_seconds=baseline_seconds,
+                        baseline_fraction=baseline_fraction,
+                        baseline_min_frames=baseline_min_frames,
+                        baseline_max_frames=baseline_max_frames,
+                    )
+                )
+                grasp_metrics.update(
+                    calc_peak_enhancement_regression_slopes(
+                        gt_mag_np,
+                        grasp_mag_np,
+                        masks_np["benign"],
+                        aif_time_points,
+                        baseline_mode=baseline_mode,
+                        baseline_seconds=baseline_seconds,
+                        baseline_fraction=baseline_fraction,
+                        baseline_min_frames=baseline_min_frames,
+                        baseline_max_frames=baseline_max_frames,
+                    )
+                )
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
 
+        if early15_spatial_metrics:
+            temporal_metrics.update(early15_spatial_metrics)
+        if streak_metrics:
+            temporal_metrics.update(streak_metrics)
+
         if foreground_mask is not None:
-            data_range = float(gt_mag_np.max() - gt_mag_np.min())
-            dl_mse_fg = float(np.mean((recon_mag_np - gt_mag_np)[foreground_mask] ** 2))
-            grasp_mse_fg = float(np.mean((grasp_mag_np - gt_mag_np)[foreground_mask] ** 2))
+            data_range = float(spatial_gt_mag_np.max() - spatial_gt_mag_np.min())
+            dl_mse_fg = float(np.mean((spatial_recon_mag_np - spatial_gt_mag_np)[foreground_mask] ** 2))
+            grasp_mse_fg = float(np.mean((spatial_grasp_mag_np - spatial_gt_mag_np)[foreground_mask] ** 2))
             dl_psnr_fg = None
             grasp_psnr_fg = None
             if data_range > 0 and dl_mse_fg > 0:
@@ -2385,6 +3228,23 @@ def eval_sample(
                 tumor_mask=tumor_mask_for_plot,
                 recon_label=recon_label,
             )
+            if use_edge_enhancement and edge_metrics_ready:
+                plot_edge_enhancement_diagnostic(
+                    recon_img=recon_mag_np[:, :, peak_frame],
+                    gt_img=gt_mag_np[:, :, peak_frame],
+                    grasp_img=grasp_mag_np[:, :, peak_frame],
+                    recon_edge=recon_metrics_np[:, :, peak_frame],
+                    gt_edge=gt_metrics_np[:, :, peak_frame],
+                    grasp_edge=grasp_metrics_np[:, :, peak_frame],
+                    time_frame_index=peak_frame,
+                    filename=os.path.join(
+                        output_dir, f"edge_enhancement_{plot_label}{suffix}.png"
+                    ),
+                    acceleration=acceleration,
+                    spokes_per_frame=spokes_per_frame,
+                    tumor_mask=tumor_mask_for_plot,
+                    recon_label=recon_label,
+                )
 
             # --- Plot Temporal Curves for Key Regions ---
             # This is the most important plot for debugging your PK results!
@@ -2553,11 +3413,38 @@ def eval_sample(
                 f"Skipping temporal metrics/plots: raw frames ({num_frames}) "
                 f"!= GT frames ({gt_frames})."
             )
+            if extra_metrics:
+                temporal_metrics.update(extra_metrics)
             return dc_mse, dc_mae, dc_psnr, temporal_metrics
+
+        gt_metrics_np = gt_mag_np
+        recon_metrics_np = recon_mag_np
+        grasp_metrics_np = grasp_mag_np
+        edge_metrics_ready = False
+        if use_edge_enhancement:
+            try:
+                gt_metrics_np = _edge_enhance_temporal_stack(
+                    gt_mag_np, sigma=edge_sigma, gradient_operator=edge_gradient_operator
+                )
+                recon_metrics_np = _edge_enhance_temporal_stack(
+                    recon_mag_np, sigma=edge_sigma, gradient_operator=edge_gradient_operator
+                )
+                grasp_metrics_np = _edge_enhance_temporal_stack(
+                    grasp_mag_np, sigma=edge_sigma, gradient_operator=edge_gradient_operator
+                )
+                edge_metrics_ready = True
+            except Exception as exc:
+                print(
+                    "Warning: edge enhancement failed for raw temporal metrics; "
+                    f"falling back to magnitude curves. Error: {exc}"
+                )
+                gt_metrics_np = gt_mag_np
+                recon_metrics_np = recon_mag_np
+                grasp_metrics_np = grasp_mag_np
         if 'malignant' in masks_np and masks_np['malignant'].any():
             dl_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                recon_mag_np,
+                gt_metrics_np,
+                recon_metrics_np,
                 masks_np['malignant'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2571,10 +3458,12 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
             grasp_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                grasp_mag_np,
+                gt_metrics_np,
+                grasp_metrics_np,
                 masks_np['malignant'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2588,13 +3477,15 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
             temporal_metrics = {f"dl_{key}": val for key, val in dl_metrics.items()}
             temporal_metrics.update({f"grasp_{key}": val for key, val in grasp_metrics.items()})
         if 'benign' in masks_np and masks_np.get('benign', None) is not None and masks_np['benign'].any():
             dl_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                recon_mag_np,
+                gt_metrics_np,
+                recon_metrics_np,
                 masks_np['benign'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2608,10 +3499,12 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
             grasp_metrics = compute_temporal_metrics(
-                gt_mag_np,
-                grasp_mag_np,
+                gt_metrics_np,
+                grasp_metrics_np,
                 masks_np['benign'],
                 aif_time_points,
                 baseline_mode=baseline_mode,
@@ -2625,9 +3518,14 @@ def eval_sample(
                 early_seconds=early_seconds,
                 early_min_frames=early_min_frames,
                 early_max_frames=early_max_frames,
+                eval_early_15s=eval_early_15s,
+                early_15s_seconds=15.0,
             )
             temporal_metrics.update({f"benign_dl_{key}": val for key, val in dl_metrics.items()})
             temporal_metrics.update({f"benign_grasp_{key}": val for key, val in grasp_metrics.items()})
+
+        if extra_metrics:
+            temporal_metrics.update(extra_metrics)
 
         primary_region = None
         if "malignant" in masks_np and masks_np["malignant"].any():
@@ -2661,6 +3559,23 @@ def eval_sample(
                 tumor_mask=tumor_mask_for_plot,
                 recon_label=recon_label,
             )
+            if use_edge_enhancement and edge_metrics_ready:
+                plot_edge_enhancement_diagnostic(
+                    recon_img=recon_mag_np[:, :, peak_frame],
+                    gt_img=gt_mag_np[:, :, peak_frame],
+                    grasp_img=grasp_mag_np[:, :, peak_frame],
+                    recon_edge=recon_metrics_np[:, :, peak_frame],
+                    gt_edge=gt_metrics_np[:, :, peak_frame],
+                    grasp_edge=grasp_metrics_np[:, :, peak_frame],
+                    time_frame_index=peak_frame,
+                    filename=os.path.join(
+                        output_dir, f"non_dro_edge_enhancement_{plot_label}{suffix}.png"
+                    ),
+                    acceleration=acceleration,
+                    spokes_per_frame=spokes_per_frame,
+                    tumor_mask=tumor_mask_for_plot,
+                    recon_label=recon_label,
+                )
 
             # --- Plot Temporal Curves for Key Regions ---
             # This is the most important plot for debugging your PK results!

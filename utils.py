@@ -893,6 +893,7 @@ def load_checkpoint(model, optimizer, filename):
         "val_mc_losses": ckpt.get("val_mc_losses", []),
         "val_ei_losses": ckpt.get("val_ei_losses", []),
         "val_adj_losses": ckpt.get("val_adj_losses", []),
+        "val_raw_ssdu_losses": ckpt.get("val_raw_ssdu_losses", []),
     }
 
     eval_curves = {

@@ -1,0 +1,9 @@
+mode	metric	brisknet_mean	grasp_mean	brisknet_stddev	grasp_stddev
+magnitude	lpips	0.053	0.032	0.014	0.010
+subtraction	lpips	0.135	0.083	0.052	0.037
+magnitude	mse	0.748	0.671	0.398	0.375
+subtraction	mse	0.044	0.034	0.023	0.021
+magnitude	psnr	30.166	30.692	2.493	2.596
+subtraction	psnr	37.054	38.384	2.214	2.373
+magnitude	ssim	0.918	0.928	0.021	0.024
+subtraction	ssim	0.922	0.964	0.035	0.014

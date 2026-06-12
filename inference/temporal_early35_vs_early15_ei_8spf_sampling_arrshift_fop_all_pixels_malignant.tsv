@@ -1,0 +1,5 @@
+window	subset	metric	brisknet_mean	grasp_mean	brisknet_stddev	grasp_stddev
+early35s	all_pixels_malignant	corr	0.987	0.978	0.010	0.013
+early35s	all_pixels_malignant	mae	1.599	1.348	0.794	0.715
+early15s	all_pixels_malignant	corr	0.995	0.966	0.005	0.024
+early15s	all_pixels_malignant	mae	1.190	1.004	0.631	0.524

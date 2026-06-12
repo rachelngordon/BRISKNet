@@ -43,6 +43,90 @@ def _build_ssdu_fold_indices(
     return fold_indices
 
 
+def _spokes_to_sample_indices(spokes: torch.Tensor, samples_per_spoke: int) -> torch.Tensor:
+    sample_offsets = torch.arange(samples_per_spoke, device=spokes.device)
+    return (spokes[:, None] * samples_per_spoke + sample_offsets[None, :]).reshape(-1)
+
+
+def _build_evenly_spaced_spokes(
+    spokes_per_frame: int,
+    count: int,
+    offset: int,
+    device: torch.device,
+) -> torch.Tensor:
+    if count <= 0:
+        return torch.empty(0, dtype=torch.long, device=device)
+    if count >= spokes_per_frame:
+        return torch.arange(spokes_per_frame, dtype=torch.long, device=device)
+
+    base = torch.div(
+        torch.arange(count, dtype=torch.long, device=device) * int(spokes_per_frame),
+        int(count),
+        rounding_mode="floor",
+    )
+    spokes = torch.remainder(base + int(offset), int(spokes_per_frame))
+    return torch.sort(spokes).values
+
+
+def _build_ssdu_fraction_indices(
+    spokes_per_frame: int,
+    samples_per_spoke: int,
+    holdout_fraction: float,
+    selection: str,
+    iteration_index: Optional[int],
+    device: torch.device,
+    allow_single_spoke: bool,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    fraction = float(holdout_fraction)
+    if not 0.0 < fraction < 1.0:
+        raise ValueError("SSDU holdout_fraction must be in the open interval (0, 1).")
+
+    total_spokes = int(spokes_per_frame)
+    if total_spokes < 2:
+        raise ValueError("SSDU holdout_fraction requires at least 2 spokes per frame.")
+
+    held_spoke_count = int(round(total_spokes * fraction))
+    held_spoke_count = min(max(held_spoke_count, 1), total_spokes - 1)
+    used_spoke_count = total_spokes - held_spoke_count
+    if used_spoke_count < 2 and not allow_single_spoke:
+        raise ValueError(
+            "SSDU holdout_fraction leaves fewer than 2 input spokes "
+            f"({used_spoke_count}/{total_spokes}). Lower holdout_fraction or set "
+            "allow_single_spoke=True."
+        )
+
+    selection_norm = str(selection).strip().lower()
+    if selection_norm == "cyclic":
+        if iteration_index is None:
+            iteration_index = 0
+        offset = int(iteration_index) % total_spokes
+    elif selection_norm == "random":
+        offset = random.randrange(total_spokes)
+    else:
+        raise ValueError(
+            f"Unsupported SSDU selection '{selection}'. Expected one of: random, cyclic."
+        )
+
+    if held_spoke_count <= used_spoke_count:
+        held_spokes = _build_evenly_spaced_spokes(
+            total_spokes, held_spoke_count, offset, device
+        )
+        held_mask = torch.zeros(total_spokes, dtype=torch.bool, device=device)
+        held_mask[held_spokes] = True
+        used_spokes = (~held_mask).nonzero(as_tuple=False).squeeze(-1)
+    else:
+        used_spokes = _build_evenly_spaced_spokes(
+            total_spokes, used_spoke_count, offset, device
+        )
+        used_mask = torch.zeros(total_spokes, dtype=torch.bool, device=device)
+        used_mask[used_spokes] = True
+        held_spokes = (~used_mask).nonzero(as_tuple=False).squeeze(-1)
+
+    held_idx = _spokes_to_sample_indices(held_spokes, samples_per_spoke)
+    used_idx = _spokes_to_sample_indices(used_spokes, samples_per_spoke)
+    return held_idx, used_idx
+
+
 @dataclass
 class SSDUSplit:
     y_theta: torch.Tensor
@@ -70,6 +154,7 @@ def build_spoke_wise_ssdu_split(
     selection: str = "random",
     iteration_index: Optional[int] = None,
     allow_single_spoke: bool = False,
+    holdout_fraction: Optional[float] = None,
 ) -> Optional[SSDUSplit]:
     if y.ndim != 3:
         raise ValueError(f"SSDU expects y with shape (coils, samples, time), got {tuple(y.shape)}.")
@@ -84,29 +169,40 @@ def build_spoke_wise_ssdu_split(
         )
 
     device = y.device
-    fold_indices = _build_ssdu_fold_indices(
-        spokes_per_frame=int(spokes_per_frame),
-        samples_per_spoke=int(samples_per_spoke),
-        k_folds=int(k_folds),
-        device=device,
-        allow_single_spoke=bool(allow_single_spoke),
-    )
-    if not fold_indices:
-        return None
-
-    selection_norm = str(selection).strip().lower()
-    if selection_norm == "cyclic":
-        if iteration_index is None:
-            iteration_index = 0
-        fold_pos = int(iteration_index) % len(fold_indices)
-    elif selection_norm == "random":
-        fold_pos = random.randrange(len(fold_indices))
-    else:
-        raise ValueError(
-            f"Unsupported SSDU selection '{selection}'. Expected one of: random, cyclic."
+    if holdout_fraction is not None:
+        held_idx, used_idx = _build_ssdu_fraction_indices(
+            spokes_per_frame=int(spokes_per_frame),
+            samples_per_spoke=int(samples_per_spoke),
+            holdout_fraction=float(holdout_fraction),
+            selection=selection,
+            iteration_index=iteration_index,
+            device=device,
+            allow_single_spoke=bool(allow_single_spoke),
         )
+    else:
+        fold_indices = _build_ssdu_fold_indices(
+            spokes_per_frame=int(spokes_per_frame),
+            samples_per_spoke=int(samples_per_spoke),
+            k_folds=int(k_folds),
+            device=device,
+            allow_single_spoke=bool(allow_single_spoke),
+        )
+        if not fold_indices:
+            return None
 
-    held_idx, used_idx = fold_indices[fold_pos]
+        selection_norm = str(selection).strip().lower()
+        if selection_norm == "cyclic":
+            if iteration_index is None:
+                iteration_index = 0
+            fold_pos = int(iteration_index) % len(fold_indices)
+        elif selection_norm == "random":
+            fold_pos = random.randrange(len(fold_indices))
+        else:
+            raise ValueError(
+                f"Unsupported SSDU selection '{selection}'. Expected one of: random, cyclic."
+            )
+
+        held_idx, used_idx = fold_indices[fold_pos]
 
     if physics.ktraj.ndim != 3 or physics.ktraj.shape[0] != 2:
         raise ValueError(
