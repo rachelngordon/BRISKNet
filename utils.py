@@ -985,14 +985,31 @@ def to_torch_complex(x: torch.Tensor):
 
 
 
-def _ktraj_to_sigpy_coord(ktraj: torch.Tensor, samples_per_spoke: int) -> np.ndarray:
+def _ktraj_to_sigpy_coord(
+    ktraj: torch.Tensor,
+    samples_per_spoke: int,
+    image_shape: tuple[int, int],
+) -> np.ndarray:
+    """Convert torchkbnufft radians/voxel to SigPy image-grid coordinates."""
     if not torch.is_tensor(ktraj):
         ktraj = torch.tensor(ktraj)
     if ktraj.ndim != 3 or ktraj.shape[0] != 2:
         raise ValueError(f"GRASP expects ktraj with shape (2, M, T), got {ktraj.shape}")
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"GRASP expects a positive 2D image shape, got {image_shape}")
     M, T = ktraj.shape[1], ktraj.shape[2]
     if M % samples_per_spoke != 0:
         raise ValueError("GRASP ktraj length is not divisible by samples_per_spoke.")
+
+    # torchkbnufft uses radians/voxel; SigPy expects coordinates scaled to
+    # [-n_i / 2, n_i / 2] for each spatial axis.
+    coord_scale = torch.as_tensor(
+        image_shape,
+        dtype=ktraj.dtype,
+        device=ktraj.device,
+    ).reshape(2, 1, 1) / (2 * np.pi)
+    ktraj = ktraj * coord_scale
+
     spokes = M // samples_per_spoke
     ktraj = ktraj.reshape(2, spokes, samples_per_spoke, T).permute(3, 1, 2, 0)
     return ktraj.cpu().numpy()
@@ -1023,9 +1040,14 @@ def GRASPRecon_from_ktraj(
 
     if csmaps.dim() == 3:
         csmaps = csmaps.unsqueeze(0)
+    image_shape = tuple(int(size) for size in csmaps.shape[-2:])
     csmaps = rearrange(csmaps, 'b c h w -> c b h w').cpu().numpy()
 
-    traj = _ktraj_to_sigpy_coord(ktraj, samples_per_spoke)
+    traj = _ktraj_to_sigpy_coord(
+        ktraj,
+        samples_per_spoke,
+        image_shape=image_shape,
+    )
 
     recon = app.HighDimensionalRecon(
         kspace,
@@ -1043,7 +1065,9 @@ def GRASPRecon_from_ktraj(
         verbose=False,
     ).run()
 
-    return np.squeeze(recon.get())
+    if hasattr(recon, "get"):
+        recon = recon.get()
+    return np.squeeze(np.asarray(recon))
 
 
 def GRASPRecon(csmaps, kspace, spokes_per_frame, num_frames, grasp_path):
