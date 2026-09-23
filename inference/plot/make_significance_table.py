@@ -206,7 +206,6 @@ def make_multi_comparison_table(
         r"\small",
         f"\\begin{{tabular*}}{{\\tblwidth}}{{@{{}}{col_spec}@{{}}}}",
         r"\toprule",
-        _format_row(_family_header_cells(metrics, families, n_left)),
         _format_row(_metric_header_cells(metrics, ["Comparison"])),
         r"\midrule",
     ]
@@ -260,7 +259,6 @@ def make_single_comparison_table(
         r"\small",
         f"\\begin{{tabular*}}{{\\tblwidth}}{{@{{}}{col_spec}@{{}}}}",
         r"\toprule",
-        _format_row(_family_header_cells(metrics, families, n_left)),
         _format_row(_metric_header_cells(metrics, ["SPF"])),
         r"\midrule",
     ]
