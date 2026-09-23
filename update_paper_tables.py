@@ -385,6 +385,59 @@ SIG_TABLES: list[tuple[str, str, list[str]]] = [
          )],
     ),
 
+    # ---- Temporal transform ablation ---------------------------------------
+    # First table inserts after the last ablation figure; the rest chain after each other.
+    (
+        "tab:sig_temp_abl_spatial", "fig:temporal_ablation_8spf",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
+         "--spf", "8,36",
+         "--families", "spatial",
+         "--label", "tab:sig_temp_abl_spatial",
+         "--caption", (
+             r"Significance of spatial quality differences for temporal transform ablation "
+             r"(vs diffeomorphism-only baseline). SPF~=~36 rows show full-transform only. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
+             r"\textbf{Bold}: variant significantly better than baseline."
+         )],
+    ),
+    (
+        "tab:sig_temp_abl_consistency", "tab:sig_temp_abl_spatial",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
+         "--spf", "8,36",
+         "--families", "mc",
+         "--label", "tab:sig_temp_abl_consistency",
+         "--caption", (
+             r"Significance of measurement consistency differences for temporal transform ablation. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+    (
+        "tab:sig_temp_abl_temp_early", "tab:sig_temp_abl_consistency",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
+         "--spf", "8,36",
+         "--families", "temporal", "--metrics", "early_corr,early_mae,iauc10_err",
+         "--label", "tab:sig_temp_abl_temp_early",
+         "--caption", (
+             r"Significance of early enhancement differences for temporal transform ablation. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+    (
+        "tab:sig_temp_abl_temp_timing", "tab:sig_temp_abl_temp_early",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
+         "--spf", "8,36",
+         "--families", "temporal", "--metrics", "ttae_sec,wash_in_slope_err",
+         "--label", "tab:sig_temp_abl_temp_timing",
+         "--caption", (
+             r"Significance of timing and wash-in differences for temporal transform ablation. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+
     # ---- EI ablation -------------------------------------------------------
     (
         "tab:sig_mc_ei_spatial", "tab:mc_ei_spatial",
@@ -554,12 +607,55 @@ def insert_after_table(lines: list[str], ref_label: str, new_content: str) -> li
     return lines[: end_line + 1] + ["", new_content] + lines[end_line + 1 :]
 
 
+def find_figure_block(lines: list[str], label: str) -> tuple[int, int] | None:
+    """Return (begin_line, end_line) of the figure block containing label."""
+    label_str = f"\\label{{{label}}}"
+    label_line = None
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("%"):
+            continue
+        if label_str in line:
+            label_line = i
+            break
+    if label_line is None:
+        return None
+    begin_line = None
+    for i in range(label_line, -1, -1):
+        if lines[i].lstrip().startswith("%"):
+            continue
+        if "\\begin{figure}" in lines[i]:
+            begin_line = i
+            break
+    end_line = None
+    for i in range(label_line, len(lines)):
+        if lines[i].lstrip().startswith("%"):
+            continue
+        if "\\end{figure}" in lines[i]:
+            end_line = i
+            break
+    if begin_line is None or end_line is None:
+        return None
+    return begin_line, end_line
+
+
+def insert_after_figure(lines: list[str], ref_label: str, new_content: str) -> list[str]:
+    """Insert new_content immediately after the \\end{figure} of ref_label."""
+    block = find_figure_block(lines, ref_label)
+    if block is None:
+        raise ValueError(f"Reference figure block for label '{ref_label}' not found.")
+    _, end_line = block
+    return lines[: end_line + 1] + ["", new_content] + lines[end_line + 1 :]
+
+
 def upsert_sig_table(
-    lines: list[str], sig_label: str, ref_label: str, new_content: str
+    lines: list[str], sig_label: str, ref_label: str, new_content: str,
+    ref_type: str = "table",
 ) -> list[str]:
-    """Replace the sig table if it already exists; otherwise insert after ref_label's table."""
+    """Replace the sig table if it already exists; otherwise insert after ref_label's env."""
     if label_exists(lines, sig_label):
         return replace_single(lines, sig_label, new_content)
+    if ref_type == "figure":
+        return insert_after_figure(lines, ref_label, new_content)
     return insert_after_table(lines, ref_label, new_content)
 
 
@@ -637,10 +733,11 @@ def main() -> None:
             try:
                 print(f"  running: {' '.join(cmd[:5])} ...")
                 output = micromamba_run(cmd)
+                ref_type = "figure" if ref_label.startswith("fig:") else "table"
                 if args.dry_run:
                     print(output)
                 else:
-                    lines = upsert_sig_table(lines, sig_label, ref_label, output)
+                    lines = upsert_sig_table(lines, sig_label, ref_label, output, ref_type)
                     print(f"  -> {'replaced' if exists else 'inserted'} sig table")
                 any_updated = True
             except Exception as exc:

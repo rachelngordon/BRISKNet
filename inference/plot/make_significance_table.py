@@ -109,9 +109,9 @@ def _format_cell(
     diff_str = _fmt(mean_diff, decimals)
     ci_str = f"[{_fmt(ci_low, decimals)},\\,{_fmt(ci_high, decimals)}]"
     if stars:
-        cell = f"${diff_str}$ ${ci_str}^{{{stars}}}$"
+        cell = f"${diff_str}\\;{ci_str}^{{{stars}}}$"
     else:
-        cell = f"${diff_str}$ ${ci_str}$"
+        cell = f"${diff_str}\\;{ci_str}$"
     if bold and stars:
         cell = f"\\textbf{{{cell}}}"
     return cell
@@ -203,6 +203,7 @@ def make_multi_comparison_table(
         r"\begin{table}%[]",
         f"\\caption{{{caption}}}",
         f"\\label{{{label}}}",
+        r"\small",
         f"\\begin{{tabular*}}{{\\tblwidth}}{{@{{}}{col_spec}@{{}}}}",
         r"\toprule",
         _format_row(_family_header_cells(metrics, families, n_left)),
@@ -217,6 +218,9 @@ def make_multi_comparison_table(
             f"\\multicolumn{{{n_cols}}}{{l}}{{\\textit{{SPF\\,=\\,{spf}}}}}\\\\"
         )
         for cmp in comparisons:
+            # Skip comparison if it has no data at this SPF
+            if df[(df["comparison"] == cmp) & (df["spf"] == spf)].empty:
+                continue
             disp = COMPARISON_DISPLAY.get(cmp, cmp.replace("_", " "))
             cells = [disp]
             for m in metrics:
@@ -253,6 +257,7 @@ def make_single_comparison_table(
         r"\begin{table}%[]",
         f"\\caption{{{caption}}}",
         f"\\label{{{label}}}",
+        r"\small",
         f"\\begin{{tabular*}}{{\\tblwidth}}{{@{{}}{col_spec}@{{}}}}",
         r"\toprule",
         _format_row(_family_header_cells(metrics, families, n_left)),
