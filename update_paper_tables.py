@@ -273,6 +273,167 @@ TABLES: dict[str, list] = {
 
 }
 
+_SIG_CSV = "results/significance_all_comparisons.csv"
+_ACCEL_CMPS = "BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU"
+_ACCEL_SPF  = "8,16,24,36"
+_ULTRA_SPF  = "2,4"
+_EI_CMP     = "EI_vs_MC"
+
+# Significance tables: each entry is (sig_label, ref_label, command).
+# sig_label: the \label{} of the new significance table
+# ref_label: the metrics table it should appear immediately after
+# command:   args to pass to micromamba_run
+SIG_TABLES: list[tuple[str, str, list[str]]] = [
+
+    # ---- Acceleration sweep ------------------------------------------------
+    (
+        "tab:sig_acc_exp_spatial", "tab:acc_exp_spatial",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
+         "--families", "spatial",
+         "--label", "tab:sig_acc_exp_spatial",
+         "--caption", (
+             r"Significance of spatial quality differences (BH-FDR corrected within family). "
+             r"$\Delta$ = mean difference (method~A $-$ method~B) with 95\% CI. "
+             r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$. "
+             r"\textbf{Bold}: method~A significantly better."
+         )],
+    ),
+    (
+        "tab:sig_acc_exp_consistency", "tab:acc_exp_consistency",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
+         "--families", "mc",
+         "--label", "tab:sig_acc_exp_consistency",
+         "--caption", (
+             r"Significance of measurement consistency differences. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
+             r"\textbf{Bold}: method~A significantly better."
+         )],
+    ),
+    (
+        "tab:sig_acc_exp_temp_early", "tab:acc_exp_temp_early",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
+         "--families", "temporal",
+         "--metrics", "early_corr,early_mae,iauc10_err",
+         "--label", "tab:sig_acc_exp_temp_early",
+         "--caption", (
+             r"Significance of early enhancement fidelity differences. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
+             r"\textbf{Bold}: method~A significantly better."
+         )],
+    ),
+    (
+        "tab:sig_acc_exp_temp_timing", "tab:acc_exp_temp_timing",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
+         "--families", "temporal",
+         "--metrics", "ttae_sec,wash_in_slope_err",
+         "--label", "tab:sig_acc_exp_temp_timing",
+         "--caption", (
+             r"Significance of timing and wash-in fidelity differences. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
+             r"\textbf{Bold}: method~A significantly better."
+         )],
+    ),
+
+    # ---- Ultra-high acceleration -------------------------------------------
+    (
+        "tab:sig_ultra_acc_exp_spatial", "tab:ultra_acc_exp_spatial",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
+         "--families", "spatial",
+         "--label", "tab:sig_ultra_acc_exp_spatial",
+         "--caption", (
+             r"Significance of spatial quality differences at ultra-high accelerations "
+             r"(BRISKNet vs GRASP). $\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
+             r"\textbf{Bold}: BRISKNet significantly better."
+         )],
+    ),
+    (
+        "tab:sig_ultra_acc_exp_consistency", "tab:ultra_acc_exp_consistency",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
+         "--families", "mc",
+         "--label", "tab:sig_ultra_acc_exp_consistency",
+         "--caption", (
+             r"Significance of measurement consistency differences at ultra-high accelerations. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+    (
+        "tab:sig_ultra_acc_exp_temp_early", "tab:ultra_acc_exp_temp_early",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
+         "--families", "temporal", "--metrics", "early_corr,early_mae,iauc10_err",
+         "--label", "tab:sig_ultra_acc_exp_temp_early",
+         "--caption", (
+             r"Significance of early enhancement differences at ultra-high accelerations. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+    (
+        "tab:sig_ultra_acc_exp_temp_timing", "tab:ultra_acc_exp_temp_timing",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
+         "--families", "temporal", "--metrics", "ttae_sec,wash_in_slope_err",
+         "--label", "tab:sig_ultra_acc_exp_temp_timing",
+         "--caption", (
+             r"Significance of timing and wash-in differences at ultra-high accelerations. "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+
+    # ---- EI ablation -------------------------------------------------------
+    (
+        "tab:sig_mc_ei_spatial", "tab:mc_ei_spatial",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _EI_CMP, "--spf", "8",
+         "--families", "spatial",
+         "--label", "tab:sig_mc_ei_spatial",
+         "--caption", (
+             r"Significance of EI ablation spatial differences (EI+MC vs MC-only, SPF~=~8). "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+    (
+        "tab:sig_mc_ei_consistency", "tab:mc_ei_consistency",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _EI_CMP, "--spf", "8",
+         "--families", "mc",
+         "--label", "tab:sig_mc_ei_consistency",
+         "--caption", (
+             r"Significance of EI ablation consistency differences (EI+MC vs MC-only, SPF~=~8). "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+    (
+        "tab:sig_mc_ei_temp_early", "tab:mc_ei_temp_early",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _EI_CMP, "--spf", "8",
+         "--families", "temporal", "--metrics", "early_corr,early_mae,iauc10_err",
+         "--label", "tab:sig_mc_ei_temp_early",
+         "--caption", (
+             r"Significance of EI ablation early enhancement differences "
+             r"(EI+MC vs MC-only, SPF~=~8). "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+    (
+        "tab:sig_mc_ei_temp_timing", "tab:mc_ei_temp_timing",
+        ["python", _MS, "--csv", _SIG_CSV,
+         "--comparisons", _EI_CMP, "--spf", "8",
+         "--families", "temporal", "--metrics", "ttae_sec,wash_in_slope_err",
+         "--label", "tab:sig_mc_ei_temp_timing",
+         "--caption", (
+             r"Significance of EI ablation timing and wash-in differences "
+             r"(EI+MC vs MC-only, SPF~=~8). "
+             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+         )],
+    ),
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -379,6 +540,29 @@ def replace_multi(lines: list[str], label: str, new_contents: list[str]) -> list
     return lines[:first_begin] + [joined] + lines[last_end + 1:]
 
 
+def label_exists(lines: list[str], label: str) -> bool:
+    label_str = f"\\label{{{label}}}"
+    return any(label_str in line for line in lines if not line.lstrip().startswith("%"))
+
+
+def insert_after_table(lines: list[str], ref_label: str, new_content: str) -> list[str]:
+    """Insert new_content (a table block) immediately after the \\end{table} of ref_label."""
+    block = find_table_block(lines, ref_label)
+    if block is None:
+        raise ValueError(f"Reference table block for label '{ref_label}' not found.")
+    _, end_line = block
+    return lines[: end_line + 1] + ["", new_content] + lines[end_line + 1 :]
+
+
+def upsert_sig_table(
+    lines: list[str], sig_label: str, ref_label: str, new_content: str
+) -> list[str]:
+    """Replace the sig table if it already exists; otherwise insert after ref_label's table."""
+    if label_exists(lines, sig_label):
+        return replace_single(lines, sig_label, new_content)
+    return insert_after_table(lines, ref_label, new_content)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -394,6 +578,11 @@ def main() -> None:
         "--dry-run",
         action="store_true",
         help="Print generated LaTeX but do not write the tex file.",
+    )
+    parser.add_argument(
+        "--skip-sig",
+        action="store_true",
+        help="Skip significance table injection.",
     )
     args = parser.parse_args()
 
@@ -435,6 +624,27 @@ def main() -> None:
             any_updated = True
         except Exception as exc:
             print(f"  ERROR: {exc}", file=sys.stderr)
+
+    if not args.skip_sig:
+        for sig_label, ref_label, cmd in SIG_TABLES:
+            if requested and sig_label not in requested:
+                continue
+
+            exists = label_exists(lines, sig_label)
+            action = "replace" if exists else f"insert after {ref_label}"
+            print(f"\n[SIG] {sig_label}  ({action})")
+
+            try:
+                print(f"  running: {' '.join(cmd[:5])} ...")
+                output = micromamba_run(cmd)
+                if args.dry_run:
+                    print(output)
+                else:
+                    lines = upsert_sig_table(lines, sig_label, ref_label, output)
+                    print(f"  -> {'replaced' if exists else 'inserted'} sig table")
+                any_updated = True
+            except Exception as exc:
+                print(f"  ERROR: {exc}", file=sys.stderr)
 
     if not args.dry_run and any_updated:
         TEX_FILE.write_text("\n".join(lines))
