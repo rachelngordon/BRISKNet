@@ -6,12 +6,12 @@ booktabs/tabular* style used in make_inference_table.py.
 
 Usage:
     # Multi-comparison (acceleration sweep spatial table):
-    python inference/plot/make_significance_table.py \\
+    python scripts/make_significance_table.py \\
         --comparisons BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU \\
         --spf 8,16,24,36 --families spatial --label tab:sig_acc_exp_spatial
 
     # Single-comparison (ultra-high, BRISKNet vs GRASP only):
-    python inference/plot/make_significance_table.py \\
+    python scripts/make_significance_table.py \\
         --comparisons BRISKNet_vs_GRASP --spf 2,4 \\
         --families spatial --label tab:sig_ultra_acc_exp_spatial
 """
@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 
-DEFAULT_CSV = Path(__file__).resolve().parents[2] / "results" / "significance_all_comparisons.csv"
+DEFAULT_CSV = Path(__file__).resolve().parents[1] / "results" / "significance_all_comparisons.csv"
 
 # ---------------------------------------------------------------------------
 # Metric definitions

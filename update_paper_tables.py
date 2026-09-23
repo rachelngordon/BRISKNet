@@ -18,8 +18,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 TEX_FILE = Path("/home/rachelgordon/mri_recon/brisknet-journal-paper/cas-dc-template.tex")
 
-_MT = "inference/plot/make_inference_table.py"
-_MS = "inference/plot/make_significance_table.py"
+_MT = "scripts/make_inference_table.py"
+_MS = "scripts/make_significance_table.py"
 _LOG_REV = "inference/test_inference_logs_mri_journal_revised.json"
 _LOG_ORIG = "inference/test_inference_logs_mri_journal.json"
 _ACCEL_EXPS = ",".join([

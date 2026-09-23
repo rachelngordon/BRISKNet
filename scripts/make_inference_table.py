@@ -348,7 +348,7 @@ def _format_mean_std(mean, std, decimals: int) -> str:
 
 def _format_mean_std_mri_journal(mean, std, decimals: int) -> str:
     if mean is None:
-        return "---"
+        return "NA"
     if std is None:
         return f"${mean:.{decimals}f}$"
     return f"${mean:.{decimals}f} \\pm {std:.{decimals}f}$"
