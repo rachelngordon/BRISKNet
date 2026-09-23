@@ -274,218 +274,101 @@ TABLES: dict[str, list] = {
 }
 
 _SIG_CSV = "results/significance_all_comparisons.csv"
-_ACCEL_CMPS = "BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU"
-_ACCEL_SPF  = "8,16,24,36"
-_ULTRA_SPF  = "2,4"
-_EI_CMP     = "EI_vs_MC"
+_TEMP_CMPS = "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only"
+_SIG_CAP_SUFFIX = (
+    r" Each cell shows the mean difference ($\Delta$, method~A $-$ method~B) "
+    r"with 95\% CI; Wilcoxon signed-rank test, BH-FDR corrected within metric family. "
+    r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$. "
+    r"\textbf{Bold}: method~A significantly better than method~B."
+)
 
-# Significance tables: each entry is (sig_label, ref_label, command).
-# sig_label: the \label{} of the new significance table
-# ref_label: the metrics table it should appear immediately after
-# command:   args to pass to micromamba_run
+# Old sig table labels to remove from the tex file on first run.
+# These are replaced by the consolidated 5-table structure below.
+OLD_SIG_LABELS = [
+    "tab:sig_acc_exp_spatial", "tab:sig_acc_exp_consistency",
+    "tab:sig_acc_exp_temp_early", "tab:sig_acc_exp_temp_timing",
+    "tab:sig_ultra_acc_exp_spatial", "tab:sig_ultra_acc_exp_consistency",
+    "tab:sig_ultra_acc_exp_temp_early", "tab:sig_ultra_acc_exp_temp_timing",
+    "tab:sig_mc_ei_spatial", "tab:sig_mc_ei_consistency",
+    "tab:sig_mc_ei_temp_early", "tab:sig_mc_ei_temp_timing",
+    "tab:sig_temp_abl_spatial", "tab:sig_temp_abl_consistency",
+    "tab:sig_temp_abl_temp_early", "tab:sig_temp_abl_temp_timing",
+]
+
+# Significance tables (5 consolidated tables).
+# Each entry: (sig_label, ref_label, command)
+# ref_label prefix determines insertion type: "fig:" → after figure, else after table.
 SIG_TABLES: list[tuple[str, str, list[str]]] = [
 
-    # ---- Acceleration sweep ------------------------------------------------
+    # ---- 1. BRISKNet vs GRASP (all SPFs 2–36, placed at end of accel sweep) ----
     (
-        "tab:sig_acc_exp_spatial", "tab:acc_exp_spatial",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
-         "--families", "spatial",
-         "--label", "tab:sig_acc_exp_spatial",
+        "tab:sig_brisknet_vs_grasp", "tab:acc_exp_temp_timing",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+         "--comparisons", "BRISKNet_vs_GRASP", "--spf", "2,4,8,16,24,36",
+         "--families", "spatial,mc,temporal",
+         "--label", "tab:sig_brisknet_vs_grasp",
          "--caption", (
-             r"Significance of spatial quality differences (BH-FDR corrected within family). "
-             r"$\Delta$ = mean difference (method~A $-$ method~B) with 95\% CI. "
-             r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$. "
-             r"\textbf{Bold}: method~A significantly better."
-         )],
-    ),
-    (
-        "tab:sig_acc_exp_consistency", "tab:acc_exp_consistency",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
-         "--families", "mc",
-         "--label", "tab:sig_acc_exp_consistency",
-         "--caption", (
-             r"Significance of measurement consistency differences. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
-             r"\textbf{Bold}: method~A significantly better."
-         )],
-    ),
-    (
-        "tab:sig_acc_exp_temp_early", "tab:acc_exp_temp_early",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
-         "--families", "temporal",
-         "--metrics", "early_corr,early_mae,iauc10_err",
-         "--label", "tab:sig_acc_exp_temp_early",
-         "--caption", (
-             r"Significance of early enhancement fidelity differences. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
-             r"\textbf{Bold}: method~A significantly better."
-         )],
-    ),
-    (
-        "tab:sig_acc_exp_temp_timing", "tab:acc_exp_temp_timing",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _ACCEL_CMPS, "--spf", _ACCEL_SPF,
-         "--families", "temporal",
-         "--metrics", "ttae_sec,wash_in_slope_err",
-         "--label", "tab:sig_acc_exp_temp_timing",
-         "--caption", (
-             r"Significance of timing and wash-in fidelity differences. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
-             r"\textbf{Bold}: method~A significantly better."
+             r"Significance of BRISKNet vs GRASP across all accelerations "
+             r"(SPF 2--36, including ultra-high). "
+             + _SIG_CAP_SUFFIX
          )],
     ),
 
-    # ---- Ultra-high acceleration -------------------------------------------
+    # ---- 2. SSDU vs GRASP (SPF 8–36) ----------------------------------------
     (
-        "tab:sig_ultra_acc_exp_spatial", "tab:ultra_acc_exp_spatial",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
-         "--families", "spatial",
-         "--label", "tab:sig_ultra_acc_exp_spatial",
+        "tab:sig_ssdu_vs_grasp", "tab:sig_brisknet_vs_grasp",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+         "--comparisons", "SSDU_vs_GRASP", "--spf", "8,16,24,36",
+         "--families", "spatial,mc,temporal",
+         "--label", "tab:sig_ssdu_vs_grasp",
          "--caption", (
-             r"Significance of spatial quality differences at ultra-high accelerations "
-             r"(BRISKNet vs GRASP). $\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
-             r"\textbf{Bold}: BRISKNet significantly better."
-         )],
-    ),
-    (
-        "tab:sig_ultra_acc_exp_consistency", "tab:ultra_acc_exp_consistency",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
-         "--families", "mc",
-         "--label", "tab:sig_ultra_acc_exp_consistency",
-         "--caption", (
-             r"Significance of measurement consistency differences at ultra-high accelerations. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
-         )],
-    ),
-    (
-        "tab:sig_ultra_acc_exp_temp_early", "tab:ultra_acc_exp_temp_early",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
-         "--families", "temporal", "--metrics", "early_corr,early_mae,iauc10_err",
-         "--label", "tab:sig_ultra_acc_exp_temp_early",
-         "--caption", (
-             r"Significance of early enhancement differences at ultra-high accelerations. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
-         )],
-    ),
-    (
-        "tab:sig_ultra_acc_exp_temp_timing", "tab:ultra_acc_exp_temp_timing",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "BRISKNet_vs_GRASP", "--spf", _ULTRA_SPF,
-         "--families", "temporal", "--metrics", "ttae_sec,wash_in_slope_err",
-         "--label", "tab:sig_ultra_acc_exp_temp_timing",
-         "--caption", (
-             r"Significance of timing and wash-in differences at ultra-high accelerations. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+             r"Significance of SSDU vs GRASP across standard accelerations (SPF 8--36). "
+             + _SIG_CAP_SUFFIX
          )],
     ),
 
-    # ---- Temporal transform ablation ---------------------------------------
-    # First table inserts after the last ablation figure; the rest chain after each other.
+    # ---- 3. BRISKNet vs SSDU (SPF 8–36) -------------------------------------
     (
-        "tab:sig_temp_abl_spatial", "fig:temporal_ablation_8spf",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
-         "--spf", "8,36",
-         "--families", "spatial",
-         "--label", "tab:sig_temp_abl_spatial",
+        "tab:sig_brisknet_vs_ssdu", "tab:sig_ssdu_vs_grasp",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+         "--comparisons", "BRISKNet_vs_SSDU", "--spf", "8,16,24,36",
+         "--families", "spatial,mc,temporal",
+         "--label", "tab:sig_brisknet_vs_ssdu",
          "--caption", (
-             r"Significance of spatial quality differences for temporal transform ablation "
-             r"(vs diffeomorphism-only baseline). SPF~=~36 rows show full-transform only. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected. "
-             r"\textbf{Bold}: variant significantly better than baseline."
-         )],
-    ),
-    (
-        "tab:sig_temp_abl_consistency", "tab:sig_temp_abl_spatial",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
-         "--spf", "8,36",
-         "--families", "mc",
-         "--label", "tab:sig_temp_abl_consistency",
-         "--caption", (
-             r"Significance of measurement consistency differences for temporal transform ablation. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
-         )],
-    ),
-    (
-        "tab:sig_temp_abl_temp_early", "tab:sig_temp_abl_consistency",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
-         "--spf", "8,36",
-         "--families", "temporal", "--metrics", "early_corr,early_mae,iauc10_err",
-         "--label", "tab:sig_temp_abl_temp_early",
-         "--caption", (
-             r"Significance of early enhancement differences for temporal transform ablation. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
-         )],
-    ),
-    (
-        "tab:sig_temp_abl_temp_timing", "tab:sig_temp_abl_temp_early",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only",
-         "--spf", "8,36",
-         "--families", "temporal", "--metrics", "ttae_sec,wash_in_slope_err",
-         "--label", "tab:sig_temp_abl_temp_timing",
-         "--caption", (
-             r"Significance of timing and wash-in differences for temporal transform ablation. "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+             r"Significance of BRISKNet vs SSDU across standard accelerations (SPF 8--36). "
+             + _SIG_CAP_SUFFIX
          )],
     ),
 
-    # ---- EI ablation -------------------------------------------------------
+    # ---- 4. EI ablation: EI+BRISKNet vs MC-only (SPF 8) ---------------------
     (
-        "tab:sig_mc_ei_spatial", "tab:mc_ei_spatial",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _EI_CMP, "--spf", "8",
-         "--families", "spatial",
-         "--label", "tab:sig_mc_ei_spatial",
+        "tab:sig_ei_ablation", "tab:mc_ei_temp_timing",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+         "--comparisons", "EI_vs_MC", "--spf", "8",
+         "--families", "spatial,mc,temporal",
+         "--label", "tab:sig_ei_ablation",
          "--caption", (
-             r"Significance of EI ablation spatial differences (EI+MC vs MC-only, SPF~=~8). "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+             r"Significance of EI loss ablation: EI+BRISKNet vs MC-only (SPF~=~8). "
+             + _SIG_CAP_SUFFIX
          )],
     ),
+
+    # ---- 5. Temporal transform ablation (all variants vs diffeo-only) --------
     (
-        "tab:sig_mc_ei_consistency", "tab:mc_ei_consistency",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _EI_CMP, "--spf", "8",
-         "--families", "mc",
-         "--label", "tab:sig_mc_ei_consistency",
+        "tab:sig_temporal_ablation", "fig:temporal_ablation_8spf",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+         "--comparisons", _TEMP_CMPS, "--spf", "8,36",
+         "--families", "spatial,mc,temporal",
+         "--label", "tab:sig_temporal_ablation",
          "--caption", (
-             r"Significance of EI ablation consistency differences (EI+MC vs MC-only, SPF~=~8). "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
-         )],
-    ),
-    (
-        "tab:sig_mc_ei_temp_early", "tab:mc_ei_temp_early",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _EI_CMP, "--spf", "8",
-         "--families", "temporal", "--metrics", "early_corr,early_mae,iauc10_err",
-         "--label", "tab:sig_mc_ei_temp_early",
-         "--caption", (
-             r"Significance of EI ablation early enhancement differences "
-             r"(EI+MC vs MC-only, SPF~=~8). "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
-         )],
-    ),
-    (
-        "tab:sig_mc_ei_temp_timing", "tab:mc_ei_temp_timing",
-        ["python", _MS, "--csv", _SIG_CSV,
-         "--comparisons", _EI_CMP, "--spf", "8",
-         "--families", "temporal", "--metrics", "ttae_sec,wash_in_slope_err",
-         "--label", "tab:sig_mc_ei_temp_timing",
-         "--caption", (
-             r"Significance of EI ablation timing and wash-in differences "
-             r"(EI+MC vs MC-only, SPF~=~8). "
-             r"$\Delta$ = mean difference with 95\% CI; BH-FDR corrected."
+             r"Significance of temporal transform ablation vs diffeomorphism-only baseline. "
+             r"Column headers show the comparison and SPF; "
+             r"SPF~=~36 column appears only for the full-transform comparison. "
+             + _SIG_CAP_SUFFIX
          )],
     ),
 ]
+
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +455,18 @@ def find_all_table_blocks(lines: list[str], label: str) -> list[tuple[int, int]]
                 continue
         i += 1
     return blocks
+
+
+def remove_table_block(lines: list[str], label: str) -> list[str]:
+    """Remove the table block containing label (including surrounding blank lines).
+    Returns lines unchanged if label not found."""
+    block = find_table_block(lines, label)
+    if block is None:
+        return lines
+    begin, end = block
+    # absorb one leading blank line if present
+    start = begin - 1 if begin > 0 and lines[begin - 1].strip() == "" else begin
+    return lines[:start] + lines[end + 1:]
 
 
 def replace_single(lines: list[str], label: str, new_content: str) -> list[str]:
@@ -722,6 +617,13 @@ def main() -> None:
             print(f"  ERROR: {exc}", file=sys.stderr)
 
     if not args.skip_sig:
+        # Remove any old sig tables that have been superseded by the new 5-table structure.
+        for old_label in OLD_SIG_LABELS:
+            if label_exists(lines, old_label):
+                print(f"\n[CLEANUP] removing old sig table: {old_label}")
+                if not args.dry_run:
+                    lines = remove_table_block(lines, old_label)
+
         for sig_label, ref_label, cmd in SIG_TABLES:
             if requested and sig_label not in requested:
                 continue
