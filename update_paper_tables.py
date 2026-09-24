@@ -34,6 +34,14 @@ _SIG_CSV   = "results/significance_all_comparisons.csv"
 
 
 # ---------------------------------------------------------------------------
+_EI_SIG_SUFFIX = (
+    r" $\Delta$ rows: mean difference (EI $-$ MC-only) with 95\% CI; "
+    r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$ "
+    r"(Wilcoxon signed-rank, BH-FDR corrected). "
+    r"\textbf{Bold}: EI significantly better than MC-only."
+)
+
+# ---------------------------------------------------------------------------
 # Table definitions
 # Each value is either:
 #   list[str]        — a single command; its stdout replaces the table block
@@ -207,7 +215,8 @@ TABLES: dict[str, list] = {
         "--exclude_af", "--exclude_spf", "--exclude_temporal_resolution",
         "--caption", (
             "EI Ablation: Spatial quality at 8 SPF. "
-            "Values >1 SD above GRASP mean are highlighted in red."
+            "Values >1 SD above or below GRASP mean are highlighted in red."
+            + _EI_SIG_SUFFIX
         ),
         "--label", "tab:mc_ei_spatial",
         "--format_mri_journal",
@@ -226,7 +235,8 @@ TABLES: dict[str, list] = {
         "--exclude_af", "--exclude_spf", "--exclude_temporal_resolution",
         "--caption", (
             "EI Ablation: Measurement consistency at 8 SPF. "
-            "Values >1 SD above GRASP mean are highlighted in red."
+            "Values >1 SD above or below GRASP mean are highlighted in green or red."
+            + _EI_SIG_SUFFIX
         ),
         "--label", "tab:mc_ei_consistency",
         "--format_mri_journal",
@@ -247,7 +257,8 @@ TABLES: dict[str, list] = {
         "--exclude_af", "--exclude_spf", "--exclude_temporal_resolution",
         "--caption", (
             "EI Ablation: Early enhancement fidelity at 8 SPF. "
-            "Values >1 SD above GRASP mean are highlighted in red."
+            "Values >1 SD above or below GRASP mean are highlighted in red."
+            + _EI_SIG_SUFFIX
         ),
         "--label", "tab:mc_ei_temp_early",
         "--format_mri_journal",
@@ -268,7 +279,8 @@ TABLES: dict[str, list] = {
         "--exclude_af", "--exclude_spf", "--exclude_temporal_resolution",
         "--caption", (
             "EI Ablation: Timing and wash-in fidelity at 8 SPF. "
-            "Values >1 SD above GRASP mean are highlighted in red."
+            "Values >1 SD above or below GRASP mean are highlighted in red."
+            + _EI_SIG_SUFFIX
         ),
         "--label", "tab:mc_ei_temp_timing",
         "--format_mri_journal",
@@ -278,8 +290,14 @@ TABLES: dict[str, list] = {
 
 }
 
-_ACCEL_CMPS = "BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU"
-_TEMP_CMPS  = "arr_shift_vs_diffeo_only,enh_scale_vs_diffeo_only,arr_shift_enh_scale_vs_diffeo_only"
+_ACCEL_CMPS  = "BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU"
+_TEMP_CMPS   = "arr_shift_vs_diffeo_only,enh_scale_vs_diffeo_only,arr_shift_enh_scale_vs_diffeo_only"
+_TEMP_CMPS_36 = ",".join([
+    "all_transforms_36_vs_diffeo_only",
+    "arr_shift_enh_scale_36_vs_diffeo_only",
+    "arr_shift_rebin_36_vs_diffeo_only",
+    "enh_scale_rebin_36_vs_diffeo_only",
+])
 _SIG_CAP_SUFFIX = (
     r" Each cell shows the mean difference ($\Delta$, method~A $-$ method~B) "
     r"with 95\% CI; Wilcoxon signed-rank test, BH-FDR corrected within metric family. "
@@ -386,11 +404,11 @@ SIG_TABLES: list[tuple[str, str, list[str]]] = [
     (
         "tab:sig_temporal_ablation_36spf", "tab:sig_temporal_ablation_8spf",
         ["python", _MS, "--csv", _SIG_CSV, "--transposed",
-         "--comparisons", "arr_shift_vs_diffeo_only", "--spf", "36",
+         "--comparisons", _TEMP_CMPS_36, "--spf", "36",
          "--families", "spatial,mc,temporal",
          "--label", "tab:sig_temporal_ablation_36spf",
          "--caption", (
-             r"Significance of full temporal transform (Arr Shift) vs diffeomorphism-only baseline at SPF~=~36. "
+             r"Significance of temporal transform ablation conditions vs diffeomorphism-only baseline at SPF~=~36. "
              + _SIG_CAP_SUFFIX
          )],
     ),

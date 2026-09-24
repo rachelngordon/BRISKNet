@@ -72,6 +72,10 @@ COMPARISON_DISPLAY = {
     "arr_shift_vs_diffeo_only":           "Arr Shift vs Diffeo Only",
     "enh_scale_vs_diffeo_only":           "Enh Scale vs Diffeo Only",
     "arr_shift_enh_scale_vs_diffeo_only": "Arr Shift + Enh Scale vs Diffeo Only",
+    "all_transforms_36_vs_diffeo_only":        "All Transforms vs Diffeo Only",
+    "arr_shift_enh_scale_36_vs_diffeo_only":   "Arr Shift + Enh Scale vs Diffeo Only (36 SPF)",
+    "arr_shift_rebin_36_vs_diffeo_only":       "Arr Shift + Rebin vs Diffeo Only",
+    "enh_scale_rebin_36_vs_diffeo_only":       "Enh Scale + Rebin vs Diffeo Only",
 }
 
 # Short column headers for transposed multi-comparison tables
@@ -83,6 +87,10 @@ COMPARISON_COL_HEADER = {
     "SSDU_vs_GRASP":                      r"SSDU\\vs GRASP",
     "BRISKNet_vs_SSDU":                   r"BRISKNet\\vs SSDU",
     "EI_vs_MC":                           r"EI\\vs MC-only",
+    "all_transforms_36_vs_diffeo_only":       r"All Transf.\\vs Diffeo.",
+    "arr_shift_enh_scale_36_vs_diffeo_only":  r"Arr Shift\\+Enh Scale\\vs Diffeo.",
+    "arr_shift_rebin_36_vs_diffeo_only":      r"Arr Shift\\+Rebin\\vs Diffeo.",
+    "enh_scale_rebin_36_vs_diffeo_only":      r"Enh Scale\\+Rebin\\vs Diffeo.",
 }
 
 # ---------------------------------------------------------------------------

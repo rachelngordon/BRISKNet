@@ -177,6 +177,53 @@ COMPARISONS = [
             ("ei_8spf_no_rebin_fop", "ei_8spf_no_temporal_fop", 8),
         ],
     },
+
+    # ---- 36 SPF temporal ablation — matches ei_diffeo_fop_cosine_lr_* figure --
+    # Baseline: ei_36spf_no_temporal_fop (diffeo only, FOP arrival detection)
+    # All transforms = arr shift + enh scale + rebin: ei_diffeo_fop_cosine_lr_all_transforms_36spf
+    # Arr shift + enh scale (no rebin):               ei_diffeo_fop_cosine_lr_no_rebin_36spf
+    # Arr shift + rebin (no enh scale):               ei_diffeo_fop_cosine_lr_no_enh_scale_36spf
+    # Enh scale + rebin (no arrival shift):           ei_diffeo_fop_cosine_lr_no_arrival_shift_36spf
+    {
+        "group":    "temporal_ablation",
+        "name":     "all_transforms_36_vs_diffeo_only",
+        "method_a": "All Transforms",
+        "method_b": "Diffeo Only",
+        "mode":     "cross",
+        "pairs": [
+            ("ei_diffeo_fop_cosine_lr_all_transforms_36spf", "ei_36spf_no_temporal_fop", 36),
+        ],
+    },
+    {
+        "group":    "temporal_ablation",
+        "name":     "arr_shift_enh_scale_36_vs_diffeo_only",
+        "method_a": "Arr Shift + Enh Scale",
+        "method_b": "Diffeo Only",
+        "mode":     "cross",
+        "pairs": [
+            ("ei_diffeo_fop_cosine_lr_no_rebin_36spf", "ei_36spf_no_temporal_fop", 36),
+        ],
+    },
+    {
+        "group":    "temporal_ablation",
+        "name":     "arr_shift_rebin_36_vs_diffeo_only",
+        "method_a": "Arr Shift + Rebin",
+        "method_b": "Diffeo Only",
+        "mode":     "cross",
+        "pairs": [
+            ("ei_diffeo_fop_cosine_lr_no_enh_scale_36spf", "ei_36spf_no_temporal_fop", 36),
+        ],
+    },
+    {
+        "group":    "temporal_ablation",
+        "name":     "enh_scale_rebin_36_vs_diffeo_only",
+        "method_a": "Enh Scale + Rebin",
+        "method_b": "Diffeo Only",
+        "mode":     "cross",
+        "pairs": [
+            ("ei_diffeo_fop_cosine_lr_no_arrival_shift_36spf", "ei_36spf_no_temporal_fop", 36),
+        ],
+    },
 ]
 
 # ---------------------------------------------------------------------------
