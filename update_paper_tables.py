@@ -37,8 +37,7 @@ _SIG_CSV   = "results/significance_all_comparisons.csv"
 _EI_SIG_SUFFIX = (
     r" $\Delta$ rows: mean difference (EI $-$ MC-only) with 95\% CI; "
     r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$ "
-    r"(Wilcoxon signed-rank, BH-FDR corrected). "
-    r"\textbf{Bold}: EI significantly better than MC-only."
+    r"(Wilcoxon signed-rank, BH-FDR corrected)."
 )
 
 # ---------------------------------------------------------------------------
@@ -301,8 +300,7 @@ _TEMP_CMPS_36 = ",".join([
 _SIG_CAP_SUFFIX = (
     r" Each cell shows the mean difference ($\Delta$, method~A $-$ method~B) "
     r"with 95\% CI; Wilcoxon signed-rank test, BH-FDR corrected within metric family. "
-    r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$. "
-    r"\textbf{Bold}: method~A significantly better than method~B."
+    r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$."
 )
 
 # Old sig table labels to remove from the tex file on first run.

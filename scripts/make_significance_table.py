@@ -134,8 +134,6 @@ def _format_cell_makecell(
     line1 = f"${diff_str}^{{{stars}}}$" if stars else f"${diff_str}$"
     line2 = r"{\footnotesize " + f"${ci_str}$" + "}"
     cell = f"\\makecell[c]{{{line1}\\\\ {line2}}}"
-    if bold and stars:
-        cell = f"\\bfseries {cell}"
     return cell
 
 
@@ -156,8 +154,6 @@ def _format_cell_inline(
     diff_str = _fmt(mean_diff, decimals)
     ci_str = f"[{_fmt(ci_low, decimals)},\\,{_fmt(ci_high, decimals)}]"
     cell = f"${diff_str}\\;{ci_str}^{{{stars}}}$" if stars else f"${diff_str}\\;{ci_str}$"
-    if bold and stars:
-        cell = f"\\textbf{{{cell}}}"
     return cell
 
 

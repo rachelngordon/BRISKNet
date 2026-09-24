@@ -943,16 +943,11 @@ def _sig_rows(
         cilo = float(r.get("ci_low",     float("nan")))
         cihi = float(r.get("ci_high",    float("nan")))
         padj = float(r.get("p_adj_bh",   float("nan")))
-        dirn = str(r.get("direction", ""))
         dec  = DECIMALS.get(sig_m, 3)
         st   = stars(padj)
-        bold = dirn == "a_better" and bool(st)
         cell_md = f"${fmt(md, dec)}^{{{st}}}$" if st else f"${fmt(md, dec)}$"
         ci_str  = f"{{{fmt(cilo, dec)},\\,{fmt(cihi, dec)}}}"
         ci_cell = r"{\footnotesize $" + ci_str + "$}"
-        if bold:
-            cell_md = r"\bfseries " + cell_md
-            ci_cell = r"\bfseries " + ci_cell
         mean_cells.append(cell_md)
         ci_cells.append(ci_cell)
 
