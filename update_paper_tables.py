@@ -300,16 +300,15 @@ OLD_SIG_LABELS = [
 # ref_label prefix determines insertion type: "fig:" → after figure, else after table.
 SIG_TABLES: list[tuple[str, str, list[str]]] = [
 
-    # ---- 1. BRISKNet vs GRASP (all SPFs 2–36, placed at end of accel sweep) ----
+    # ---- 1. BRISKNet vs GRASP (SPF 8–36, acceleration sweep section) ----------
     (
         "tab:sig_brisknet_vs_grasp", "tab:acc_exp_temp_timing",
         ["python", _MS, "--csv", _SIG_CSV, "--transposed",
-         "--comparisons", "BRISKNet_vs_GRASP", "--spf", "2,4,8,16,24,36",
+         "--comparisons", "BRISKNet_vs_GRASP", "--spf", "8,16,24,36",
          "--families", "spatial,mc,temporal",
          "--label", "tab:sig_brisknet_vs_grasp",
          "--caption", (
-             r"Significance of BRISKNet vs GRASP across all accelerations "
-             r"(SPF 2--36, including ultra-high). "
+             r"Significance of BRISKNet vs GRASP across standard accelerations (SPF 8--36). "
              + _SIG_CAP_SUFFIX
          )],
     ),
@@ -340,7 +339,20 @@ SIG_TABLES: list[tuple[str, str, list[str]]] = [
          )],
     ),
 
-    # ---- 4. EI ablation: EI+BRISKNet vs MC-only (SPF 8) ---------------------
+    # ---- 4. BRISKNet vs GRASP ultra-high (SPF 2–4, ultra-high acc section) --
+    (
+        "tab:sig_brisknet_vs_grasp_ultra", "tab:ultra_acc_exp_temp_timing",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+         "--comparisons", "BRISKNet_vs_GRASP", "--spf", "2,4",
+         "--families", "spatial,mc,temporal",
+         "--label", "tab:sig_brisknet_vs_grasp_ultra",
+         "--caption", (
+             r"Significance of BRISKNet vs GRASP at ultra-high accelerations (SPF 2--4). "
+             + _SIG_CAP_SUFFIX
+         )],
+    ),
+
+    # ---- 5. EI ablation: EI+BRISKNet vs MC-only (SPF 8) ---------------------
     (
         "tab:sig_ei_ablation", "tab:mc_ei_temp_timing",
         ["python", _MS, "--csv", _SIG_CSV, "--transposed",

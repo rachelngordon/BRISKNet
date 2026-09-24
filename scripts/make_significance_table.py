@@ -227,25 +227,13 @@ def _emit_metric_rows(
 ) -> list[str]:
     """Emit family-grouped metric rows for transposed tables."""
     lines = []
-    last_fam_idx = max(
-        (i for i, fam in enumerate(families)
-         if any(m in METRIC_FAMILIES.get(fam, []) for m in metrics)),
-        default=-1,
-    )
-    for fam_idx, fam in enumerate(families):
+    for fam in families:
         fam_metrics = [m for m in metrics if m in METRIC_FAMILIES.get(fam, [])]
-        if not fam_metrics:
-            continue
-        lines.append(
-            f"\\multicolumn{{{n_cols}}}{{l}}{{\\textit{{{FAMILY_LABELS[fam]}}}}}\\\\"
-        )
         for m in fam_metrics:
             cells = [_metric_label(m)]
             for cmp, spf in col_keys:
                 cells.append(_lookup_cell(df, cmp, spf, m, alpha, show_direction, makecell))
             lines.append(_format_row(cells))
-        if fam_idx < last_fam_idx:
-            lines.append(r"\addlinespace")
     return lines
 
 
