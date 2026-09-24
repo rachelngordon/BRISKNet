@@ -273,8 +273,9 @@ TABLES: dict[str, list] = {
 
 }
 
-_SIG_CSV = "results/significance_all_comparisons.csv"
-_TEMP_CMPS = "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only"
+_SIG_CSV   = "results/significance_all_comparisons.csv"
+_ACCEL_CMPS = "BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU"
+_TEMP_CMPS  = "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only"
 _SIG_CAP_SUFFIX = (
     r" Each cell shows the mean difference ($\Delta$, method~A $-$ method~B) "
     r"with 95\% CI; Wilcoxon signed-rank test, BH-FDR corrected within metric family. "
@@ -285,6 +286,7 @@ _SIG_CAP_SUFFIX = (
 # Old sig table labels to remove from the tex file on first run.
 # These are replaced by the consolidated 5-table structure below.
 OLD_SIG_LABELS = [
+    # Original 16 per-metric-family tables (removed in first consolidation pass)
     "tab:sig_acc_exp_spatial", "tab:sig_acc_exp_consistency",
     "tab:sig_acc_exp_temp_early", "tab:sig_acc_exp_temp_timing",
     "tab:sig_ultra_acc_exp_spatial", "tab:sig_ultra_acc_exp_consistency",
@@ -293,6 +295,8 @@ OLD_SIG_LABELS = [
     "tab:sig_mc_ei_temp_early", "tab:sig_mc_ei_temp_timing",
     "tab:sig_temp_abl_spatial", "tab:sig_temp_abl_consistency",
     "tab:sig_temp_abl_temp_early", "tab:sig_temp_abl_temp_timing",
+    # Per-comparison transposed tables (replaced by per-family spf-rows tables)
+    "tab:sig_brisknet_vs_grasp", "tab:sig_ssdu_vs_grasp", "tab:sig_brisknet_vs_ssdu",
 ]
 
 # Significance tables (5 consolidated tables).
@@ -300,46 +304,55 @@ OLD_SIG_LABELS = [
 # ref_label prefix determines insertion type: "fig:" → after figure, else after table.
 SIG_TABLES: list[tuple[str, str, list[str]]] = [
 
-    # ---- 1. BRISKNet vs GRASP (SPF 8–36, acceleration sweep section) ----------
+    # ---- 1–4. Acceleration sweep: one table per metric family (SPF 8–36) ----
+    # rows = SPF grouped by comparison; cols = metrics for each family.
+    # Placed after the corresponding inference table in each section.
     (
-        "tab:sig_brisknet_vs_grasp", "tab:acc_exp_temp_timing",
-        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
-         "--comparisons", "BRISKNet_vs_GRASP", "--spf", "8,16,24,36",
-         "--families", "spatial,mc,temporal",
-         "--label", "tab:sig_brisknet_vs_grasp",
+        "tab:sig_acc_exp_spatial", "tab:acc_exp_spatial",
+        ["python", _MS, "--csv", _SIG_CSV, "--spf-rows",
+         "--comparisons", _ACCEL_CMPS, "--spf", "8,16,24,36",
+         "--families", "spatial",
+         "--label", "tab:sig_acc_exp_spatial",
          "--caption", (
-             r"Significance of BRISKNet vs GRASP across standard accelerations (SPF 8--36). "
-             + _SIG_CAP_SUFFIX
+             r"Significance of spatial quality differences across standard accelerations "
+             r"(SPF 8--36). " + _SIG_CAP_SUFFIX
+         )],
+    ),
+    (
+        "tab:sig_acc_exp_consistency", "tab:acc_exp_consistency",
+        ["python", _MS, "--csv", _SIG_CSV, "--spf-rows",
+         "--comparisons", _ACCEL_CMPS, "--spf", "8,16,24,36",
+         "--families", "mc",
+         "--label", "tab:sig_acc_exp_consistency",
+         "--caption", (
+             r"Significance of measurement consistency differences across standard accelerations "
+             r"(SPF 8--36). " + _SIG_CAP_SUFFIX
+         )],
+    ),
+    (
+        "tab:sig_acc_exp_temp_early", "tab:acc_exp_temp_early",
+        ["python", _MS, "--csv", _SIG_CSV, "--spf-rows",
+         "--comparisons", _ACCEL_CMPS, "--spf", "8,16,24,36",
+         "--metrics", "early_corr,early_mae,iauc10_err",
+         "--label", "tab:sig_acc_exp_temp_early",
+         "--caption", (
+             r"Significance of early enhancement fidelity differences across standard accelerations "
+             r"(SPF 8--36). " + _SIG_CAP_SUFFIX
+         )],
+    ),
+    (
+        "tab:sig_acc_exp_temp_timing", "tab:acc_exp_temp_timing",
+        ["python", _MS, "--csv", _SIG_CSV, "--spf-rows",
+         "--comparisons", _ACCEL_CMPS, "--spf", "8,16,24,36",
+         "--metrics", "ttae_sec,wash_in_slope_err",
+         "--label", "tab:sig_acc_exp_temp_timing",
+         "--caption", (
+             r"Significance of timing and wash-in fidelity differences across standard accelerations "
+             r"(SPF 8--36). " + _SIG_CAP_SUFFIX
          )],
     ),
 
-    # ---- 2. SSDU vs GRASP (SPF 8–36) ----------------------------------------
-    (
-        "tab:sig_ssdu_vs_grasp", "tab:sig_brisknet_vs_grasp",
-        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
-         "--comparisons", "SSDU_vs_GRASP", "--spf", "8,16,24,36",
-         "--families", "spatial,mc,temporal",
-         "--label", "tab:sig_ssdu_vs_grasp",
-         "--caption", (
-             r"Significance of SSDU vs GRASP across standard accelerations (SPF 8--36). "
-             + _SIG_CAP_SUFFIX
-         )],
-    ),
-
-    # ---- 3. BRISKNet vs SSDU (SPF 8–36) -------------------------------------
-    (
-        "tab:sig_brisknet_vs_ssdu", "tab:sig_ssdu_vs_grasp",
-        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
-         "--comparisons", "BRISKNet_vs_SSDU", "--spf", "8,16,24,36",
-         "--families", "spatial,mc,temporal",
-         "--label", "tab:sig_brisknet_vs_ssdu",
-         "--caption", (
-             r"Significance of BRISKNet vs SSDU across standard accelerations (SPF 8--36). "
-             + _SIG_CAP_SUFFIX
-         )],
-    ),
-
-    # ---- 4. BRISKNet vs GRASP ultra-high (SPF 2–4, ultra-high acc section) --
+    # ---- 5. BRISKNet vs GRASP ultra-high (SPF 2–4, ultra-high acc section) --
     (
         "tab:sig_brisknet_vs_grasp_ultra", "tab:ultra_acc_exp_temp_timing",
         ["python", _MS, "--csv", _SIG_CSV, "--transposed",

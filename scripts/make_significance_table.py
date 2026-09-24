@@ -299,6 +299,70 @@ def make_transposed_multi_comparison(
 
 
 # ---------------------------------------------------------------------------
+# SPF-rows table builders (rows = SPF, cols = metrics)
+# ---------------------------------------------------------------------------
+
+def make_spf_rows_single_comparison(
+    df: pd.DataFrame,
+    comparison: str,
+    spf_list: list[int],
+    metrics: list[str],
+    alpha: float,
+    caption: str,
+    label: str,
+    show_direction: bool,
+) -> str:
+    """Rows = SPF; cols = metrics.  Single comparison, one metric family."""
+    n_cols = 1 + len(metrics)
+    lines = _table_open(caption, label, n_cols)
+    lines.append(_format_row(["SPF"] + [_metric_label(m) for m in metrics]))
+    lines.append(r"\midrule")
+    avail_spf = [s for s in SPF_ORDER if s in spf_list and
+                 not df[(df["comparison"] == comparison) & (df["spf"] == s)].empty]
+    for spf in avail_spf:
+        cells = [str(spf)] + [
+            _lookup_cell(df, comparison, spf, m, alpha, show_direction, makecell=True)
+            for m in metrics
+        ]
+        lines.append(_format_row(cells))
+    lines.extend(_table_close())
+    return "\n".join(lines)
+
+
+def make_spf_rows_multi_comparison(
+    df: pd.DataFrame,
+    comparisons: list[str],
+    spf_list: list[int],
+    metrics: list[str],
+    alpha: float,
+    caption: str,
+    label: str,
+    show_direction: bool,
+) -> str:
+    """Rows = SPF grouped by comparison; cols = metrics.  Multiple comparisons, one family."""
+    n_cols = 1 + len(metrics)
+    lines = _table_open(caption, label, n_cols)
+    lines.append(_format_row(["SPF"] + [_metric_label(m) for m in metrics]))
+    lines.append(r"\midrule")
+    last_cmp_idx = len(comparisons) - 1
+    for cmp_idx, cmp in enumerate(comparisons):
+        disp = COMPARISON_DISPLAY.get(cmp, cmp.replace("_", " "))
+        lines.append(f"\\multicolumn{{{n_cols}}}{{l}}{{\\textit{{{disp}}}}}\\\\ ")
+        avail_spf = [s for s in SPF_ORDER if s in spf_list and
+                     not df[(df["comparison"] == cmp) & (df["spf"] == s)].empty]
+        for spf in avail_spf:
+            cells = [str(spf)] + [
+                _lookup_cell(df, cmp, spf, m, alpha, show_direction, makecell=True)
+                for m in metrics
+            ]
+            lines.append(_format_row(cells))
+        if cmp_idx < last_cmp_idx:
+            lines.append(r"\addlinespace")
+    lines.extend(_table_close())
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Legacy table builders (rows = comparison×SPF, cols = metrics)
 # ---------------------------------------------------------------------------
 
@@ -430,6 +494,10 @@ def main() -> None:
         help="Transposed layout: rows = metrics, cols = SPF or (comparison, SPF).",
     )
     parser.add_argument(
+        "--spf-rows", action="store_true", default=False,
+        help="SPF-rows layout: rows = SPF grouped by comparison, cols = metrics (one family).",
+    )
+    parser.add_argument(
         "--show_direction", action="store_true", default=True,
     )
     parser.add_argument("--no_show_direction", dest="show_direction", action="store_false")
@@ -445,7 +513,18 @@ def main() -> None:
     metrics = _metric_list(families, metrics_override)
     df = df[df["comparison"].isin(comparisons) & df["spf"].isin(spf_list)].copy()
 
-    if args.transposed:
+    if args.spf_rows:
+        if len(comparisons) == 1:
+            table = make_spf_rows_single_comparison(
+                df, comparisons[0], spf_list, metrics,
+                args.alpha, args.caption, args.label, args.show_direction,
+            )
+        else:
+            table = make_spf_rows_multi_comparison(
+                df, comparisons, spf_list, metrics,
+                args.alpha, args.caption, args.label, args.show_direction,
+            )
+    elif args.transposed:
         if len(comparisons) == 1:
             table = make_transposed_single_comparison(
                 df, comparisons[0], spf_list, metrics, families,
