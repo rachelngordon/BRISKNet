@@ -53,6 +53,29 @@ METRIC_SPECS: Dict[str, List[Tuple[str, str]]] = {
     ],
 }
 
+# True = higher is better; False = lower is better (for mri_journal highlighting)
+METRIC_HIGHER_IS_BETTER: Dict[str, bool] = {
+    "ssim": True, "psnr": True, "lpips": False,
+    "dro_dc_mae": False, "raw_ssdu_nmse": False, "dc_mae": False, "ssdu_nmse": False,
+    "early curve correlation": True, "early MAE": False, "iAUC error": False,
+    "arrival time error": False, "wash in MAE": False,
+    "curve_corr": True, "curve_mae": False,
+    "early_corr": True, "early_mae": False,
+    "ttae_sec": False, "wash_in_slope_err": False, "iauc10_err": False,
+}
+
+# Maps inference table metric name → significance CSV metric name
+INFERENCE_TO_SIG_METRIC: Dict[str, str] = {
+    "ssim": "ssim", "psnr": "psnr", "lpips": "lpips",
+    "dro_dc_mae": "dc_mae", "raw_ssdu_nmse": "ssdu_nmse",
+    "dc_mae": "dc_mae", "ssdu_nmse": "ssdu_nmse",
+    "early curve correlation": "early_corr",
+    "early MAE": "early_mae",
+    "iAUC error": "iauc10_err",
+    "arrival time error": "ttae_sec",
+    "wash in MAE": "wash_in_slope_err",
+}
+
 METRIC_DIRECTIONS: Dict[str, str] = {
     "ssim": "up",
     "psnr": "up",
@@ -652,6 +675,7 @@ def _format_mri_journal_metric_cells(
     grasp_stats: List[Tuple[float | None, float | None]] | None,
     decimals: int,
     std_threshold: float,
+    metrics: List[str] | None = None,
 ) -> List[str]:
     cells = []
     for idx, (mean, std) in enumerate(stats):
@@ -662,7 +686,15 @@ def _format_mri_journal_metric_cells(
         if grasp_stats is not None:
             grasp_mean, grasp_std = grasp_stats[idx]
             if _should_highlight_mri_journal(mean, grasp_mean, grasp_std, std_threshold):
-                cell = f"\\cellcolor{{red}} {cell}"
+                metric_name = metrics[idx] if metrics else ""
+                hib = METRIC_HIGHER_IS_BETTER.get(metric_name)
+                if hib is None:
+                    color = "red"
+                elif hib:
+                    color = "green" if mean > grasp_mean else "red"
+                else:
+                    color = "green" if mean < grasp_mean else "red"
+                cell = f"\\cellcolor{{{color}}} {cell}"
         cells.append(cell)
     return cells
 
@@ -723,6 +755,9 @@ def _emit_mri_journal_table(
     include_temporal_resolution: bool,
     include_metric_arrows: bool,
     red_cell_std_threshold: float,
+    sig_csv: str = "",
+    sig_comparison: str = "",
+    sig_spf: int = 8,
 ) -> str:
     timing_cols = []
     if include_af:
@@ -806,6 +841,7 @@ def _emit_mri_journal_table(
                 grasp_stats,
                 decimals,
                 red_cell_std_threshold,
+                metrics=metrics,
             )
             lines.append(
                 _format_row([_method_name(row)] + config_vals + timing_vals + metric_vals)
@@ -846,6 +882,11 @@ def _emit_mri_journal_table(
                 )
             )
 
+    if sig_csv and sig_comparison:
+        timing_col_count = sum([include_af, include_spf, include_temporal_resolution])
+        n_left = 1 + len(config_cols) + timing_col_count
+        lines.extend(_sig_rows(sig_csv, sig_comparison, sig_spf, metrics, n_left))
+
     lines.extend([
         "\\bottomrule",
         "\\end{tabular*}",
@@ -854,13 +895,82 @@ def _emit_mri_journal_table(
     return "\n".join(lines)
 
 
+def _sig_rows(
+    sig_csv_path: str,
+    comparison: str,
+    spf: int,
+    metrics: List[str],
+    n_left_cols: int,
+    alpha: float = 0.05,
+) -> List[str]:
+    """Return LaTeX row strings for mean-diff (with stars) and CI, to insert before \\bottomrule."""
+    import math as _math
+    import pandas as _pd
+
+    df = _pd.read_csv(sig_csv_path)
+    df = df[(df["comparison"] == comparison) & (df["spf"] == spf)]
+
+    def stars(p: float) -> str:
+        if _math.isnan(p): return ""
+        if p < 0.001: return "***"
+        if p < 0.01:  return "**"
+        if p < alpha: return "*"
+        return ""
+
+    def fmt(v: float, dec: int) -> str:
+        if _math.isnan(v): return r"\cdot"
+        return f"{v:.{dec}f}"
+
+    DECIMALS = {
+        "ssim": 3, "psnr": 2, "lpips": 3,
+        "early_corr": 2, "early_mae": 2, "iauc10_err": 1,
+        "ttae_sec": 2, "wash_in_slope_err": 2,
+        "dc_mae": 3, "ssdu_nmse": 3,
+    }
+
+    mean_cells = [r"$\Delta$ (EI$-$MC)"] + [""] * (n_left_cols - 1)
+    ci_cells   = [r"[95\% CI]"]          + [""] * (n_left_cols - 1)
+
+    for m in metrics:
+        sig_m = INFERENCE_TO_SIG_METRIC.get(m, m)
+        row = df[df["metric"] == sig_m]
+        if row.empty:
+            mean_cells.append("NA")
+            ci_cells.append("")
+            continue
+        r = row.iloc[0]
+        md   = float(r.get("mean_diff",  float("nan")))
+        cilo = float(r.get("ci_low",     float("nan")))
+        cihi = float(r.get("ci_high",    float("nan")))
+        padj = float(r.get("p_adj_bh",   float("nan")))
+        dirn = str(r.get("direction", ""))
+        dec  = DECIMALS.get(sig_m, 3)
+        st   = stars(padj)
+        bold = dirn == "a_better" and bool(st)
+        cell_md = f"${fmt(md, dec)}^{{{st}}}$" if st else f"${fmt(md, dec)}$"
+        ci_str  = f"{{{fmt(cilo, dec)},\\,{fmt(cihi, dec)}}}"
+        ci_cell = r"{\footnotesize $" + ci_str + "$}"
+        if bold:
+            cell_md = r"\bfseries " + cell_md
+            ci_cell = r"\bfseries " + ci_cell
+        mean_cells.append(cell_md)
+        ci_cells.append(ci_cell)
+
+    return [
+        r"\midrule",
+        _format_row(mean_cells),
+        _format_row(ci_cells),
+    ]
+
+
 def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, str, str], List[Dict[str, str]]],
                 metric_type: str, metrics: List[str], temporal_subset: str, temporal_region: str,
                 decimals: int, caption: str, label: str, config_cols: List[Tuple[str, str]],
                 exp_base_dirs: List[str], config_cache: Dict[str, Dict],
                 include_af: bool, include_spf: bool, include_temporal_resolution: bool,
                 include_metric_arrows: bool, highlight_green_cells: bool,
-                green_cell_std_threshold: float, format_mri_journal: bool = False) -> str:
+                green_cell_std_threshold: float, format_mri_journal: bool = False,
+                sig_csv: str = "", sig_comparison: str = "", sig_spf: int = 8) -> str:
     if format_mri_journal:
         return _emit_mri_journal_table(
             rows,
@@ -880,6 +990,9 @@ def _emit_table(rows: List[Dict[str, str]], grasp_index: Dict[Tuple[str, str, st
             include_temporal_resolution,
             include_metric_arrows,
             green_cell_std_threshold,
+            sig_csv=sig_csv,
+            sig_comparison=sig_comparison,
+            sig_spf=sig_spf,
         )
 
     timing_cols = []
@@ -1548,6 +1661,18 @@ def main():
         default=300,
         help="DPI used for saved metric bar chart PNG files (default: 300).",
     )
+    parser.add_argument(
+        "--sig-csv", default="",
+        help="Path to significance CSV; if set, Δ rows are appended before \\bottomrule.",
+    )
+    parser.add_argument(
+        "--sig-comparison", default="",
+        help="Comparison name (as in sig CSV) for Δ rows.",
+    )
+    parser.add_argument(
+        "--sig-spf", type=int, default=8,
+        help="SPF value to look up in sig CSV for Δ rows (default: 8).",
+    )
     args = parser.parse_args()
 
     exp_names = set(_parse_list(args.exp_names))
@@ -1604,6 +1729,9 @@ def main():
                 highlight_green_cells=highlight_green_cells,
                 green_cell_std_threshold=green_cell_std_threshold,
                 format_mri_journal=args.format_mri_journal,
+                sig_csv=args.sig_csv,
+                sig_comparison=args.sig_comparison,
+                sig_spf=args.sig_spf,
             )
         )
         if args.save_metric_bar_charts:
@@ -1643,6 +1771,9 @@ def main():
                 highlight_green_cells=highlight_green_cells,
                 green_cell_std_threshold=green_cell_std_threshold,
                 format_mri_journal=args.format_mri_journal,
+                sig_csv=args.sig_csv,
+                sig_comparison=args.sig_comparison,
+                sig_spf=args.sig_spf,
             )
         )
         if args.save_metric_bar_charts:

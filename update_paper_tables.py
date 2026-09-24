@@ -30,6 +30,7 @@ _ACCEL_EXPS = ",".join([
 ])
 _ULTRA_EXPS = "ei_2spf_sampling_no_rebin_fop,ei_4spf_sampling_no_rebin_fop"
 _EI_EXPS = "ei_8spf_sampling_arrshift_fop,mc_8spf_slice_sampling"
+_SIG_CSV   = "results/significance_all_comparisons.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +212,7 @@ TABLES: dict[str, list] = {
         "--label", "tab:mc_ei_spatial",
         "--format_mri_journal",
         "--config_keys", "EI Loss:model.losses.use_ei_loss",
+        "--sig-csv", _SIG_CSV, "--sig-comparison", "EI_vs_MC", "--sig-spf", "8",
     ],
 
     "tab:mc_ei_consistency": [
@@ -229,6 +231,7 @@ TABLES: dict[str, list] = {
         "--label", "tab:mc_ei_consistency",
         "--format_mri_journal",
         "--config_keys", "EI Loss:model.losses.use_ei_loss",
+        "--sig-csv", _SIG_CSV, "--sig-comparison", "EI_vs_MC", "--sig-spf", "8",
     ],
 
     "tab:mc_ei_temp_early": [
@@ -249,6 +252,7 @@ TABLES: dict[str, list] = {
         "--label", "tab:mc_ei_temp_early",
         "--format_mri_journal",
         "--config_keys", "EI Loss:model.losses.use_ei_loss",
+        "--sig-csv", _SIG_CSV, "--sig-comparison", "EI_vs_MC", "--sig-spf", "8",
     ],
 
     "tab:mc_ei_temp_timing": [
@@ -269,11 +273,11 @@ TABLES: dict[str, list] = {
         "--label", "tab:mc_ei_temp_timing",
         "--format_mri_journal",
         "--config_keys", "EI Loss:model.losses.use_ei_loss",
+        "--sig-csv", _SIG_CSV, "--sig-comparison", "EI_vs_MC", "--sig-spf", "8",
     ],
 
 }
 
-_SIG_CSV   = "results/significance_all_comparisons.csv"
 _ACCEL_CMPS = "BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU"
 _TEMP_CMPS  = "arr_shift_vs_diffeo_only,enh_scale_vs_diffeo_only,arr_shift_enh_scale_vs_diffeo_only"
 _SIG_CAP_SUFFIX = (
@@ -295,6 +299,10 @@ OLD_SIG_LABELS = [
     "tab:sig_temp_abl_temp_early", "tab:sig_temp_abl_temp_timing",
     # Per-comparison transposed tables (replaced by per-family spf-rows tables)
     "tab:sig_brisknet_vs_grasp", "tab:sig_ssdu_vs_grasp", "tab:sig_brisknet_vs_ssdu",
+    # EI ablation sig table (results now embedded in inference tables as Δ rows)
+    "tab:sig_ei_ablation",
+    # Single temporal ablation table (replaced by separate 8spf and 36spf tables)
+    "tab:sig_temporal_ablation",
 ]
 
 # Significance tables (5 consolidated tables).
@@ -363,31 +371,26 @@ SIG_TABLES: list[tuple[str, str, list[str]]] = [
          )],
     ),
 
-    # ---- 5. EI ablation: EI+BRISKNet vs MC-only (SPF 8) ---------------------
+    # ---- 6–7. Temporal transform ablation: separate tables for SPF 8 and SPF 36 ---
     (
-        "tab:sig_ei_ablation", "tab:mc_ei_temp_timing",
+        "tab:sig_temporal_ablation_8spf", "fig:temporal_ablation_8spf",
         ["python", _MS, "--csv", _SIG_CSV, "--transposed",
-         "--comparisons", "EI_vs_MC", "--spf", "8",
+         "--comparisons", _TEMP_CMPS, "--spf", "8",
          "--families", "spatial,mc,temporal",
-         "--label", "tab:sig_ei_ablation",
-         "--col-header", r"Mean diff.\ [95\% CI]",
+         "--label", "tab:sig_temporal_ablation_8spf",
          "--caption", (
-             r"Significance of EI loss ablation: EI+BRISKNet vs MC-only (SPF~=~8). "
+             r"Significance of temporal transform ablation vs diffeomorphism-only baseline at SPF~=~8. "
              + _SIG_CAP_SUFFIX
          )],
     ),
-
-    # ---- 5. Temporal transform ablation (all variants vs diffeo-only) --------
     (
-        "tab:sig_temporal_ablation", "fig:temporal_ablation_8spf",
+        "tab:sig_temporal_ablation_36spf", "tab:sig_temporal_ablation_8spf",
         ["python", _MS, "--csv", _SIG_CSV, "--transposed",
-         "--comparisons", _TEMP_CMPS, "--spf", "8,36",
+         "--comparisons", "arr_shift_vs_diffeo_only", "--spf", "36",
          "--families", "spatial,mc,temporal",
-         "--label", "tab:sig_temporal_ablation",
+         "--label", "tab:sig_temporal_ablation_36spf",
          "--caption", (
-             r"Significance of temporal transform ablation vs diffeomorphism-only baseline. "
-             r"Column headers show the comparison and SPF; "
-             r"SPF~=~36 column appears only for the full-transform comparison. "
+             r"Significance of full temporal transform (Arr Shift) vs diffeomorphism-only baseline at SPF~=~36. "
              + _SIG_CAP_SUFFIX
          )],
     ),

@@ -119,7 +119,7 @@ def _format_cell_makecell(
     """Two-line cell: Δ^{stars} on line 1, [CI] on line 2 via \\makecell."""
     decimals = METRIC_DECIMALS.get(metric, 3)
     if math.isnan(mean_diff):
-        return "---"
+        return "NA"
     stars = _sig_stars(p_adj, alpha)
     diff_str = _fmt(mean_diff, decimals)
     ci_str = f"[{_fmt(ci_low, decimals)},\\,{_fmt(ci_high, decimals)}]"
@@ -143,7 +143,7 @@ def _format_cell_inline(
     """Legacy single-line cell: Δ\\;[CI]^{stars}."""
     decimals = METRIC_DECIMALS.get(metric, 3)
     if math.isnan(mean_diff):
-        return "---"
+        return "NA"
     stars = _sig_stars(p_adj, alpha)
     diff_str = _fmt(mean_diff, decimals)
     ci_str = f"[{_fmt(ci_low, decimals)},\\,{_fmt(ci_high, decimals)}]"
@@ -177,7 +177,7 @@ def _lookup_cell(df: pd.DataFrame, comparison: str, spf: int, metric: str,
                  alpha: float, show_direction: bool, makecell: bool) -> str:
     row = df[(df["comparison"] == comparison) & (df["spf"] == spf) & (df["metric"] == metric)]
     if row.empty:
-        return "---"
+        return "NA"
     r = row.iloc[0]
     mean_diff = _safe_float(r.get("mean_diff"))
     ci_low    = _safe_float(r.get("ci_low"))
