@@ -929,7 +929,7 @@ def _sig_rows(
     }
 
     mean_cells = [r"$\Delta$ (EI$-$MC)"] + [""] * (n_left_cols - 1)
-    ci_cells   = [r"[95\% CI]"]          + [""] * (n_left_cols - 1)
+    ci_cells   = [r"{[}95\% CI]"]         + [""] * (n_left_cols - 1)
 
     for m in metrics:
         sig_m = INFERENCE_TO_SIG_METRIC.get(m, m)
