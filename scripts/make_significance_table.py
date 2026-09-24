@@ -65,24 +65,24 @@ FAMILY_LABELS = {"spatial": "Spatial quality", "mc": "Measurement consistency", 
 SPF_ORDER = [2, 4, 8, 16, 24, 36]
 
 COMPARISON_DISPLAY = {
-    "BRISKNet_vs_GRASP":               "BRISKNet vs GRASP",
-    "SSDU_vs_GRASP":                   "SSDU vs GRASP",
-    "BRISKNet_vs_SSDU":                "BRISKNet vs SSDU",
-    "EI_vs_MC":                        "EI vs MC-only",
-    "full_vs_diffeo_only":             "Full vs Diffeo-only",
-    "no_arrival_shift_vs_diffeo_only": "No arr-shift vs Diffeo-only",
-    "no_rebin_vs_diffeo_only":         "No rebin vs Diffeo-only",
+    "BRISKNet_vs_GRASP":                  "BRISKNet vs GRASP",
+    "SSDU_vs_GRASP":                      "SSDU vs GRASP",
+    "BRISKNet_vs_SSDU":                   "BRISKNet vs SSDU",
+    "EI_vs_MC":                           "EI vs MC-only",
+    "arr_shift_vs_diffeo_only":           "Arr Shift vs Diffeo Only",
+    "enh_scale_vs_diffeo_only":           "Enh Scale vs Diffeo Only",
+    "arr_shift_enh_scale_vs_diffeo_only": "Arr Shift + Enh Scale vs Diffeo Only",
 }
 
 # Short column headers for transposed multi-comparison tables
 COMPARISON_COL_HEADER = {
-    "full_vs_diffeo_only":             r"Full\\vs Diffeo.",
-    "no_arrival_shift_vs_diffeo_only": r"No arr-shift\\vs Diffeo.",
-    "no_rebin_vs_diffeo_only":         r"No rebin\\vs Diffeo.",
-    "BRISKNet_vs_GRASP":               r"BRISKNet\\vs GRASP",
-    "SSDU_vs_GRASP":                   r"SSDU\\vs GRASP",
-    "BRISKNet_vs_SSDU":                r"BRISKNet\\vs SSDU",
-    "EI_vs_MC":                        r"EI\\vs MC-only",
+    "arr_shift_vs_diffeo_only":           r"Arr Shift\\vs Diffeo.",
+    "enh_scale_vs_diffeo_only":           r"Enh Scale\\vs Diffeo.",
+    "arr_shift_enh_scale_vs_diffeo_only": r"Arr Shift\\+Enh Scale\\vs Diffeo.",
+    "BRISKNet_vs_GRASP":                  r"BRISKNet\\vs GRASP",
+    "SSDU_vs_GRASP":                      r"SSDU\\vs GRASP",
+    "BRISKNet_vs_SSDU":                   r"BRISKNet\\vs SSDU",
+    "EI_vs_MC":                           r"EI\\vs MC-only",
 }
 
 # ---------------------------------------------------------------------------

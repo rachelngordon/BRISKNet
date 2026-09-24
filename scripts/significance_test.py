@@ -22,8 +22,9 @@ from scipy.stats import wilcoxon, t as t_dist
 from statsmodels.stats.multitest import multipletests
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REVISED_LOG = REPO_ROOT / "inference" / "test_inference_logs_mri_journal_revised.json"
-ORIG_LOG    = REPO_ROOT / "inference" / "test_inference_logs_mri_journal.json"
+REVISED_LOG  = REPO_ROOT / "inference" / "test_inference_logs_mri_journal_revised.json"
+ORIG_LOG     = REPO_ROOT / "inference" / "test_inference_logs_mri_journal.json"
+PLOT_LOG     = REPO_ROOT / "inference" / "test_inference_logs.json"
 
 # ---------------------------------------------------------------------------
 # Metric definitions
@@ -140,32 +141,37 @@ COMPARISONS = [
     },
 
     # ---- Temporal transform ablation vs diffeo-only baseline --------------
+    # Experiments match those used in the temporal ablation figures exactly.
+    # Baseline: ei_8spf_no_temporal_fop  (temporal_transform=none, diffeo spatial only)
+    # Arr Shift: ei_8spf_fop_arrival_shift  (temporal_transform=arrival_shift)
+    # Enh Scale: ei_8spf_fop_enh_scale     (temporal_transform=enh_scale)
+    # Arr Shift + Enh Scale: ei_8spf_no_rebin_fop (temporal_transform=arrival_shift_enh_scale)
     {
         "group":    "temporal_ablation",
-        "name":     "full_vs_diffeo_only",
-        "method_a": "full",
-        "method_b": "diffeo_only",
+        "name":     "arr_shift_vs_diffeo_only",
+        "method_a": "Arr Shift",
+        "method_b": "Diffeo Only",
         "mode":     "cross",
         "pairs": [
-            ("ei_8spf_sampling_arrshift_fop",  "ei_8spf_no_temporal_fop",  8),
+            ("ei_8spf_fop_arrival_shift",  "ei_8spf_no_temporal_fop",  8),
             ("ei_36spf_sampling_arrshift_fop", "ei_36spf_no_temporal_fop", 36),
         ],
     },
     {
         "group":    "temporal_ablation",
-        "name":     "no_arrival_shift_vs_diffeo_only",
-        "method_a": "no_arrival_shift",
-        "method_b": "diffeo_only",
+        "name":     "enh_scale_vs_diffeo_only",
+        "method_a": "Enh Scale",
+        "method_b": "Diffeo Only",
         "mode":     "cross",
         "pairs": [
-            ("ei_8spf_no_arrival_shift_fop", "ei_8spf_no_temporal_fop", 8),
+            ("ei_8spf_fop_enh_scale", "ei_8spf_no_temporal_fop", 8),
         ],
     },
     {
         "group":    "temporal_ablation",
-        "name":     "no_rebin_vs_diffeo_only",
-        "method_a": "no_rebin",
-        "method_b": "diffeo_only",
+        "name":     "arr_shift_enh_scale_vs_diffeo_only",
+        "method_a": "Arr Shift + Enh Scale",
+        "method_b": "Diffeo Only",
         "mode":     "cross",
         "pairs": [
             ("ei_8spf_no_rebin_fop", "ei_8spf_no_temporal_fop", 8),
@@ -178,9 +184,9 @@ COMPARISONS = [
 # ---------------------------------------------------------------------------
 
 def load_logs() -> dict[str, dict]:
-    """Return exp_name -> entry dict, preferring revised log over original."""
+    """Return exp_name -> entry dict, preferring revised > mri_journal > plot log."""
     index: dict[str, dict] = {}
-    for log_path in (ORIG_LOG, REVISED_LOG):     # revised overwrites orig
+    for log_path in (PLOT_LOG, ORIG_LOG, REVISED_LOG):   # later entries overwrite
         with open(log_path) as f:
             entries = json.load(f)
         for e in entries:

@@ -275,7 +275,7 @@ TABLES: dict[str, list] = {
 
 _SIG_CSV   = "results/significance_all_comparisons.csv"
 _ACCEL_CMPS = "BRISKNet_vs_GRASP,SSDU_vs_GRASP,BRISKNet_vs_SSDU"
-_TEMP_CMPS  = "full_vs_diffeo_only,no_arrival_shift_vs_diffeo_only,no_rebin_vs_diffeo_only"
+_TEMP_CMPS  = "arr_shift_vs_diffeo_only,enh_scale_vs_diffeo_only,arr_shift_enh_scale_vs_diffeo_only"
 _SIG_CAP_SUFFIX = (
     r" Each cell shows the mean difference ($\Delta$, method~A $-$ method~B) "
     r"with 95\% CI; Wilcoxon signed-rank test, BH-FDR corrected within metric family. "
