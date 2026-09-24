@@ -286,9 +286,7 @@ _SIG_CAP_SUFFIX = (
 # Old sig table labels to remove from the tex file on first run.
 # These are replaced by the consolidated 5-table structure below.
 OLD_SIG_LABELS = [
-    # Original 16 per-metric-family tables (removed in first consolidation pass)
-    "tab:sig_acc_exp_spatial", "tab:sig_acc_exp_consistency",
-    "tab:sig_acc_exp_temp_early", "tab:sig_acc_exp_temp_timing",
+    # Old ultra-high per-family tables (tab:sig_acc_exp_* reused for new spf-rows tables)
     "tab:sig_ultra_acc_exp_spatial", "tab:sig_ultra_acc_exp_consistency",
     "tab:sig_ultra_acc_exp_temp_early", "tab:sig_ultra_acc_exp_temp_timing",
     "tab:sig_mc_ei_spatial", "tab:sig_mc_ei_consistency",
@@ -372,6 +370,7 @@ SIG_TABLES: list[tuple[str, str, list[str]]] = [
          "--comparisons", "EI_vs_MC", "--spf", "8",
          "--families", "spatial,mc,temporal",
          "--label", "tab:sig_ei_ablation",
+         "--col-header", r"Mean diff.\ [95\% CI]",
          "--caption", (
              r"Significance of EI loss ablation: EI+BRISKNet vs MC-only (SPF~=~8). "
              + _SIG_CAP_SUFFIX

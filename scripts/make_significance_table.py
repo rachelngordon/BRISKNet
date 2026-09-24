@@ -205,8 +205,24 @@ def _table_open(caption: str, label: str, n_cols: int) -> list[str]:
     ]
 
 
+def _table_open_compact(caption: str, label: str) -> list[str]:
+    """Compact table using plain tabular (not tabular*) so columns auto-size to content."""
+    return [
+        r"\begin{table}%[]",
+        f"\\caption{{{caption}}}",
+        f"\\label{{{label}}}",
+        r"\small",
+        r"\begin{tabular}{@{}lc@{}}",
+        r"\toprule",
+    ]
+
+
 def _table_close() -> list[str]:
     return [r"\bottomrule", r"\end{tabular*}", r"\end{table}"]
+
+
+def _table_close_compact() -> list[str]:
+    return [r"\bottomrule", r"\end{tabular}", r"\end{table}"]
 
 
 def _metric_label(m: str) -> str:
@@ -235,6 +251,36 @@ def _emit_metric_rows(
                 cells.append(_lookup_cell(df, cmp, spf, m, alpha, show_direction, makecell))
             lines.append(_format_row(cells))
     return lines
+
+
+def make_single_result_column(
+    df: pd.DataFrame,
+    comparison: str,
+    spf: int,
+    metrics: list[str],
+    families: list[str],
+    alpha: float,
+    caption: str,
+    label: str,
+    show_direction: bool,
+    col_header: str,
+) -> str:
+    """Compact table for a single comparison × single SPF.
+
+    Rows = metrics; one value column with a descriptive header.
+    Uses plain tabular (not tabular*) so the column auto-sizes to content
+    instead of stretching across the full text width.
+    """
+    lines = _table_open_compact(caption, label)
+    lines.append(_format_row(["Metric", col_header]))
+    lines.append(r"\midrule")
+    for fam in families:
+        fam_metrics = [m for m in metrics if m in METRIC_FAMILIES.get(fam, [])]
+        for m in fam_metrics:
+            cell = _lookup_cell(df, comparison, spf, m, alpha, show_direction, makecell=True)
+            lines.append(_format_row([_metric_label(m), cell]))
+    lines.extend(_table_close_compact())
+    return "\n".join(lines)
 
 
 def make_transposed_single_comparison(
@@ -498,6 +544,10 @@ def main() -> None:
         help="SPF-rows layout: rows = SPF grouped by comparison, cols = metrics (one family).",
     )
     parser.add_argument(
+        "--col-header", default="",
+        help="Override data column header (triggers compact single-result-column layout).",
+    )
+    parser.add_argument(
         "--show_direction", action="store_true", default=True,
     )
     parser.add_argument("--no_show_direction", dest="show_direction", action="store_false")
@@ -513,7 +563,13 @@ def main() -> None:
     metrics = _metric_list(families, metrics_override)
     df = df[df["comparison"].isin(comparisons) & df["spf"].isin(spf_list)].copy()
 
-    if args.spf_rows:
+    if args.col_header and len(comparisons) == 1 and len(spf_list) == 1:
+        table = make_single_result_column(
+            df, comparisons[0], spf_list[0], metrics, families,
+            args.alpha, args.caption, args.label, args.show_direction,
+            col_header=args.col_header,
+        )
+    elif args.spf_rows:
         if len(comparisons) == 1:
             table = make_spf_rows_single_comparison(
                 df, comparisons[0], spf_list, metrics,
