@@ -112,7 +112,18 @@ def _sig_stars(p: float, alpha: float) -> str:
 def _fmt(v: float, decimals: int) -> str:
     if math.isnan(v):
         return r"\cdot"
-    return f"{v:.{decimals}f}"
+    formatted = f"{v:.{decimals}f}"
+    if float(formatted) == 0.0 and abs(v) > 0:
+        # Increase precision up to 4 decimal places before falling back to sci notation.
+        for d in range(decimals + 1, 5):
+            formatted = f"{v:.{d}f}"
+            if float(formatted) != 0.0:
+                return formatted
+        # Value needs more than 4 decimal places — use LaTeX scientific notation.
+        exp = int(math.floor(math.log10(abs(v))))
+        coeff = v / (10 ** exp)
+        return f"{coeff:.2f}\\times10^{{{exp}}}"
+    return formatted
 
 
 def _format_cell_makecell(
@@ -145,10 +156,10 @@ def _format_cell_makecell(
     star_part = f"^{{{stars}{phantom_pad}}}"
 
     if not show_ci:
-        return f"${sign}{diff_str}{star_part}$"
+        return f"${sign}{diff_str}{{}}{star_part}$"
 
     ci_str = f"[{_fmt(ci_low, decimals)},\\,{_fmt(ci_high, decimals)}]"
-    line1 = f"${sign}{diff_str}{star_part}$"
+    line1 = f"${sign}{diff_str}{{}}{star_part}$"
     line2 = r"{\footnotesize " + f"${ci_str}$" + "}"
     return f"\\makecell[l]{{{line1}\\\\ {line2}}}"
 
