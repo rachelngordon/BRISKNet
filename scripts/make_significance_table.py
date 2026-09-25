@@ -123,18 +123,34 @@ def _format_cell_makecell(
     alpha: float,
     bold: bool,
     metric: str,
+    show_ci: bool = True,
 ) -> str:
-    """Two-line cell: Δ^{stars} on line 1, [CI] on line 2 via \\makecell."""
+    """Cell formatter.
+
+    show_ci=True  (default): two-line \\makecell with mean diff + [CI].
+    show_ci=False: single-line mean diff with phantom-padded stars and sign
+                   so every digit aligns regardless of significance level.
+    """
     decimals = METRIC_DECIMALS.get(metric, 3)
     if math.isnan(mean_diff):
         return "NA"
     stars = _sig_stars(p_adj, alpha)
-    diff_str = _fmt(mean_diff, decimals)
+
+    # Align sign: pad positive values with phantom minus.
+    sign = r"\phantom{-}" if mean_diff >= 0 else "-"
+    diff_str = _fmt(abs(mean_diff), decimals)
+    # Pad stars to exactly 3 so every cell has the same superscript width.
+    n_stars = len(stars)
+    phantom_pad = r"\phantom{*}" * (3 - n_stars)
+    star_part = f"^{{{stars}{phantom_pad}}}"
+
+    if not show_ci:
+        return f"${sign}{diff_str}{star_part}$"
+
     ci_str = f"[{_fmt(ci_low, decimals)},\\,{_fmt(ci_high, decimals)}]"
-    line1 = f"${diff_str}^{{{stars}}}$" if stars else f"${diff_str}$"
+    line1 = f"${sign}{diff_str}{star_part}$"
     line2 = r"{\footnotesize " + f"${ci_str}$" + "}"
-    cell = f"\\makecell[c]{{{line1}\\\\ {line2}}}"
-    return cell
+    return f"\\makecell[l]{{{line1}\\\\ {line2}}}"
 
 
 def _format_cell_inline(
@@ -178,7 +194,8 @@ def _safe_str(val) -> str:
 
 
 def _lookup_cell(df: pd.DataFrame, comparison: str, spf: int, metric: str,
-                 alpha: float, show_direction: bool, makecell: bool) -> str:
+                 alpha: float, show_direction: bool, makecell: bool,
+                 show_ci: bool = True) -> str:
     row = df[(df["comparison"] == comparison) & (df["spf"] == spf) & (df["metric"] == metric)]
     if row.empty:
         return "NA"
@@ -190,6 +207,8 @@ def _lookup_cell(df: pd.DataFrame, comparison: str, spf: int, metric: str,
     direction = _safe_str(r.get("direction"))
     bold = show_direction and direction == "a_better"
     fn = _format_cell_makecell if makecell else _format_cell_inline
+    if makecell:
+        return fn(mean_diff, ci_low, ci_high, p_adj, alpha, bold, metric, show_ci=show_ci)
     return fn(mean_diff, ci_low, ci_high, p_adj, alpha, bold, metric)
 
 
@@ -244,6 +263,7 @@ def _emit_metric_rows(
     alpha: float,
     show_direction: bool,
     makecell: bool,
+    show_ci: bool = True,
 ) -> list[str]:
     """Emit family-grouped metric rows for transposed tables."""
     lines = []
@@ -252,7 +272,7 @@ def _emit_metric_rows(
         for m in fam_metrics:
             cells = [_metric_label(m)]
             for cmp, spf in col_keys:
-                cells.append(_lookup_cell(df, cmp, spf, m, alpha, show_direction, makecell))
+                cells.append(_lookup_cell(df, cmp, spf, m, alpha, show_direction, makecell, show_ci=show_ci))
             lines.append(_format_row(cells))
     return lines
 
@@ -268,6 +288,7 @@ def make_single_result_column(
     label: str,
     show_direction: bool,
     col_header: str,
+    show_ci: bool = True,
 ) -> str:
     """Compact table for a single comparison × single SPF.
 
@@ -281,7 +302,7 @@ def make_single_result_column(
     for fam in families:
         fam_metrics = [m for m in metrics if m in METRIC_FAMILIES.get(fam, [])]
         for m in fam_metrics:
-            cell = _lookup_cell(df, comparison, spf, m, alpha, show_direction, makecell=True)
+            cell = _lookup_cell(df, comparison, spf, m, alpha, show_direction, makecell=True, show_ci=show_ci)
             lines.append(_format_row([_metric_label(m), cell]))
     lines.extend(_table_close_compact())
     return "\n".join(lines)
@@ -297,6 +318,7 @@ def make_transposed_single_comparison(
     caption: str,
     label: str,
     show_direction: bool,
+    show_ci: bool = True,
 ) -> str:
     """Rows = metrics; cols = SPF values.  One comparison."""
     avail_spf = [
@@ -310,7 +332,7 @@ def make_transposed_single_comparison(
     lines = _table_open(caption, label, n_cols)
     lines.append(_format_row(["Metric"] + spf_headers))
     lines.append(r"\midrule")
-    lines.extend(_emit_metric_rows(df, metrics, families, col_keys, n_cols, alpha, show_direction, makecell=True))
+    lines.extend(_emit_metric_rows(df, metrics, families, col_keys, n_cols, alpha, show_direction, makecell=True, show_ci=show_ci))
     lines.extend(_table_close())
     return "\n".join(lines)
 
@@ -325,6 +347,7 @@ def make_transposed_multi_comparison(
     caption: str,
     label: str,
     show_direction: bool,
+    show_ci: bool = True,
 ) -> str:
     """Rows = metrics; cols = (comparison, SPF) pairs that have data."""
     col_keys = [
@@ -343,7 +366,7 @@ def make_transposed_multi_comparison(
     lines = _table_open(caption, label, n_cols)
     lines.append(_format_row(["Metric"] + col_headers))
     lines.append(r"\midrule")
-    lines.extend(_emit_metric_rows(df, metrics, families, col_keys, n_cols, alpha, show_direction, makecell=True))
+    lines.extend(_emit_metric_rows(df, metrics, families, col_keys, n_cols, alpha, show_direction, makecell=True, show_ci=show_ci))
     lines.extend(_table_close())
     return "\n".join(lines)
 
@@ -361,6 +384,7 @@ def make_spf_rows_single_comparison(
     caption: str,
     label: str,
     show_direction: bool,
+    show_ci: bool = True,
 ) -> str:
     """Rows = SPF; cols = metrics.  Single comparison, one metric family."""
     n_cols = 1 + len(metrics)
@@ -371,7 +395,7 @@ def make_spf_rows_single_comparison(
                  not df[(df["comparison"] == comparison) & (df["spf"] == s)].empty]
     for spf in avail_spf:
         cells = [str(spf)] + [
-            _lookup_cell(df, comparison, spf, m, alpha, show_direction, makecell=True)
+            _lookup_cell(df, comparison, spf, m, alpha, show_direction, makecell=True, show_ci=show_ci)
             for m in metrics
         ]
         lines.append(_format_row(cells))
@@ -388,6 +412,7 @@ def make_spf_rows_multi_comparison(
     caption: str,
     label: str,
     show_direction: bool,
+    show_ci: bool = True,
 ) -> str:
     """Rows = SPF grouped by comparison; cols = metrics.  Multiple comparisons, one family."""
     n_cols = 1 + len(metrics)
@@ -402,7 +427,7 @@ def make_spf_rows_multi_comparison(
                      not df[(df["comparison"] == cmp) & (df["spf"] == s)].empty]
         for spf in avail_spf:
             cells = [str(spf)] + [
-                _lookup_cell(df, cmp, spf, m, alpha, show_direction, makecell=True)
+                _lookup_cell(df, cmp, spf, m, alpha, show_direction, makecell=True, show_ci=show_ci)
                 for m in metrics
             ]
             lines.append(_format_row(cells))
@@ -555,6 +580,10 @@ def main() -> None:
         "--show_direction", action="store_true", default=True,
     )
     parser.add_argument("--no_show_direction", dest="show_direction", action="store_false")
+    parser.add_argument(
+        "--no-ci", dest="show_ci", action="store_false", default=True,
+        help="Omit confidence intervals; show only mean difference with significance stars.",
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -571,29 +600,33 @@ def main() -> None:
         table = make_single_result_column(
             df, comparisons[0], spf_list[0], metrics, families,
             args.alpha, args.caption, args.label, args.show_direction,
-            col_header=args.col_header,
+            col_header=args.col_header, show_ci=args.show_ci,
         )
     elif args.spf_rows:
         if len(comparisons) == 1:
             table = make_spf_rows_single_comparison(
                 df, comparisons[0], spf_list, metrics,
                 args.alpha, args.caption, args.label, args.show_direction,
+                show_ci=args.show_ci,
             )
         else:
             table = make_spf_rows_multi_comparison(
                 df, comparisons, spf_list, metrics,
                 args.alpha, args.caption, args.label, args.show_direction,
+                show_ci=args.show_ci,
             )
     elif args.transposed:
         if len(comparisons) == 1:
             table = make_transposed_single_comparison(
                 df, comparisons[0], spf_list, metrics, families,
                 args.alpha, args.caption, args.label, args.show_direction,
+                show_ci=args.show_ci,
             )
         else:
             table = make_transposed_multi_comparison(
                 df, comparisons, spf_list, metrics, families,
                 args.alpha, args.caption, args.label, args.show_direction,
+                show_ci=args.show_ci,
             )
     else:
         if len(comparisons) == 1:

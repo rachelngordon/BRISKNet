@@ -302,6 +302,11 @@ _SIG_CAP_SUFFIX = (
     r"with 95\% CI; Wilcoxon signed-rank test, BH-FDR corrected within metric family. "
     r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$."
 )
+_SIG_CAP_SUFFIX_NO_CI = (
+    r" Each cell shows the mean difference ($\Delta$, method~A $-$ method~B); "
+    r"Wilcoxon signed-rank test, BH-FDR corrected within metric family. "
+    r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$."
+)
 
 # Old sig table labels to remove from the tex file on first run.
 # These are replaced by the consolidated 5-table structure below.
@@ -390,24 +395,24 @@ SIG_TABLES: list[tuple[str, str, list[str]]] = [
     # ---- 6–7. Temporal transform ablation: separate tables for SPF 8 and SPF 36 ---
     (
         "tab:sig_temporal_ablation_8spf", "fig:temporal_ablation_8spf",
-        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed", "--no-ci",
          "--comparisons", _TEMP_CMPS, "--spf", "8",
          "--families", "spatial,mc,temporal",
          "--label", "tab:sig_temporal_ablation_8spf",
          "--caption", (
              r"Significance of temporal transform ablation vs diffeomorphism-only baseline at SPF~=~8. "
-             + _SIG_CAP_SUFFIX
+             + _SIG_CAP_SUFFIX_NO_CI
          )],
     ),
     (
         "tab:sig_temporal_ablation_36spf", "tab:sig_temporal_ablation_8spf",
-        ["python", _MS, "--csv", _SIG_CSV, "--transposed",
+        ["python", _MS, "--csv", _SIG_CSV, "--transposed", "--no-ci",
          "--comparisons", _TEMP_CMPS_36, "--spf", "36",
          "--families", "spatial,mc,temporal",
          "--label", "tab:sig_temporal_ablation_36spf",
          "--caption", (
              r"Significance of temporal transform ablation conditions vs diffeomorphism-only baseline at SPF~=~36. "
-             + _SIG_CAP_SUFFIX
+             + _SIG_CAP_SUFFIX_NO_CI
          )],
     ),
 ]
